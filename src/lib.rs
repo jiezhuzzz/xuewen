@@ -5,3 +5,4 @@ pub mod identify;
 pub mod models;
 pub mod pdf;
 pub mod pipeline;
+pub mod resolve;
