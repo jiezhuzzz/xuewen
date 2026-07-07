@@ -118,14 +118,14 @@ async fn refresh_one(
 
     // Re-file: recompute the cite-key path from the paper's current metadata,
     // excluding this paper's own key from the collision set.
-    let cite_key = match naming::cite_key_base(&paper.authors_vec(), paper.year, paper.title.as_deref())
-    {
-        Some(base) => {
-            let taken = db::cite_keys_with_base(pool, &base, Some(&paper.id)).await?;
-            Some(naming::disambiguate(&base, &taken))
-        }
-        None => None,
-    };
+    let cite_key =
+        match naming::cite_key_base(&paper.authors_vec(), paper.year, paper.title.as_deref()) {
+            Some(base) => {
+                let taken = db::cite_keys_with_base(pool, &base, Some(&paper.id)).await?;
+                Some(naming::disambiguate(&base, &taken))
+            }
+            None => None,
+        };
     let new_rel = naming::library_rel_path(cite_key.as_deref(), &paper.content_hash);
     if new_rel != paper.rel_path {
         let to = library_root.join(&new_rel);

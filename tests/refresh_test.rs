@@ -41,7 +41,10 @@ async fn needs_review_reresolves_and_refiles() {
 
     // The stored PDF carries the DOI so re-resolution can identify it.
     let doi = "10.1145/3292500.3330701";
-    common::write_test_pdf(&unsorted, &["Some Header", &format!("https://doi.org/{doi}")]);
+    common::write_test_pdf(
+        &unsorted,
+        &["Some Header", &format!("https://doi.org/{doi}")],
+    );
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
@@ -100,8 +103,12 @@ async fn resolved_paper_refiles_without_reresolving() {
     db::insert_paper(&pool, &p).await.unwrap();
 
     // Unreachable resolver: a resolved paper must NOT be re-resolved, so no HTTP happens.
-    let resolver =
-        Resolver::with_bases(None, "http://127.0.0.1:1".into(), "http://127.0.0.1:1".into()).unwrap();
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".into(),
+        "http://127.0.0.1:1".into(),
+    )
+    .unwrap();
 
     let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::NeedsReview)
         .await

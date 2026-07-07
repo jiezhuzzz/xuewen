@@ -270,9 +270,7 @@ mod tests {
         assert_eq!(hit[0].id, a.id);
 
         // Shared prefix → both.
-        let both = find_by_id_prefix(&pool, "01890000")
-            .await
-            .unwrap();
+        let both = find_by_id_prefix(&pool, "01890000").await.unwrap();
         assert_eq!(both.len(), 2);
     }
 

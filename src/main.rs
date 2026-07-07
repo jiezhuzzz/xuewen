@@ -68,8 +68,14 @@ async fn main() -> Result<()> {
                 (None, true) => RefreshTarget::All,
                 (None, false) => RefreshTarget::NeedsReview,
             };
-            let summary =
-                refresh::run(&pool, &dirs.library_root, &resolver, grobid.as_ref(), target).await?;
+            let summary = refresh::run(
+                &pool,
+                &dirs.library_root,
+                &resolver,
+                grobid.as_ref(),
+                target,
+            )
+            .await?;
             println!(
                 "refresh: {} processed, {} re-resolved, {} re-filed",
                 summary.processed, summary.reresolved, summary.refiled
