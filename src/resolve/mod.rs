@@ -1,4 +1,5 @@
 pub mod arxiv;
+pub mod crossref;
 
 use regex::Regex;
 use std::sync::LazyLock;
