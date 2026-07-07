@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use xuewen::config::Config;
 use xuewen::db;
 use xuewen::pipeline::{ingest_file, Libraries, Outcome};
+use xuewen::resolve::Resolver;
 
 #[derive(Parser)]
 #[command(name = "xuewen", version)]
@@ -31,13 +32,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load(&cli.config)?;
     let pool = db::connect(&cfg.database_url).await?;
+    let resolver = Resolver::new(cfg.contact_email.as_deref())?;
     let dirs = Libraries {
         library_root: cfg.library_root.clone(),
         processed_dir: cfg.inbox_dir.join("_processed"),
     };
 
     match cli.command {
-        Command::Ingest { path } => match ingest_file(&pool, &dirs, &path).await? {
+        Command::Ingest { path } => match ingest_file(&pool, &dirs, &resolver, &path).await? {
             Outcome::Ingested(id) => println!("ingested {id}"),
             Outcome::Duplicate => println!("duplicate, skipped"),
         },

@@ -1,7 +1,10 @@
 mod common;
 
+use wiremock::matchers::{method, path as wm_path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
 use xuewen::pipeline::{ingest_file, Libraries, Outcome};
+use xuewen::resolve::Resolver;
 
 #[tokio::test]
 async fn ingests_pdf_and_dedups() {
@@ -23,13 +26,15 @@ async fn ingests_pdf_and_dedups() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
+    let mock = MockServer::start().await;
+    let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
     let dirs = Libraries {
         library_root: library.clone(),
         processed_dir: processed.clone(),
     };
 
     // First ingest: stored, filed, moved.
-    let out = ingest_file(&pool, &dirs, &pdf_path).await.unwrap();
+    let out = ingest_file(&pool, &dirs, &resolver, &pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -47,7 +52,7 @@ async fn ingests_pdf_and_dedups() {
 
     // Re-ingest identical content (from processed copy) -> Duplicate.
     let again = processed.join("paper.pdf");
-    let out2 = ingest_file(&pool, &dirs, &again).await.unwrap();
+    let out2 = ingest_file(&pool, &dirs, &resolver, &again).await.unwrap();
     assert_eq!(out2, Outcome::Duplicate);
 }
 
@@ -67,18 +72,20 @@ async fn same_doi_different_bytes_errors_without_orphan() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
+    let mock = MockServer::start().await;
+    let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
     let dirs = Libraries {
         library_root: library.clone(),
         processed_dir: processed.clone(),
     };
 
     // First ingests fine.
-    let out = ingest_file(&pool, &dirs, &a).await.unwrap();
+    let out = ingest_file(&pool, &dirs, &resolver, &a).await.unwrap();
     assert!(matches!(out, Outcome::Ingested(_)));
 
     // Second: same DOI, different bytes. Content-hash dedup passes, then the
     // doi UNIQUE constraint rejects it -> Err, and NO orphan file remains.
-    let res = ingest_file(&pool, &dirs, &b).await;
+    let res = ingest_file(&pool, &dirs, &resolver, &b).await;
     assert!(res.is_err(), "expected a UNIQUE-constraint error on duplicate DOI");
 
     // Library holds exactly one PDF (paper A); paper B's copy was cleaned up.
@@ -87,4 +94,54 @@ async fn same_doi_different_bytes_errors_without_orphan() {
 
     // b.pdf was not moved (ingest errored before the move step).
     assert!(b.exists());
+}
+
+const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
+
+#[tokio::test]
+async fn ingest_with_doi_resolves_via_crossref() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    let processed = inbox.join("_processed");
+    std::fs::create_dir_all(&inbox).unwrap();
+
+    let doi = "10.1145/3292500.3330701";
+    let pdf_path = inbox.join("paper.pdf");
+    common::write_test_pdf(
+        &pdf_path,
+        &["Some Provisional Header", &format!("https://doi.org/{doi}")],
+    );
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let dirs = Libraries {
+        library_root: library.clone(),
+        processed_dir: processed.clone(),
+    };
+
+    let out = ingest_file(&pool, &dirs, &resolver, &pdf_path).await.unwrap();
+    let id = match out {
+        Outcome::Ingested(id) => id,
+        Outcome::Duplicate => panic!("expected Ingested"),
+    };
+
+    let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
+    assert_eq!(paper.status, "resolved");
+    assert_eq!(paper.source.as_deref(), Some("crossref"));
+    assert_eq!(
+        paper.title.as_deref(),
+        Some("KGAT: Knowledge Graph Attention Network for Recommendation")
+    );
+    assert_eq!(paper.doi.as_deref(), Some(doi));
+    assert_eq!(paper.year, Some(2019));
+    assert!(paper.authors.as_deref().unwrap().contains("Xiang Wang"));
 }
