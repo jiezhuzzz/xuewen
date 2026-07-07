@@ -155,11 +155,15 @@ mod tests {
         b.cite_key = Some("he2016deepa".into());
         insert_paper(&pool, &b).await.unwrap();
 
-        let taken = cite_keys_with_base(&pool, "he2016deep", None).await.unwrap();
+        let taken = cite_keys_with_base(&pool, "he2016deep", None)
+            .await
+            .unwrap();
         assert!(taken.contains("he2016deep"));
         assert!(taken.contains("he2016deepa"));
 
-        let taken_excl = cite_keys_with_base(&pool, "he2016deep", Some(&a.id)).await.unwrap();
+        let taken_excl = cite_keys_with_base(&pool, "he2016deep", Some(&a.id))
+            .await
+            .unwrap();
         assert!(!taken_excl.contains("he2016deep"));
         assert!(taken_excl.contains("he2016deepa"));
     }

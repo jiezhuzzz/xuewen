@@ -52,7 +52,9 @@ async fn ingests_pdf_and_dedups() {
     assert_eq!(paper.status, "needs_review");
 
     // File was copied into the library and the original moved to _processed.
-    assert!(library.join(format!("_unsorted/{}.pdf", paper.content_hash)).exists());
+    assert!(library
+        .join(format!("_unsorted/{}.pdf", paper.content_hash))
+        .exists());
     assert_eq!(paper.cite_key, None);
     assert!(!pdf_path.exists());
     assert!(processed.join("paper.pdf").exists());
@@ -103,7 +105,9 @@ async fn same_doi_different_bytes_errors_without_orphan() {
     );
 
     // Library holds exactly one PDF (paper A); paper B's copy was cleaned up.
-    let count = std::fs::read_dir(library.join("_unsorted")).unwrap().count();
+    let count = std::fs::read_dir(library.join("_unsorted"))
+        .unwrap()
+        .count();
     assert_eq!(count, 1, "library should contain only paper A, no orphan");
 
     // b.pdf was not moved (ingest errored before the move step).
@@ -421,7 +425,9 @@ async fn colliding_cite_key_gets_letter_suffix() {
         library_root: library.clone(),
         processed_dir: processed.clone(),
     };
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path).await.unwrap();
+    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
+        .await
+        .unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),

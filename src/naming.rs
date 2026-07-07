@@ -4,8 +4,8 @@ use unicode_normalization::UnicodeNormalization;
 
 /// Leading title words to skip when choosing the cite-key title word.
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "on", "of", "in", "for", "to", "and", "or", "with", "at",
-    "by", "from", "as", "is", "are", "be", "this", "that",
+    "a", "an", "the", "on", "of", "in", "for", "to", "and", "or", "with", "at", "by", "from", "as",
+    "is", "are", "be", "this", "that",
 ];
 
 /// NFKD-fold to lowercase ASCII alphanumerics, joined (drops spaces, punctuation,
@@ -103,17 +103,34 @@ mod tests {
 
     #[test]
     fn title_word_skips_stop_words() {
-        assert_eq!(first_title_word("A Neural Probabilistic Language Model").as_deref(), Some("neural"));
-        assert_eq!(first_title_word("Attention Is All You Need").as_deref(), Some("attention"));
-        assert_eq!(first_title_word("On Large-Batch Training Methods").as_deref(), Some("large"));
-        assert_eq!(first_title_word("Deep Residual Learning").as_deref(), Some("deep"));
+        assert_eq!(
+            first_title_word("A Neural Probabilistic Language Model").as_deref(),
+            Some("neural")
+        );
+        assert_eq!(
+            first_title_word("Attention Is All You Need").as_deref(),
+            Some("attention")
+        );
+        assert_eq!(
+            first_title_word("On Large-Batch Training Methods").as_deref(),
+            Some("large")
+        );
+        assert_eq!(
+            first_title_word("Deep Residual Learning").as_deref(),
+            Some("deep")
+        );
     }
 
     #[test]
     fn builds_and_requires_all_parts() {
         let authors = vec!["Kaiming He".to_string()];
         assert_eq!(
-            cite_key_base(&authors, Some(2016), Some("Deep Residual Learning for Image Recognition")).as_deref(),
+            cite_key_base(
+                &authors,
+                Some(2016),
+                Some("Deep Residual Learning for Image Recognition")
+            )
+            .as_deref(),
             Some("he2016deep")
         );
         assert_eq!(cite_key_base(&[], Some(2016), Some("x")), None);
@@ -133,7 +150,10 @@ mod tests {
 
     #[test]
     fn rel_path_keyed_vs_unsorted() {
-        assert_eq!(library_rel_path(Some("he2016deep"), "abc"), "he2016deep.pdf");
+        assert_eq!(
+            library_rel_path(Some("he2016deep"), "abc"),
+            "he2016deep.pdf"
+        );
         assert_eq!(library_rel_path(None, "abc123"), "_unsorted/abc123.pdf");
     }
 }

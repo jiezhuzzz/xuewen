@@ -75,14 +75,14 @@ pub async fn ingest_file(
 
     // 4. Decide the stored fields, then the cite-key filename.
     let fields = resolve_fields(heuristic_title, extracted, &ident, resolution);
-    let cite_key = match naming::cite_key_base(&fields.authors, fields.year, fields.title.as_deref())
-    {
-        Some(base) => {
-            let taken = db::cite_keys_with_base(pool, &base, None).await?;
-            Some(naming::disambiguate(&base, &taken))
-        }
-        None => None,
-    };
+    let cite_key =
+        match naming::cite_key_base(&fields.authors, fields.year, fields.title.as_deref()) {
+            Some(base) => {
+                let taken = db::cite_keys_with_base(pool, &base, None).await?;
+                Some(naming::disambiguate(&base, &taken))
+            }
+            None => None,
+        };
     let rel_path = naming::library_rel_path(cite_key.as_deref(), &content_hash);
 
     // 5. File the PDF into the managed library.
