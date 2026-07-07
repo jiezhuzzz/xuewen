@@ -11,6 +11,8 @@ use regex::Regex;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use self::http::{HttpClient, RetryPolicy};
+
 /// Normalized bibliographic metadata produced by a source resolver.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ResolvedMetadata {
@@ -64,38 +66,55 @@ pub(crate) fn strip_tags(s: &str) -> String {
 /// Fetches authoritative metadata for an identifier. A network or parse failure
 /// degrades to `Resolution::Unresolved` — resolution never aborts ingestion.
 pub struct Resolver {
-    http: reqwest::Client,
+    http: HttpClient,
     arxiv_base: String,
     crossref_base: String,
     dblp_base: String,
 }
 
 impl Resolver {
-    /// Build a resolver pointing at the real arXiv and Crossref endpoints.
+    /// Build a resolver pointing at the real arXiv and Crossref endpoints, with a
+    /// polite retry/back-off policy.
     pub fn new(contact_email: Option<&str>) -> Result<Self> {
-        Self::with_bases(
+        Self::build(
             contact_email,
-            "http://export.arxiv.org".to_string(),
+            "https://export.arxiv.org".to_string(),
             "https://api.crossref.org".to_string(),
+            RetryPolicy::production(),
         )
     }
 
-    /// Build a resolver with explicit base URLs (used by tests to point at a mock server).
+    /// Build a resolver with explicit base URLs (used by tests to point at a mock
+    /// server). Uses a near-zero back-off so retry paths test fast.
     pub fn with_bases(
         contact_email: Option<&str>,
         arxiv_base: String,
         crossref_base: String,
     ) -> Result<Self> {
+        Self::build(
+            contact_email,
+            arxiv_base,
+            crossref_base,
+            RetryPolicy::fast_for_tests(),
+        )
+    }
+
+    fn build(
+        contact_email: Option<&str>,
+        arxiv_base: String,
+        crossref_base: String,
+        retry: RetryPolicy,
+    ) -> Result<Self> {
         let ua = match contact_email {
             Some(email) => format!("xuewen/0.1 (mailto:{email})"),
             None => "xuewen/0.1".to_string(),
         };
-        let http = reqwest::Client::builder()
+        let client = reqwest::Client::builder()
             .user_agent(ua)
             .timeout(Duration::from_secs(20))
             .build()?;
         Ok(Self {
-            http,
+            http: HttpClient::new(client, retry),
             arxiv_base,
             crossref_base,
             dblp_base: "https://dblp.org".to_string(),

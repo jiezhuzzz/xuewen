@@ -1,15 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
+use super::http::HttpClient;
 use super::{collapse_ws, ResolvedMetadata};
 
 /// Fetch the Atom response for a single arXiv id from `{base}/api/query`.
-pub async fn fetch(client: &reqwest::Client, base: &str, id: &str) -> Result<String> {
+pub async fn fetch(http: &HttpClient, base: &str, id: &str) -> Result<String> {
     let url = format!("{base}/api/query?id_list={id}");
-    let resp = client.get(&url).send().await?;
-    if !resp.status().is_success() {
-        return Err(anyhow!("arxiv HTTP {}", resp.status()));
-    }
-    Ok(resp.text().await?)
+    http.get_text(&url).await
 }
 
 /// Parse an arXiv Atom feed into metadata. Returns `Ok(None)` if there is no entry.

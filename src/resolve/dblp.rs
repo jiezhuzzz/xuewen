@@ -1,19 +1,17 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde_json::Value;
 
+use super::http::HttpClient;
 use super::{collapse_ws, ResolvedMetadata};
 
 /// Search DBLP publications by title. Returns raw JSON.
-pub async fn fetch(client: &reqwest::Client, base: &str, title: &str) -> Result<String> {
-    let resp = client
-        .get(format!("{base}/search/publ/api"))
-        .query(&[("q", title), ("format", "json"), ("h", "5")])
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        return Err(anyhow!("dblp HTTP {}", resp.status()));
-    }
-    Ok(resp.text().await?)
+pub async fn fetch(http: &HttpClient, base: &str, title: &str) -> Result<String> {
+    let req = http.get(&format!("{base}/search/publ/api")).query(&[
+        ("q", title),
+        ("format", "json"),
+        ("h", "5"),
+    ]);
+    http.send_text(req).await
 }
 
 /// Parse a DBLP publ-search response into candidate records (possibly empty).

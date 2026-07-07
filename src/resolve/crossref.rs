@@ -1,29 +1,21 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde_json::Value;
 
+use super::http::HttpClient;
 use super::{collapse_ws, strip_tags, ResolvedMetadata};
 
 /// Fetch the Crossref work record for a DOI from `{base}/works/{doi}`.
-pub async fn fetch(client: &reqwest::Client, base: &str, doi: &str) -> Result<String> {
+pub async fn fetch(http: &HttpClient, base: &str, doi: &str) -> Result<String> {
     let url = format!("{base}/works/{doi}");
-    let resp = client.get(&url).send().await?;
-    if !resp.status().is_success() {
-        return Err(anyhow!("crossref HTTP {}", resp.status()));
-    }
-    Ok(resp.text().await?)
+    http.get_text(&url).await
 }
 
 /// Search Crossref by bibliographic string (title). Returns raw JSON.
-pub async fn search(client: &reqwest::Client, base: &str, title: &str) -> Result<String> {
-    let resp = client
-        .get(format!("{base}/works"))
-        .query(&[("query.bibliographic", title), ("rows", "5")])
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        return Err(anyhow!("crossref search HTTP {}", resp.status()));
-    }
-    Ok(resp.text().await?)
+pub async fn search(http: &HttpClient, base: &str, title: &str) -> Result<String> {
+    let req = http
+        .get(&format!("{base}/works"))
+        .query(&[("query.bibliographic", title), ("rows", "5")]);
+    http.send_text(req).await
 }
 
 /// Parse a Crossref `/works/{doi}` JSON body. Returns `Ok(None)` if there is no message.

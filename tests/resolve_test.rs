@@ -210,3 +210,28 @@ async fn low_similarity_title_is_unresolved() {
         .await;
     assert_eq!(res, Resolution::Unresolved);
 }
+
+#[tokio::test]
+async fn resolves_after_transient_429() {
+    let server = MockServer::start().await;
+    let doi = "10.1145/3292500.3330701";
+    // First request is rate-limited, the retry succeeds.
+    Mock::given(method("GET"))
+        .and(path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(429))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+    let res = resolver
+        .resolve(&Identifier::Doi(doi.to_string()), None)
+        .await;
+
+    assert!(matches!(res, Resolution::Resolved(_)));
+}
