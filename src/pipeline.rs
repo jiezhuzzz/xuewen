@@ -99,7 +99,7 @@ pub async fn ingest_file(
         return Err(e);
     }
 
-    // 6. Move the original out of the inbox.
+    // 7. Move the original out of the inbox.
     move_to(&path, &dirs.processed_dir)?;
     Ok(Outcome::Ingested(paper.id))
 }
