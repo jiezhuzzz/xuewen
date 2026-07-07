@@ -7,3 +7,4 @@ pub mod pdf;
 pub mod pipeline;
 pub mod matching;
 pub mod resolve;
+pub mod watcher;

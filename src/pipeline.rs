@@ -165,7 +165,7 @@ fn build_paper(
 }
 
 /// Move `src` into `dir`, falling back to copy+remove across filesystems.
-fn move_to(src: &Path, dir: &Path) -> Result<()> {
+pub(crate) fn move_to(src: &Path, dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let name = src.file_name().ok_or_else(|| anyhow!("path has no file name"))?;
     let dest = dir.join(name);
