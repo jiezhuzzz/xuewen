@@ -23,8 +23,14 @@ roxmltree = "0.20"
 strsim = "0.11"
 notify = "6"
 unicode-normalization = "0.1"
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs"] }
+rust-embed = "8"
+mime_guess = "2"
 
 [dev-dependencies]
 tempfile = "3"
 printpdf = "0.7"
 wiremock = "0.6"
+axum-test = "17"

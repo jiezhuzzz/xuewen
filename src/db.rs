@@ -1,5 +1,6 @@
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::QueryBuilder;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -135,6 +136,56 @@ pub async fn find_by_id_prefix(pool: &SqlitePool, prefix: &str) -> Result<Vec<Pa
         .fetch_all(pool)
         .await?;
     Ok(papers)
+}
+
+/// List papers with optional case-insensitive search (`q` over title+authors),
+/// optional status filter, and a whitelisted sort. Unknown status/sort values
+/// are ignored (never an error).
+pub async fn list_papers(
+    pool: &SqlitePool,
+    q: Option<&str>,
+    status: Option<&str>,
+    sort: Option<&str>,
+) -> Result<Vec<Paper>> {
+    let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("SELECT * FROM papers");
+    let mut has_where = false;
+    if let Some(term) = q.map(str::trim).filter(|s| !s.is_empty()) {
+        let like = format!("%{term}%");
+        qb.push(" WHERE (title LIKE ")
+            .push_bind(like.clone())
+            .push(" OR authors LIKE ")
+            .push_bind(like)
+            .push(")");
+        has_where = true;
+    }
+    if let Some(st) = status.filter(|s| matches!(*s, "resolved" | "needs_review")) {
+        qb.push(if has_where { " AND " } else { " WHERE " })
+            .push("status = ")
+            .push_bind(st.to_string());
+    }
+    // Whitelisted ORDER BY (never interpolate raw user input).
+    let order = match sort {
+        Some("year_asc") => "year ASC NULLS LAST",
+        Some("added_desc") => "added_at DESC",
+        Some("title") => "title COLLATE NOCASE ASC",
+        _ => "year DESC",
+    };
+    qb.push(" ORDER BY ").push(order);
+    let papers = qb.build_query_as::<Paper>().fetch_all(pool).await?;
+    Ok(papers)
+}
+
+/// `(total, resolved, needs_review)` paper counts.
+pub async fn stats(pool: &SqlitePool) -> Result<(i64, i64, i64)> {
+    let row: (i64, i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), \
+         COALESCE(SUM(status = 'resolved'), 0), \
+         COALESCE(SUM(status = 'needs_review'), 0) \
+         FROM papers",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
 }
 
 #[cfg(test)]
@@ -282,5 +333,81 @@ mod tests {
         assert_eq!(p.authors_vec(), vec!["Kaiming He", "Xiangyu Zhang"]);
         p.authors = Some("not json".into());
         assert!(p.authors_vec().is_empty()); // invalid → empty
+    }
+
+    #[tokio::test]
+    async fn list_papers_filters_and_sorts() {
+        let (_dir, pool) = temp_pool().await;
+        let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
+        a.title = Some("Deep Residual Learning".into());
+        a.authors = Some(r#"["Kaiming He"]"#.into());
+        a.year = Some(2016);
+        a.status = PaperStatus::Resolved.as_str().to_string();
+        let mut b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
+        b.title = Some("Attention Is All You Need".into());
+        b.authors = Some(r#"["Ashish Vaswani"]"#.into());
+        b.year = Some(2017);
+        b.status = PaperStatus::NeedsReview.as_str().to_string();
+        insert_paper(&pool, &a).await.unwrap();
+        insert_paper(&pool, &b).await.unwrap();
+
+        // No filters → both, default sort year DESC (2017 before 2016).
+        let all = list_papers(&pool, None, None, None).await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].year, Some(2017));
+
+        // q matches title (case-insensitive) or authors.
+        let hits = list_papers(&pool, Some("residual"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, a.id);
+        let by_author = list_papers(&pool, Some("vaswani"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(by_author.len(), 1);
+        assert_eq!(by_author[0].id, b.id);
+
+        // status filter.
+        let resolved = list_papers(&pool, None, Some("resolved"), None)
+            .await
+            .unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].id, a.id);
+
+        // q + status together (covers the AND branch).
+        let combined = list_papers(&pool, Some("attention"), Some("needs_review"), None)
+            .await
+            .unwrap();
+        assert_eq!(combined.len(), 1);
+        assert_eq!(combined[0].id, b.id);
+        let none = list_papers(&pool, Some("attention"), Some("resolved"), None)
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+
+        // year_asc sort.
+        let asc = list_papers(&pool, None, None, Some("year_asc"))
+            .await
+            .unwrap();
+        assert_eq!(asc[0].year, Some(2016));
+
+        // An unknown status is ignored (not an error) → both rows.
+        let bogus = list_papers(&pool, None, Some("nonsense"), None)
+            .await
+            .unwrap();
+        assert_eq!(bogus.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn stats_counts_by_status() {
+        let (_dir, pool) = temp_pool().await;
+        assert_eq!(stats(&pool).await.unwrap(), (0, 0, 0));
+        let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
+        a.status = PaperStatus::Resolved.as_str().to_string();
+        let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb"); // needs_review
+        insert_paper(&pool, &a).await.unwrap();
+        insert_paper(&pool, &b).await.unwrap();
+        assert_eq!(stats(&pool).await.unwrap(), (2, 1, 1));
     }
 }
