@@ -1,4 +1,7 @@
+use anyhow::anyhow;
 use anyhow::Result;
+use std::path::Path;
+use std::time::Duration;
 
 use super::{collapse_ws, ResolvedMetadata};
 
@@ -61,6 +64,47 @@ pub fn parse_tei(xml: &str) -> Result<Option<ResolvedMetadata>> {
         url: None,
         source: "grobid".to_string(),
     }))
+}
+
+/// A GROBID service client.
+pub struct Grobid {
+    http: reqwest::Client,
+    base: String,
+}
+
+impl Grobid {
+    /// Build a client for the GROBID service at `base` (e.g. `http://localhost:8070`).
+    pub fn new(base: &str) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()?;
+        Ok(Self {
+            http,
+            base: base.to_string(),
+        })
+    }
+
+    /// Upload the PDF to `processHeaderDocument` and parse the TEI header.
+    /// Returns `Ok(None)` if GROBID found nothing usable.
+    pub async fn extract_header(&self, pdf_path: &Path) -> Result<Option<ResolvedMetadata>> {
+        let bytes = tokio::fs::read(pdf_path).await?;
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name("input.pdf")
+            .mime_str("application/pdf")?;
+        let form = reqwest::multipart::Form::new().part("input", part);
+
+        let resp = self
+            .http
+            .post(format!("{}/api/processHeaderDocument", self.base))
+            .multipart(form)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("grobid HTTP {}", resp.status()));
+        }
+        let tei = resp.text().await?;
+        parse_tei(&tei)
+    }
 }
 
 #[cfg(test)]
