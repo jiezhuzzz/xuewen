@@ -1,3 +1,5 @@
+pub mod arxiv;
+
 use regex::Regex;
 use std::sync::LazyLock;
 
