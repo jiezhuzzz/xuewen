@@ -45,7 +45,8 @@ pub async fn ingest_file(pool: &SqlitePool, dirs: &Libraries, path: &Path) -> Re
     // 4. File the PDF into the managed library as <hash>.pdf.
     std::fs::create_dir_all(&dirs.library_root)?;
     let rel_path = format!("{content_hash}.pdf");
-    std::fs::copy(&path, dirs.library_root.join(&rel_path))?;
+    let dest = dirs.library_root.join(&rel_path);
+    std::fs::copy(&path, &dest)?;
 
     // 5. Build and store the record (needs_review until Plan 2 resolves metadata).
     let (doi, arxiv_id) = match &ident {
@@ -70,7 +71,13 @@ pub async fn ingest_file(pool: &SqlitePool, dirs: &Libraries, path: &Path) -> Re
         status: PaperStatus::NeedsReview.as_str().to_string(),
         added_at: chrono::Utc::now().to_rfc3339(),
     };
-    db::insert_paper(pool, &paper).await?;
+    // If the insert fails (e.g. a UNIQUE constraint on doi/arxiv_id when the same
+    // paper is re-ingested as a different-bytes PDF), remove the file we just
+    // copied so the library is not left with an orphan.
+    if let Err(e) = db::insert_paper(pool, &paper).await {
+        let _ = std::fs::remove_file(&dest);
+        return Err(e);
+    }
 
     // 6. Move the original out of the inbox.
     move_to(&path, &dirs.processed_dir)?;
