@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::models::{Identifier, Paper, PaperStatus};
-use crate::resolve::{Resolution, Resolver};
+use crate::resolve::grobid::Grobid;
+use crate::resolve::{Resolution, ResolvedMetadata, Resolver};
 use crate::{db, hash, identify, pdf};
 
 /// Directories the pipeline manages.
@@ -24,6 +25,7 @@ pub async fn ingest_file(
     pool: &SqlitePool,
     dirs: &Libraries,
     resolver: &Resolver,
+    grobid: Option<&Grobid>,
     path: &Path,
 ) -> Result<Outcome> {
     let path = path.to_path_buf();
@@ -46,10 +48,29 @@ pub async fn ingest_file(
         tokio::task::spawn_blocking(move || pdf::extract_text(&p, 1)).await??
     };
     let ident = identify::identify(&text);
-    let title = identify::guess_title(&text);
+    let heuristic_title = identify::guess_title(&text);
 
-    // 3b. Resolve authoritative metadata (degrades to Unresolved on failure).
-    let resolution = resolver.resolve(&ident, title.as_deref()).await;
+    // 3a. For the title-only path, optionally use GROBID to extract a better
+    //     title/abstract/authors from the PDF header (degrades to None on failure).
+    let extracted: Option<ResolvedMetadata> = match (&ident, grobid) {
+        (Identifier::None, Some(g)) => match g.extract_header(&path).await {
+            Ok(md) => md,
+            Err(e) => {
+                tracing::warn!("grobid extraction failed: {e}");
+                None
+            }
+        },
+        _ => None,
+    };
+
+    // 3b. Search query prefers the GROBID title, else the heuristic first line.
+    let title_hint: Option<String> = extracted
+        .as_ref()
+        .and_then(|m| m.title.clone())
+        .or_else(|| heuristic_title.clone());
+
+    // 3c. Resolve authoritative metadata (degrades to Unresolved on failure).
+    let resolution = resolver.resolve(&ident, title_hint.as_deref()).await;
 
     // 4. File the PDF into the managed library as <hash>.pdf.
     std::fs::create_dir_all(&dirs.library_root)?;
@@ -58,7 +79,7 @@ pub async fn ingest_file(
     std::fs::copy(&path, &dest)?;
 
     // 5. Build and store the record.
-    let paper = build_paper(content_hash, rel_path, title, &ident, resolution);
+    let paper = build_paper(content_hash, rel_path, heuristic_title, extracted, &ident, resolution);
     if let Err(e) = db::insert_paper(pool, &paper).await {
         let _ = std::fs::remove_file(&dest);
         return Err(e);
@@ -69,14 +90,16 @@ pub async fn ingest_file(
     Ok(Outcome::Ingested(paper.id))
 }
 
-/// Assemble a `Paper` from the content hash, relative path, provisional title,
-/// extracted identifier, and the resolution outcome. A confident resolution
-/// yields `status = resolved` with authoritative fields; otherwise the record
-/// stays `needs_review` with whatever the identifier/heuristics provided.
+/// Assemble a `Paper` from the content hash, path, provisional title, optional
+/// GROBID-extracted metadata, the identifier, and the resolution outcome.
+/// A confident resolution yields `status = resolved` (with a GROBID abstract
+/// backfilled if the bibliographic source lacked one). Otherwise the record is
+/// `needs_review`, enriched with GROBID's title/abstract/authors when available.
 fn build_paper(
     content_hash: String,
     rel_path: String,
     provisional_title: Option<String>,
+    extracted: Option<ResolvedMetadata>,
     ident: &Identifier,
     resolution: Resolution,
 ) -> Paper {
@@ -91,12 +114,15 @@ fn build_paper(
     match resolution {
         Resolution::Resolved(md) => {
             let authors = md.authors_json();
+            let abstract_text = md
+                .abstract_text
+                .or_else(|| extracted.and_then(|g| g.abstract_text));
             Paper {
                 id,
                 content_hash,
                 rel_path,
                 title: md.title.or(provisional_title),
-                abstract_text: md.abstract_text,
+                abstract_text,
                 authors,
                 venue: md.venue,
                 year: md.year,
@@ -109,23 +135,32 @@ fn build_paper(
                 added_at: now,
             }
         }
-        Resolution::Unresolved => Paper {
-            id,
-            content_hash,
-            rel_path,
-            title: provisional_title,
-            abstract_text: None,
-            authors: None,
-            venue: None,
-            year: None,
-            doi: ext_doi,
-            arxiv_id: ext_arxiv,
-            dblp_key: None,
-            url: None,
-            source: None,
-            status: PaperStatus::NeedsReview.as_str().to_string(),
-            added_at: now,
-        },
+        Resolution::Unresolved => {
+            let (title, abstract_text, authors, source) = match extracted {
+                Some(g) => {
+                    let authors = g.authors_json();
+                    (g.title.or(provisional_title), g.abstract_text, authors, Some(g.source))
+                }
+                None => (provisional_title, None, None, None),
+            };
+            Paper {
+                id,
+                content_hash,
+                rel_path,
+                title,
+                abstract_text,
+                authors,
+                venue: None,
+                year: None,
+                doi: ext_doi,
+                arxiv_id: ext_arxiv,
+                dblp_key: None,
+                url: None,
+                source,
+                status: PaperStatus::NeedsReview.as_str().to_string(),
+                added_at: now,
+            }
+        }
     }
 }
 
