@@ -45,6 +45,17 @@ pub struct Paper {
     pub added_at: String,
 }
 
+impl Paper {
+    /// The stored `authors` JSON parsed back into a list (empty if absent or
+    /// unparseable). Used to recompute the cite key during refresh.
+    pub fn authors_vec(&self) -> Vec<String> {
+        self.authors
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

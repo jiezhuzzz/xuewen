@@ -92,6 +92,51 @@ pub async fn cite_keys_with_base(
     Ok(rows.into_iter().map(|(k,)| k).collect())
 }
 
+/// Overwrite a paper's mutable columns by id (leaves id/content_hash/added_at).
+pub async fn update_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
+    sqlx::query(
+        "UPDATE papers SET \
+         rel_path = ?, title = ?, abstract = ?, authors = ?, venue = ?, year = ?, \
+         doi = ?, arxiv_id = ?, dblp_key = ?, cite_key = ?, url = ?, source = ?, status = ? \
+         WHERE id = ?",
+    )
+    .bind(&p.rel_path)
+    .bind(&p.title)
+    .bind(&p.abstract_text)
+    .bind(&p.authors)
+    .bind(&p.venue)
+    .bind(p.year)
+    .bind(&p.doi)
+    .bind(&p.arxiv_id)
+    .bind(&p.dblp_key)
+    .bind(&p.cite_key)
+    .bind(&p.url)
+    .bind(&p.source)
+    .bind(&p.status)
+    .bind(&p.id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Every paper, oldest first.
+pub async fn all_papers(pool: &SqlitePool) -> Result<Vec<Paper>> {
+    let papers = sqlx::query_as::<_, Paper>("SELECT * FROM papers ORDER BY added_at")
+        .fetch_all(pool)
+        .await?;
+    Ok(papers)
+}
+
+/// Papers whose id starts with `prefix` (for `refresh <ID>` prefix matching).
+pub async fn find_by_id_prefix(pool: &SqlitePool, prefix: &str) -> Result<Vec<Paper>> {
+    let pattern = format!("{prefix}%");
+    let papers = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE id LIKE ?")
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await?;
+    Ok(papers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +211,78 @@ mod tests {
             .unwrap();
         assert!(!taken_excl.contains("he2016deep"));
         assert!(taken_excl.contains("he2016deepa"));
+    }
+
+    #[tokio::test]
+    async fn update_paper_persists_changes() {
+        let (_dir, pool) = temp_pool().await;
+        let mut p = sample_paper("01890000-0000-7000-8000-0000000000c1", "h1");
+        insert_paper(&pool, &p).await.unwrap();
+
+        // Mutate every updatable column to catch a dropped SET clause.
+        p.title = Some("New Title".into());
+        p.abstract_text = Some("New abstract".into());
+        p.authors = Some(r#"["Ada Lovelace"]"#.into());
+        p.venue = Some("KDD".into());
+        p.year = Some(2019);
+        p.doi = Some("10.1/new".into());
+        p.arxiv_id = Some("2001.00001".into());
+        p.dblp_key = Some("conf/kdd/X".into());
+        p.rel_path = "he2016deep.pdf".into();
+        p.cite_key = Some("he2016deep".into());
+        p.url = Some("https://example.org/x".into());
+        p.source = Some("crossref".into());
+        p.status = PaperStatus::Resolved.as_str().to_string();
+        update_paper(&pool, &p).await.unwrap();
+
+        let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
+        assert_eq!(got.title.as_deref(), Some("New Title"));
+        assert_eq!(got.abstract_text.as_deref(), Some("New abstract"));
+        assert_eq!(got.authors.as_deref(), Some(r#"["Ada Lovelace"]"#));
+        assert_eq!(got.venue.as_deref(), Some("KDD"));
+        assert_eq!(got.year, Some(2019));
+        assert_eq!(got.doi.as_deref(), Some("10.1/new"));
+        assert_eq!(got.arxiv_id.as_deref(), Some("2001.00001"));
+        assert_eq!(got.dblp_key.as_deref(), Some("conf/kdd/X"));
+        assert_eq!(got.rel_path, "he2016deep.pdf");
+        assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
+        assert_eq!(got.url.as_deref(), Some("https://example.org/x"));
+        assert_eq!(got.source.as_deref(), Some("crossref"));
+        assert_eq!(got.status, "resolved");
+        assert_eq!(got.content_hash, "h1"); // immutable columns untouched
+    }
+
+    #[tokio::test]
+    async fn all_papers_and_find_by_prefix() {
+        let (_dir, pool) = temp_pool().await;
+        let a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
+        let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
+        insert_paper(&pool, &a).await.unwrap();
+        insert_paper(&pool, &b).await.unwrap();
+
+        assert_eq!(all_papers(&pool).await.unwrap().len(), 2);
+
+        // Unique prefix → exactly one match.
+        let hit = find_by_id_prefix(&pool, "01890000-0000-7000-8000-0000000000a")
+            .await
+            .unwrap();
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].id, a.id);
+
+        // Shared prefix → both.
+        let both = find_by_id_prefix(&pool, "01890000")
+            .await
+            .unwrap();
+        assert_eq!(both.len(), 2);
+    }
+
+    #[test]
+    fn authors_vec_parses_and_defaults() {
+        let mut p = sample_paper("01890000-0000-7000-8000-0000000000e5", "he");
+        assert!(p.authors_vec().is_empty()); // None → empty
+        p.authors = Some(r#"["Kaiming He","Xiangyu Zhang"]"#.into());
+        assert_eq!(p.authors_vec(), vec!["Kaiming He", "Xiangyu Zhang"]);
+        p.authors = Some("not json".into());
+        assert!(p.authors_vec().is_empty()); // invalid → empty
     }
 }
