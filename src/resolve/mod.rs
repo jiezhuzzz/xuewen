@@ -36,6 +36,9 @@ impl ResolvedMetadata {
 }
 
 /// Outcome of a resolution attempt.
+// Resolution is short-lived (built in resolve(), consumed immediately in build_paper);
+// boxing the large variant would add churn with no measurable benefit.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
     Resolved(ResolvedMetadata),

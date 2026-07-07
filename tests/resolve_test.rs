@@ -74,3 +74,19 @@ async fn none_identifier_is_unresolved() {
     let resolver = Resolver::new(None).unwrap();
     assert_eq!(resolver.resolve(&Identifier::None).await, Resolution::Unresolved);
 }
+
+#[tokio::test]
+async fn parse_error_degrades_to_unresolved() {
+    // Server returns 200 but a malformed body: fetch succeeds, parse fails -> Unresolved.
+    let server = MockServer::start().await;
+    let doi = "10.1234/malformed";
+    Mock::given(method("GET"))
+        .and(path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{ not valid json"))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+    let res = resolver.resolve(&Identifier::Doi(doi.to_string())).await;
+    assert_eq!(res, Resolution::Unresolved);
+}

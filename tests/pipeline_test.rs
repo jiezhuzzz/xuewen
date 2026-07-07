@@ -97,6 +97,7 @@ async fn same_doi_different_bytes_errors_without_orphan() {
 }
 
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
+const ARXIV_FIXTURE: &str = include_str!("fixtures/arxiv_attention.xml");
 
 #[tokio::test]
 async fn ingest_with_doi_resolves_via_crossref() {
@@ -144,4 +145,45 @@ async fn ingest_with_doi_resolves_via_crossref() {
     assert_eq!(paper.doi.as_deref(), Some(doi));
     assert_eq!(paper.year, Some(2019));
     assert!(paper.authors.as_deref().unwrap().contains("Xiang Wang"));
+}
+
+#[tokio::test]
+async fn ingest_with_arxiv_resolves_via_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    let processed = inbox.join("_processed");
+    std::fs::create_dir_all(&inbox).unwrap();
+
+    let arxiv_id = "1706.03762";
+    let pdf_path = inbox.join("paper.pdf");
+    common::write_test_pdf(&pdf_path, &["Provisional Header", &format!("arXiv:{arxiv_id}")]);
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ARXIV_FIXTURE))
+        .mount(&server)
+        .await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let dirs = Libraries {
+        library_root: library.clone(),
+        processed_dir: processed.clone(),
+    };
+
+    let out = ingest_file(&pool, &dirs, &resolver, &pdf_path).await.unwrap();
+    let id = match out {
+        Outcome::Ingested(id) => id,
+        Outcome::Duplicate => panic!("expected Ingested"),
+    };
+
+    let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
+    assert_eq!(paper.status, "resolved");
+    assert_eq!(paper.source.as_deref(), Some("arxiv"));
+    assert_eq!(paper.title.as_deref(), Some("Attention Is All You Need"));
+    assert_eq!(paper.arxiv_id.as_deref(), Some(arxiv_id));
+    assert_eq!(paper.year, Some(2017));
 }
