@@ -22,6 +22,8 @@ struct Cli {
 enum Command {
     /// Ingest a single PDF file.
     Ingest { path: PathBuf },
+    /// Watch the inbox directory and auto-ingest new PDFs (runs until stopped).
+    Watch,
 }
 
 #[tokio::main]
@@ -50,6 +52,9 @@ async fn main() -> Result<()> {
                 Outcome::Ingested(id) => println!("ingested {id}"),
                 Outcome::Duplicate => println!("duplicate, skipped"),
             }
+        }
+        Command::Watch => {
+            xuewen::watcher::run(&pool, &dirs, &resolver, grobid.as_ref(), &cfg.inbox_dir).await?;
         }
     }
     Ok(())
