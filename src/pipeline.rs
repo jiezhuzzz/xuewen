@@ -49,7 +49,7 @@ pub async fn ingest_file(
     let title = identify::guess_title(&text);
 
     // 3b. Resolve authoritative metadata (degrades to Unresolved on failure).
-    let resolution = resolver.resolve(&ident, None).await;
+    let resolution = resolver.resolve(&ident, title.as_deref()).await;
 
     // 4. File the PDF into the managed library as <hash>.pdf.
     std::fs::create_dir_all(&dirs.library_root)?;

@@ -187,3 +187,53 @@ async fn ingest_with_arxiv_resolves_via_api() {
     assert_eq!(paper.arxiv_id.as_deref(), Some(arxiv_id));
     assert_eq!(paper.year, Some(2017));
 }
+
+const DBLP_FIXTURE: &str = include_str!("fixtures/dblp_kgat.json");
+
+#[tokio::test]
+async fn ingest_without_identifier_resolves_via_dblp() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    let processed = inbox.join("_processed");
+    std::fs::create_dir_all(&inbox).unwrap();
+
+    // No DOI/arXiv anywhere; the first substantive line is the title.
+    let pdf_path = inbox.join("paper.pdf");
+    common::write_test_pdf(
+        &pdf_path,
+        &["KGAT: Knowledge Graph Attention Network for Recommendation"],
+    );
+
+    // DBLP mock returns the matching hit.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(DBLP_FIXTURE))
+        .mount(&server)
+        .await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri());
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let dirs = Libraries {
+        library_root: library.clone(),
+        processed_dir: processed.clone(),
+    };
+
+    let out = ingest_file(&pool, &dirs, &resolver, &pdf_path).await.unwrap();
+    let id = match out {
+        Outcome::Ingested(id) => id,
+        Outcome::Duplicate => panic!("expected Ingested"),
+    };
+
+    let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
+    assert_eq!(paper.status, "resolved");
+    assert_eq!(paper.source.as_deref(), Some("dblp"));
+    assert_eq!(paper.dblp_key.as_deref(), Some("conf/kdd/WangHCLC19"));
+    assert_eq!(paper.venue.as_deref(), Some("KDD"));
+    assert_eq!(paper.year, Some(2019));
+    assert!(paper.doi.as_deref().is_some());
+}
