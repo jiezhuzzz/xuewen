@@ -239,4 +239,30 @@ mod tests {
             "ok"
         );
     }
+
+    #[tokio::test]
+    async fn retries_then_gives_up_on_connect_error() {
+        // Nothing listens on port 1 → connect error (retryable) each attempt.
+        let out = client().get_text("http://127.0.0.1:1/x").await;
+        assert!(out.is_err());
+    }
+
+    #[test]
+    fn delay_for_caps_both_paths() {
+        let http = HttpClient::new(
+            reqwest::Client::new(),
+            RetryPolicy {
+                max_attempts: 4,
+                base_delay: Duration::from_secs(10),
+                max_delay: Duration::from_secs(1),
+            },
+        );
+        // Exponential 10s * 2^3 = 80s, clamped to max_delay (1s).
+        assert_eq!(http.delay_for(3, None), Duration::from_secs(1));
+        // Retry-After 120s clamped to the 30s RETRY_AFTER_CAP.
+        assert_eq!(
+            http.delay_for(0, Some(Duration::from_secs(120))),
+            Duration::from_secs(30)
+        );
+    }
 }
