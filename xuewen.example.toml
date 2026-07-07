@@ -1,0 +1,8 @@
+# Copy to xuewen.toml and edit.
+inbox_dir     = "./inbox"
+library_root  = "./library"
+database_url  = "sqlite:./library.db"
+
+# Used in later plans (Plan 2/3). Optional now.
+# grobid_url    = "http://localhost:8070"
+# contact_email = "you@example.com"
