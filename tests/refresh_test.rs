@@ -171,3 +171,118 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
     assert_eq!(got.rel_path, "he2016deep.pdf");
     assert!(f.exists());
 }
+
+#[tokio::test]
+async fn refresh_by_id_prefix_targets_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+
+    // P1: targeted; its PDF carries a DOI so re-resolution succeeds.
+    let h1 = "hash0001";
+    let doi = "10.1145/3292500.3330701";
+    let f1 = library.join(format!("{h1}.pdf"));
+    common::write_test_pdf(&f1, &["Header", &format!("https://doi.org/{doi}")]);
+    // P2: not targeted; must be untouched.
+    let h2 = "hash0002";
+    let f2 = library.join(format!("{h2}.pdf"));
+    common::write_test_pdf(&f2, &["Other"]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let p1 = seed_paper(
+        "01890000-0000-7000-8000-0000000000a1",
+        h1,
+        &format!("{h1}.pdf"),
+        "needs_review",
+    );
+    db::insert_paper(&pool, &p1).await.unwrap();
+    let mut p2 = seed_paper(
+        "01890000-0000-7000-8000-0000000000b2",
+        h2,
+        &format!("{h2}.pdf"),
+        "resolved",
+    );
+    p2.title = Some("Some Resolved Paper".into());
+    db::insert_paper(&pool, &p2).await.unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+
+    // A prefix unique to P1 (P2's id ends ...0000b2).
+    let summary = refresh::run(
+        &pool,
+        &library,
+        &resolver,
+        None,
+        RefreshTarget::One("01890000-0000-7000-8000-0000000000a".into()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(summary.processed, 1);
+
+    let got1 = db::get_by_id(&pool, &p1.id).await.unwrap().unwrap();
+    assert_eq!(got1.rel_path, "wang2019kgat.pdf");
+    assert_eq!(got1.status, "resolved");
+
+    // P2 completely untouched.
+    let got2 = db::get_by_id(&pool, &p2.id).await.unwrap().unwrap();
+    assert_eq!(got2.rel_path, format!("{h2}.pdf"));
+    assert_eq!(got2.cite_key, None);
+    assert!(f2.exists());
+}
+
+#[tokio::test]
+async fn all_reresolves_resolved_paper() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    let hash = "stalehash1";
+    let doi = "10.1145/3292500.3330701";
+    // The paper currently lives at a stale cite-key path; put the real PDF there.
+    let f = library.join("old2000stale.pdf");
+    common::write_test_pdf(&f, &["Header", &format!("https://doi.org/{doi}")]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let mut p = seed_paper(
+        "01890000-0000-7000-8000-0000000000d4",
+        hash,
+        "old2000stale.pdf",
+        "resolved",
+    );
+    p.title = Some("Old Stale Title".into());
+    p.authors = Some(r#"["Old Author"]"#.into());
+    p.year = Some(2000);
+    p.cite_key = Some("old2000stale".into());
+    db::insert_paper(&pool, &p).await.unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+
+    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::All)
+        .await
+        .unwrap();
+    assert_eq!(summary.reresolved, 1);
+
+    let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
+    // Stale metadata replaced by the freshly-resolved record, and re-filed.
+    assert_eq!(
+        got.title.as_deref(),
+        Some("KGAT: Knowledge Graph Attention Network for Recommendation")
+    );
+    assert_eq!(got.year, Some(2019));
+    assert_eq!(got.rel_path, "wang2019kgat.pdf");
+    assert!(library.join("wang2019kgat.pdf").exists());
+    assert!(!f.exists());
+}

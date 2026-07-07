@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use xuewen::config::Config;
 use xuewen::db;
 use xuewen::pipeline::{ingest_file, Libraries, Outcome};
+use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
 
@@ -24,6 +25,15 @@ enum Command {
     Ingest { path: PathBuf },
     /// Watch the inbox directory and auto-ingest new PDFs (runs until stopped).
     Watch,
+    /// Re-resolve failed records and re-file every paper to its cite-key path.
+    Refresh {
+        /// Paper id (exact or unique prefix) to refresh. Omit to refresh needs_review records.
+        #[arg(conflicts_with = "all")]
+        id: Option<String>,
+        /// Re-resolve every paper, not just needs_review records.
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[tokio::main]
@@ -51,6 +61,19 @@ async fn main() -> Result<()> {
         }
         Command::Watch => {
             xuewen::watcher::run(&pool, &dirs, &resolver, grobid.as_ref(), &cfg.inbox_dir).await?;
+        }
+        Command::Refresh { id, all } => {
+            let target = match (id, all) {
+                (Some(id), _) => RefreshTarget::One(id),
+                (None, true) => RefreshTarget::All,
+                (None, false) => RefreshTarget::NeedsReview,
+            };
+            let summary =
+                refresh::run(&pool, &dirs.library_root, &resolver, grobid.as_ref(), target).await?;
+            println!(
+                "refresh: {} processed, {} re-resolved, {} re-filed",
+                summary.processed, summary.reresolved, summary.refiled
+            );
         }
     }
     Ok(())
