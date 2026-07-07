@@ -4,6 +4,7 @@ pub mod hash;
 pub mod identify;
 pub mod matching;
 pub mod models;
+pub mod naming;
 pub mod pdf;
 pub mod pipeline;
 pub mod resolve;
