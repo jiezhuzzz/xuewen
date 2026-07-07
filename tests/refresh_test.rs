@@ -293,3 +293,71 @@ async fn all_reresolves_resolved_paper() {
     assert!(library.join("wang2019kgat.pdf").exists());
     assert!(!f.exists());
 }
+
+#[tokio::test]
+async fn refiles_two_same_base_papers_with_distinct_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+
+    // Two already-resolved papers with identical author/year/title → the same
+    // cite-key base, both still at their hash paths. One refresh pass must give
+    // them distinct keys (the second suffixed), proving the sequential
+    // commit-then-query disambiguation excludes only self and sees prior writes.
+    let h1 = "samebaseA";
+    let h2 = "samebaseB";
+    let f1 = library.join(format!("{h1}.pdf"));
+    let f2 = library.join(format!("{h2}.pdf"));
+    common::write_test_pdf(&f1, &["A"]);
+    common::write_test_pdf(&f2, &["B"]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    let mut p1 = seed_paper(
+        "01890000-0000-7000-8000-00000000aa01",
+        h1,
+        &format!("{h1}.pdf"),
+        "resolved",
+    );
+    p1.title = Some("Deep Residual Learning for Image Recognition".into());
+    p1.authors = Some(r#"["Kaiming He"]"#.into());
+    p1.year = Some(2016);
+    p1.added_at = "2026-07-07T00:00:00Z".into();
+    db::insert_paper(&pool, &p1).await.unwrap();
+
+    let mut p2 = seed_paper(
+        "01890000-0000-7000-8000-00000000bb02",
+        h2,
+        &format!("{h2}.pdf"),
+        "resolved",
+    );
+    p2.title = Some("Deep Residual Learning for Image Recognition".into());
+    p2.authors = Some(r#"["Kaiming He"]"#.into());
+    p2.year = Some(2016);
+    p2.added_at = "2026-07-07T00:00:01Z".into(); // ordered after p1
+    db::insert_paper(&pool, &p2).await.unwrap();
+
+    // Resolved papers under the default target are re-filed but not re-resolved,
+    // so the (unreachable) resolver is never called.
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".into(),
+        "http://127.0.0.1:1".into(),
+    )
+    .unwrap();
+    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::NeedsReview)
+        .await
+        .unwrap();
+    assert_eq!(summary.refiled, 2);
+
+    // First paper keeps the plain base; the second is disambiguated with a suffix.
+    let got1 = db::get_by_id(&pool, &p1.id).await.unwrap().unwrap();
+    let got2 = db::get_by_id(&pool, &p2.id).await.unwrap().unwrap();
+    assert_eq!(got1.cite_key.as_deref(), Some("he2016deep"));
+    assert_eq!(got1.rel_path, "he2016deep.pdf");
+    assert_eq!(got2.cite_key.as_deref(), Some("he2016deepa"));
+    assert_eq!(got2.rel_path, "he2016deepa.pdf");
+    assert!(library.join("he2016deep.pdf").exists());
+    assert!(library.join("he2016deepa.pdf").exists());
+}
