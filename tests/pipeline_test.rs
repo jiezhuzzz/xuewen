@@ -52,7 +52,8 @@ async fn ingests_pdf_and_dedups() {
     assert_eq!(paper.status, "needs_review");
 
     // File was copied into the library and the original moved to _processed.
-    assert!(library.join(format!("{}.pdf", paper.content_hash)).exists());
+    assert!(library.join(format!("_unsorted/{}.pdf", paper.content_hash)).exists());
+    assert_eq!(paper.cite_key, None);
     assert!(!pdf_path.exists());
     assert!(processed.join("paper.pdf").exists());
 
@@ -102,7 +103,7 @@ async fn same_doi_different_bytes_errors_without_orphan() {
     );
 
     // Library holds exactly one PDF (paper A); paper B's copy was cleaned up.
-    let count = std::fs::read_dir(&library).unwrap().count();
+    let count = std::fs::read_dir(library.join("_unsorted")).unwrap().count();
     assert_eq!(count, 1, "library should contain only paper A, no orphan");
 
     // b.pdf was not moved (ingest errored before the move step).
@@ -160,6 +161,8 @@ async fn ingest_with_doi_resolves_via_crossref() {
     assert_eq!(paper.doi.as_deref(), Some(doi));
     assert_eq!(paper.year, Some(2019));
     assert!(paper.authors.as_deref().unwrap().contains("Xiang Wang"));
+    assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgat"));
+    assert!(library.join("wang2019kgat.pdf").exists());
 }
 
 #[tokio::test]
@@ -206,6 +209,8 @@ async fn ingest_with_arxiv_resolves_via_api() {
     assert_eq!(paper.title.as_deref(), Some("Attention Is All You Need"));
     assert_eq!(paper.arxiv_id.as_deref(), Some(arxiv_id));
     assert_eq!(paper.year, Some(2017));
+    assert_eq!(paper.cite_key.as_deref(), Some("vaswani2017attention"));
+    assert!(library.join("vaswani2017attention.pdf").exists());
 }
 
 const DBLP_FIXTURE: &str = include_str!("fixtures/dblp_kgat.json");
@@ -258,6 +263,8 @@ async fn ingest_without_identifier_resolves_via_dblp() {
     assert_eq!(paper.venue.as_deref(), Some("KDD"));
     assert_eq!(paper.year, Some(2019));
     assert!(paper.doi.as_deref().is_some());
+    assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgat"));
+    assert!(library.join("wang2019kgat.pdf").exists());
 }
 
 #[tokio::test]
@@ -364,4 +371,62 @@ async fn grobid_enriches_needs_review_when_unmatched() {
         Some("BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding")
     );
     assert!(paper.authors.as_deref().unwrap().contains("Jacob Devlin"));
+}
+
+#[tokio::test]
+async fn colliding_cite_key_gets_letter_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    let processed = inbox.join("_processed");
+    std::fs::create_dir_all(&inbox).unwrap();
+
+    let doi = "10.1145/3292500.3330701";
+    let pdf_path = inbox.join("paper.pdf");
+    common::write_test_pdf(&pdf_path, &["Header", &format!("https://doi.org/{doi}")]);
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // Pre-seed a different paper that already owns the base key "wang2019kgat".
+    let seed = xuewen::models::Paper {
+        id: "01890000-0000-7000-8000-0000000000ff".to_string(),
+        content_hash: "seedhash".to_string(),
+        rel_path: "wang2019kgat.pdf".to_string(),
+        title: Some("Seed".to_string()),
+        abstract_text: None,
+        authors: None,
+        venue: None,
+        year: Some(2019),
+        doi: None,
+        arxiv_id: None,
+        dblp_key: None,
+        cite_key: Some("wang2019kgat".to_string()),
+        url: None,
+        source: Some("crossref".to_string()),
+        status: "resolved".to_string(),
+        added_at: "2026-07-07T00:00:00Z".to_string(),
+    };
+    db::insert_paper(&pool, &seed).await.unwrap();
+
+    let dirs = Libraries {
+        library_root: library.clone(),
+        processed_dir: processed.clone(),
+    };
+    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path).await.unwrap();
+    let id = match out {
+        Outcome::Ingested(id) => id,
+        Outcome::Duplicate => panic!("expected Ingested"),
+    };
+    let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
+    assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgata"));
+    assert!(library.join("wang2019kgata.pdf").exists());
 }

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::models::{Identifier, Paper, PaperStatus};
+use crate::naming;
 use crate::resolve::grobid::Grobid;
 use crate::resolve::{Resolution, ResolvedMetadata, Resolver};
 use crate::{db, hash, identify, pdf};
@@ -72,21 +73,27 @@ pub async fn ingest_file(
     // 3c. Resolve authoritative metadata (degrades to Unresolved on failure).
     let resolution = resolver.resolve(&ident, title_hint.as_deref()).await;
 
-    // 4. File the PDF into the managed library as <hash>.pdf.
-    std::fs::create_dir_all(&dirs.library_root)?;
-    let rel_path = format!("{content_hash}.pdf");
+    // 4. Decide the stored fields, then the cite-key filename.
+    let fields = resolve_fields(heuristic_title, extracted, &ident, resolution);
+    let cite_key = match naming::cite_key_base(&fields.authors, fields.year, fields.title.as_deref())
+    {
+        Some(base) => {
+            let taken = db::cite_keys_with_base(pool, &base, None).await?;
+            Some(naming::disambiguate(&base, &taken))
+        }
+        None => None,
+    };
+    let rel_path = naming::library_rel_path(cite_key.as_deref(), &content_hash);
+
+    // 5. File the PDF into the managed library.
     let dest = dirs.library_root.join(&rel_path);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::copy(&path, &dest)?;
 
-    // 5. Build and store the record.
-    let paper = build_paper(
-        content_hash,
-        rel_path,
-        heuristic_title,
-        extracted,
-        &ident,
-        resolution,
-    );
+    // 6. Build and store the record.
+    let paper = fields.into_paper(content_hash, rel_path, cite_key);
     if let Err(e) = db::insert_paper(pool, &paper).await {
         let _ = std::fs::remove_file(&dest);
         return Err(e);
@@ -97,83 +104,116 @@ pub async fn ingest_file(
     Ok(Outcome::Ingested(paper.id))
 }
 
-/// Assemble a `Paper` from the content hash, path, provisional title, optional
-/// GROBID-extracted metadata, the identifier, and the resolution outcome.
-/// A confident resolution yields `status = resolved` (with a GROBID abstract
-/// backfilled if the bibliographic source lacked one). Otherwise the record is
-/// `needs_review`, enriched with GROBID's title/abstract/authors when available.
-fn build_paper(
-    content_hash: String,
-    rel_path: String,
+/// The metadata a paper should store, decided from the resolution outcome and any
+/// GROBID extraction. Shared by ingest (and, later, the `refresh` command).
+pub struct ResolvedFields {
+    pub title: Option<String>,
+    pub abstract_text: Option<String>,
+    pub authors: Vec<String>,
+    pub venue: Option<String>,
+    pub year: Option<i64>,
+    pub doi: Option<String>,
+    pub arxiv_id: Option<String>,
+    pub dblp_key: Option<String>,
+    pub url: Option<String>,
+    pub source: Option<String>,
+    pub status: String,
+}
+
+/// Decide the stored fields. A confident resolution yields `resolved` (with a
+/// GROBID abstract backfilled if the source lacked one); otherwise `needs_review`,
+/// enriched with GROBID's title/abstract/authors when present.
+pub(crate) fn resolve_fields(
     provisional_title: Option<String>,
     extracted: Option<ResolvedMetadata>,
     ident: &Identifier,
     resolution: Resolution,
-) -> Paper {
+) -> ResolvedFields {
     let (ext_doi, ext_arxiv) = match ident {
         Identifier::Doi(d) => (Some(d.clone()), None),
         Identifier::Arxiv(a) => (None, Some(a.clone())),
         Identifier::None => (None, None),
     };
-    let now = chrono::Utc::now().to_rfc3339();
-    let id = Uuid::now_v7().to_string();
-
     match resolution {
         Resolution::Resolved(md) => {
-            let authors = md.authors_json();
             let abstract_text = md
                 .abstract_text
                 .or_else(|| extracted.and_then(|g| g.abstract_text));
-            Paper {
-                id,
-                content_hash,
-                rel_path,
+            ResolvedFields {
                 title: md.title.or(provisional_title),
                 abstract_text,
-                authors,
+                authors: md.authors,
                 venue: md.venue,
                 year: md.year,
                 doi: md.doi.or(ext_doi),
                 arxiv_id: md.arxiv_id.or(ext_arxiv),
                 dblp_key: md.dblp_key,
-                cite_key: None,
                 url: md.url,
                 source: Some(md.source),
                 status: PaperStatus::Resolved.as_str().to_string(),
-                added_at: now,
             }
         }
-        Resolution::Unresolved => {
-            let (title, abstract_text, authors, source) = match extracted {
-                Some(g) => {
-                    let authors = g.authors_json();
-                    (
-                        g.title.or(provisional_title),
-                        g.abstract_text,
-                        authors,
-                        Some(g.source),
-                    )
-                }
-                None => (provisional_title, None, None, None),
-            };
-            Paper {
-                id,
-                content_hash,
-                rel_path,
-                title,
-                abstract_text,
-                authors,
+        Resolution::Unresolved => match extracted {
+            Some(g) => ResolvedFields {
+                title: g.title.or(provisional_title),
+                abstract_text: g.abstract_text,
+                authors: g.authors,
                 venue: None,
                 year: None,
                 doi: ext_doi,
                 arxiv_id: ext_arxiv,
                 dblp_key: None,
-                cite_key: None,
                 url: None,
-                source,
+                source: Some(g.source),
                 status: PaperStatus::NeedsReview.as_str().to_string(),
-                added_at: now,
-            }
+            },
+            None => ResolvedFields {
+                title: provisional_title,
+                abstract_text: None,
+                authors: Vec::new(),
+                venue: None,
+                year: None,
+                doi: ext_doi,
+                arxiv_id: ext_arxiv,
+                dblp_key: None,
+                url: None,
+                source: None,
+                status: PaperStatus::NeedsReview.as_str().to_string(),
+            },
+        },
+    }
+}
+
+impl ResolvedFields {
+    /// Assemble a full `Paper` with a fresh id/timestamp and the given location.
+    pub(crate) fn into_paper(
+        self,
+        content_hash: String,
+        rel_path: String,
+        cite_key: Option<String>,
+    ) -> Paper {
+        let authors = if self.authors.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&self.authors).ok()
+        };
+        Paper {
+            id: Uuid::now_v7().to_string(),
+            content_hash,
+            rel_path,
+            title: self.title,
+            abstract_text: self.abstract_text,
+            authors,
+            venue: self.venue,
+            year: self.year,
+            doi: self.doi,
+            arxiv_id: self.arxiv_id,
+            dblp_key: self.dblp_key,
+            cite_key,
+            url: self.url,
+            source: self.source,
+            status: self.status,
+            added_at: chrono::Utc::now().to_rfc3339(),
         }
     }
 }
