@@ -2,6 +2,7 @@ pub mod arxiv;
 pub mod crossref;
 pub mod dblp;
 pub mod grobid;
+pub mod http;
 
 use crate::matching;
 use crate::models::Identifier;
