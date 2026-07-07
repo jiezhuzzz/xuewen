@@ -36,11 +36,7 @@ async fn main() -> Result<()> {
     let cfg = Config::load(&cli.config)?;
     let pool = db::connect(&cfg.database_url).await?;
     let resolver = Resolver::new(cfg.contact_email.as_deref())?;
-    let grobid = cfg
-        .grobid_url
-        .as_deref()
-        .map(Grobid::new)
-        .transpose()?;
+    let grobid = cfg.grobid_url.as_deref().map(Grobid::new).transpose()?;
     let dirs = Libraries {
         library_root: cfg.library_root.clone(),
         processed_dir: cfg.inbox_dir.join("_processed"),

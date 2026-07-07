@@ -132,7 +132,10 @@ async fn process_one(
     match ingest_with_retry(pool, dirs, resolver, grobid, cfg, path).await {
         Ok(outcome) => tracing::info!("ingested {}: {outcome:?}", path.display()),
         Err(e) => {
-            tracing::error!("giving up on {}: {e}; quarantining to _failed", path.display());
+            tracing::error!(
+                "giving up on {}: {e}; quarantining to _failed",
+                path.display()
+            );
             if let Err(mv) = move_to(path, failed_dir) {
                 tracing::error!("could not quarantine {}: {mv}", path.display());
             }
@@ -160,10 +163,13 @@ pub async fn run(
     // Live watch. `notify` calls the handler on its own thread; forward pdf paths
     // over an unbounded channel (send() is non-blocking and runtime-agnostic).
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PathBuf>();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        match res {
+    let mut watcher =
+        notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
             Ok(event) => {
-                if matches!(event.kind, notify::EventKind::Create(_) | notify::EventKind::Modify(_)) {
+                if matches!(
+                    event.kind,
+                    notify::EventKind::Create(_) | notify::EventKind::Modify(_)
+                ) {
                     for p in event.paths {
                         if is_pdf(&p) {
                             let _ = tx.send(p);
@@ -172,8 +178,7 @@ pub async fn run(
                 }
             }
             Err(e) => tracing::warn!("watch event error: {e}"),
-        }
-    })?;
+        })?;
     // Note: a file created in the brief window between the catch-up scan above and
     // this watch() call is picked up on the next startup catch-up rather than live.
     watcher.watch(inbox, RecursiveMode::NonRecursive)?;
@@ -198,7 +203,8 @@ mod tests {
         doc.get_page(page1)
             .get_layer(layer1)
             .use_text(line, 12.0, Mm(15.0), Mm(280.0), &font);
-        doc.save(&mut BufWriter::new(File::create(path).unwrap())).unwrap();
+        doc.save(&mut BufWriter::new(File::create(path).unwrap()))
+            .unwrap();
     }
 
     fn fast_cfg() -> WatchConfig {
@@ -271,7 +277,16 @@ mod tests {
         };
         let resolver = offline_resolver();
 
-        process_one(&pool, &dirs, &resolver, None, &inbox.join("_failed"), &fast_cfg(), &pdf).await;
+        process_one(
+            &pool,
+            &dirs,
+            &resolver,
+            None,
+            &inbox.join("_failed"),
+            &fast_cfg(),
+            &pdf,
+        )
+        .await;
 
         assert!(inbox.join("_processed/paper.pdf").exists());
         assert!(!pdf.exists());

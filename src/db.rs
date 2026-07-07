@@ -17,11 +17,10 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
 }
 
 pub async fn exists_by_hash(pool: &SqlitePool, content_hash: &str) -> Result<bool> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM papers WHERE content_hash = ?")
-            .bind(content_hash)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT id FROM papers WHERE content_hash = ?")
+        .bind(content_hash)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.is_some())
 }
 

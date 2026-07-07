@@ -79,7 +79,14 @@ pub async fn ingest_file(
     std::fs::copy(&path, &dest)?;
 
     // 5. Build and store the record.
-    let paper = build_paper(content_hash, rel_path, heuristic_title, extracted, &ident, resolution);
+    let paper = build_paper(
+        content_hash,
+        rel_path,
+        heuristic_title,
+        extracted,
+        &ident,
+        resolution,
+    );
     if let Err(e) = db::insert_paper(pool, &paper).await {
         let _ = std::fs::remove_file(&dest);
         return Err(e);
@@ -139,7 +146,12 @@ fn build_paper(
             let (title, abstract_text, authors, source) = match extracted {
                 Some(g) => {
                     let authors = g.authors_json();
-                    (g.title.or(provisional_title), g.abstract_text, authors, Some(g.source))
+                    (
+                        g.title.or(provisional_title),
+                        g.abstract_text,
+                        authors,
+                        Some(g.source),
+                    )
                 }
                 None => (provisional_title, None, None, None),
             };
@@ -167,7 +179,9 @@ fn build_paper(
 /// Move `src` into `dir`, falling back to copy+remove across filesystems.
 pub(crate) fn move_to(src: &Path, dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    let name = src.file_name().ok_or_else(|| anyhow!("path has no file name"))?;
+    let name = src
+        .file_name()
+        .ok_or_else(|| anyhow!("path has no file name"))?;
     let dest = dir.join(name);
     if std::fs::rename(src, &dest).is_err() {
         std::fs::copy(src, &dest)?;

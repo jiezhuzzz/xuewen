@@ -88,8 +88,10 @@ fn clean_title(s: &str) -> String {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dblp_kgat.json"));
+    const FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dblp_kgat.json"
+    ));
 
     #[test]
     fn parses_dblp_hit() {

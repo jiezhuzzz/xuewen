@@ -49,7 +49,10 @@ pub fn parse_search(json: &str) -> Result<Vec<ResolvedMetadata>> {
 /// (either `message` for a DOI lookup or one element of `message.items`).
 fn parse_item(m: &Value) -> ResolvedMetadata {
     let title = m["title"].get(0).and_then(Value::as_str).map(collapse_ws);
-    let venue = m["container-title"].get(0).and_then(Value::as_str).map(collapse_ws);
+    let venue = m["container-title"]
+        .get(0)
+        .and_then(Value::as_str)
+        .map(collapse_ws);
     let doi = m["DOI"].as_str().map(str::to_string);
     let url = m["URL"].as_str().map(str::to_string);
     let abstract_text = m["abstract"].as_str().map(strip_tags);
@@ -90,10 +93,14 @@ fn parse_item(m: &Value) -> ResolvedMetadata {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/crossref_kgat.json"));
-    const SEARCH_FIXTURE: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/crossref_search_kgat.json"));
+    const FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/crossref_kgat.json"
+    ));
+    const SEARCH_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/crossref_search_kgat.json"
+    ));
 
     #[test]
     fn parses_crossref_work() {
@@ -109,7 +116,10 @@ mod tests {
             md.abstract_text.as_deref(),
             Some("Knowledge graphs are used to improve recommendation.")
         );
-        assert!(md.venue.unwrap().starts_with("Proceedings of the 25th ACM SIGKDD"));
+        assert!(md
+            .venue
+            .unwrap()
+            .starts_with("Proceedings of the 25th ACM SIGKDD"));
         assert_eq!(md.source, "crossref");
     }
 
@@ -132,6 +142,8 @@ mod tests {
 
     #[test]
     fn empty_search_is_empty() {
-        assert!(parse_search(r#"{"message":{"items":[]}}"#).unwrap().is_empty());
+        assert!(parse_search(r#"{"message":{"items":[]}}"#)
+            .unwrap()
+            .is_empty());
     }
 }

@@ -56,7 +56,10 @@ mod tests {
 
     #[test]
     fn identifier_equality() {
-        assert_eq!(Identifier::Doi("10.1/x".into()), Identifier::Doi("10.1/x".into()));
+        assert_eq!(
+            Identifier::Doi("10.1/x".into()),
+            Identifier::Doi("10.1/x".into())
+        );
         assert_ne!(Identifier::Doi("10.1/x".into()), Identifier::None);
     }
 }

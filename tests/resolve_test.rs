@@ -18,7 +18,9 @@ async fn resolves_doi_via_crossref() {
         .await;
 
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
-    let res = resolver.resolve(&Identifier::Doi(doi.to_string()), None).await;
+    let res = resolver
+        .resolve(&Identifier::Doi(doi.to_string()), None)
+        .await;
 
     match res {
         Resolution::Resolved(md) => {
@@ -46,7 +48,9 @@ async fn resolves_arxiv_via_api() {
         .await;
 
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
-    let res = resolver.resolve(&Identifier::Arxiv(id.to_string()), None).await;
+    let res = resolver
+        .resolve(&Identifier::Arxiv(id.to_string()), None)
+        .await;
 
     match res {
         Resolution::Resolved(md) => {
@@ -72,7 +76,10 @@ async fn http_error_degrades_to_unresolved() {
 #[tokio::test]
 async fn none_identifier_is_unresolved() {
     let resolver = Resolver::new(None).unwrap();
-    assert_eq!(resolver.resolve(&Identifier::None, None).await, Resolution::Unresolved);
+    assert_eq!(
+        resolver.resolve(&Identifier::None, None).await,
+        Resolution::Unresolved
+    );
 }
 
 #[tokio::test]
@@ -87,7 +94,9 @@ async fn parse_error_degrades_to_unresolved() {
         .await;
 
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
-    let res = resolver.resolve(&Identifier::Doi(doi.to_string()), None).await;
+    let res = resolver
+        .resolve(&Identifier::Doi(doi.to_string()), None)
+        .await;
     assert_eq!(res, Resolution::Unresolved);
 }
 
@@ -126,7 +135,9 @@ async fn falls_back_to_crossref_search_when_dblp_empty() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/search/publ/api"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"result":{"hits":{"@total":"0"}}}"#))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"result":{"hits":{"@total":"0"}}}"#),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -192,7 +203,10 @@ async fn low_similarity_title_is_unresolved() {
         .unwrap()
         .with_dblp_base(server.uri());
     let res = resolver
-        .resolve(&Identifier::None, Some("An Entirely Unrelated Paper Title About Frogs"))
+        .resolve(
+            &Identifier::None,
+            Some("An Entirely Unrelated Paper Title About Frogs"),
+        )
         .await;
     assert_eq!(res, Resolution::Unresolved);
 }

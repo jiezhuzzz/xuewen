@@ -8,9 +8,11 @@ static ARXIV_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)arxiv:\s*(\d{4}\.\d{4,5}(?:v\d+)?)").unwrap());
 
 pub fn extract_doi(text: &str) -> Option<String> {
-    DOI_RE
-        .find(text)
-        .map(|m| m.as_str().trim_end_matches(['.', ',', ')', ';']).to_string())
+    DOI_RE.find(text).map(|m| {
+        m.as_str()
+            .trim_end_matches(['.', ',', ')', ';'])
+            .to_string()
+    })
 }
 
 pub fn extract_arxiv(text: &str) -> Option<String> {
@@ -52,19 +54,31 @@ mod tests {
     #[test]
     fn finds_doi() {
         let text = "See https://doi.org/10.1145/3292500.3330701 for details.";
-        assert_eq!(extract_doi(text).as_deref(), Some("10.1145/3292500.3330701"));
+        assert_eq!(
+            extract_doi(text).as_deref(),
+            Some("10.1145/3292500.3330701")
+        );
     }
 
     #[test]
     fn finds_arxiv() {
-        assert_eq!(extract_arxiv("arXiv:1706.03762v5").as_deref(), Some("1706.03762v5"));
-        assert_eq!(extract_arxiv("arXiv: 2001.00001").as_deref(), Some("2001.00001"));
+        assert_eq!(
+            extract_arxiv("arXiv:1706.03762v5").as_deref(),
+            Some("1706.03762v5")
+        );
+        assert_eq!(
+            extract_arxiv("arXiv: 2001.00001").as_deref(),
+            Some("2001.00001")
+        );
     }
 
     #[test]
     fn doi_wins_over_arxiv() {
         let text = "arXiv:1706.03762  doi:10.1145/3292500.3330701";
-        assert_eq!(identify(text), Identifier::Doi("10.1145/3292500.3330701".into()));
+        assert_eq!(
+            identify(text),
+            Identifier::Doi("10.1145/3292500.3330701".into())
+        );
     }
 
     #[test]
@@ -74,7 +88,11 @@ mod tests {
 
     #[test]
     fn guesses_title_skipping_arxiv_banner() {
-        let text = "arXiv:1706.03762v5 [cs.CL] 6 Dec 2017\nAttention Is All You Need\nAshish Vaswani";
-        assert_eq!(guess_title(text).as_deref(), Some("Attention Is All You Need"));
+        let text =
+            "arXiv:1706.03762v5 [cs.CL] 6 Dec 2017\nAttention Is All You Need\nAshish Vaswani";
+        assert_eq!(
+            guess_title(text).as_deref(),
+            Some("Attention Is All You Need")
+        );
     }
 }

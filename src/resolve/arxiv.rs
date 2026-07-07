@@ -32,8 +32,8 @@ pub fn parse(atom: &str) -> Result<Option<ResolvedMetadata>> {
     let title = child_text("title");
     let abstract_text = child_text("summary");
     let url = child_text("id");
-    let year = child_text("published")
-        .and_then(|s| s.get(0..4).and_then(|y| y.parse::<i64>().ok()));
+    let year =
+        child_text("published").and_then(|s| s.get(0..4).and_then(|y| y.parse::<i64>().ok()));
 
     let authors: Vec<String> = entry
         .children()
@@ -70,8 +70,10 @@ pub fn parse(atom: &str) -> Result<Option<ResolvedMetadata>> {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/arxiv_attention.xml"));
+    const FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/arxiv_attention.xml"
+    ));
 
     #[test]
     fn parses_arxiv_entry() {
@@ -81,7 +83,10 @@ mod tests {
         assert_eq!(md.authors, vec!["Ashish Vaswani", "Noam Shazeer"]);
         assert_eq!(md.doi.as_deref(), Some("10.5555/3295222.3295349"));
         assert_eq!(md.url.as_deref(), Some("http://arxiv.org/abs/1706.03762v5"));
-        assert!(md.abstract_text.unwrap().starts_with("The dominant sequence"));
+        assert!(md
+            .abstract_text
+            .unwrap()
+            .starts_with("The dominant sequence"));
         assert_eq!(md.source, "arxiv");
     }
 

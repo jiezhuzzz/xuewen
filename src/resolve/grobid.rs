@@ -111,15 +111,19 @@ impl Grobid {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/grobid_bert.tei.xml"));
+    const FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/grobid_bert.tei.xml"
+    ));
 
     #[test]
     fn parses_tei_header() {
         let md = parse_tei(FIXTURE).unwrap().unwrap();
         assert_eq!(
             md.title.as_deref(),
-            Some("BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding")
+            Some(
+                "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+            )
         );
         assert_eq!(md.authors, vec!["Jacob Devlin", "Ming-Wei Chang"]);
         assert_eq!(

@@ -58,8 +58,16 @@ async fn watcher_catches_up_and_watches_new_files() {
     common::write_test_pdf(&inbox.join("dropped.pdf"), &["Freshly Dropped Paper Title"]);
 
     let processed = inbox.join("_processed");
-    let existing_ok = wait_for(|| processed.join("existing.pdf").exists(), Duration::from_secs(10)).await;
-    let dropped_ok = wait_for(|| processed.join("dropped.pdf").exists(), Duration::from_secs(10)).await;
+    let existing_ok = wait_for(
+        || processed.join("existing.pdf").exists(),
+        Duration::from_secs(10),
+    )
+    .await;
+    let dropped_ok = wait_for(
+        || processed.join("dropped.pdf").exists(),
+        Duration::from_secs(10),
+    )
+    .await;
 
     handle.abort();
 

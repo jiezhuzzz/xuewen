@@ -30,8 +30,7 @@ mod tests {
     use std::io::BufWriter;
 
     fn write_pdf(path: &Path, line: &str) {
-        let (doc, page1, layer1) =
-            PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
+        let (doc, page1, layer1) = PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
         let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
         doc.get_page(page1)
             .get_layer(layer1)
