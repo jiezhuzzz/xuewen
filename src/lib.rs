@@ -10,3 +10,4 @@ pub mod pipeline;
 pub mod refresh;
 pub mod resolve;
 pub mod watcher;
+pub mod web;
