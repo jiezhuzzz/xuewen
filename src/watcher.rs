@@ -61,8 +61,9 @@ pub fn catch_up_scan(inbox: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Wait until the file's size is stable (unchanged for `stable_polls` consecutive
-/// polls). Returns `false` if the file vanished; on timeout returns `true` if the
-/// file still exists (best effort). Guards against ingesting a half-written download.
+/// polls). Returns `false` if the file vanished; on timeout returns `false` (the
+/// file is still changing, so it is left for a later event/restart). Guards
+/// against ingesting a half-written download.
 async fn stabilize(path: &Path, cfg: &WatchConfig) -> bool {
     let mut last: Option<u64> = None;
     let mut steady = 0u32;
@@ -82,7 +83,9 @@ async fn stabilize(path: &Path, cfg: &WatchConfig) -> bool {
         }
         tokio::time::sleep(cfg.poll_interval).await;
     }
-    tokio::fs::metadata(path).await.is_ok()
+    // Never stabilized within the window (still being written). Skip this round;
+    // a later filesystem event or the next startup catch-up will retry it.
+    false
 }
 
 /// Ingest a file, retrying with exponential backoff. Re-ingestion is safe: the
@@ -158,16 +161,21 @@ pub async fn run(
     // over an unbounded channel (send() is non-blocking and runtime-agnostic).
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PathBuf>();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res {
-            if matches!(event.kind, notify::EventKind::Create(_) | notify::EventKind::Modify(_)) {
-                for p in event.paths {
-                    if is_pdf(&p) {
-                        let _ = tx.send(p);
+        match res {
+            Ok(event) => {
+                if matches!(event.kind, notify::EventKind::Create(_) | notify::EventKind::Modify(_)) {
+                    for p in event.paths {
+                        if is_pdf(&p) {
+                            let _ = tx.send(p);
+                        }
                     }
                 }
             }
+            Err(e) => tracing::warn!("watch event error: {e}"),
         }
     })?;
+    // Note: a file created in the brief window between the catch-up scan above and
+    // this watch() call is picked up on the next startup catch-up rather than live.
     watcher.watch(inbox, RecursiveMode::NonRecursive)?;
     tracing::info!("watching {}", inbox.display());
 
