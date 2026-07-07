@@ -1,5 +1,6 @@
 pub mod arxiv;
 pub mod crossref;
+pub mod dblp;
 
 use crate::models::Identifier;
 use anyhow::Result;
