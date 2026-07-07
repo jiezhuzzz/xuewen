@@ -21,6 +21,15 @@ pub enum Outcome {
     Duplicate,
 }
 
+/// The raw inputs a resolution produces from a stored PDF, shared by ingest and
+/// refresh. Consumed by `resolve_fields`.
+pub(crate) struct ResolveInputs {
+    pub(crate) ident: Identifier,
+    pub(crate) provisional_title: Option<String>,
+    pub(crate) extracted: Option<ResolvedMetadata>,
+    pub(crate) resolution: Resolution,
+}
+
 /// Ingest a single PDF: hash, dedup, extract, identify, file, and store.
 pub async fn ingest_file(
     pool: &SqlitePool,
@@ -43,38 +52,16 @@ pub async fn ingest_file(
         return Ok(Outcome::Duplicate);
     }
 
-    // 3. Extract first-page text and identify.
-    let text = {
-        let p = path.clone();
-        tokio::task::spawn_blocking(move || pdf::extract_text(&p, 1)).await??
-    };
-    let ident = identify::identify(&text);
-    let heuristic_title = identify::guess_title(&text);
-
-    // 3a. For the title-only path, optionally use GROBID to extract a better
-    //     title/abstract/authors from the PDF header (degrades to None on failure).
-    let extracted: Option<ResolvedMetadata> = match (&ident, grobid) {
-        (Identifier::None, Some(g)) => match g.extract_header(&path).await {
-            Ok(md) => md,
-            Err(e) => {
-                tracing::warn!("grobid extraction failed: {e}");
-                None
-            }
-        },
-        _ => None,
-    };
-
-    // 3b. Search query prefers the GROBID title, else the heuristic first line.
-    let title_hint: Option<String> = extracted
-        .as_ref()
-        .and_then(|m| m.title.clone())
-        .or_else(|| heuristic_title.clone());
-
-    // 3c. Resolve authoritative metadata (degrades to Unresolved on failure).
-    let resolution = resolver.resolve(&ident, title_hint.as_deref()).await;
+    // 3. Extract, identify, optionally GROBID, and resolve (factored for reuse).
+    let ResolveInputs {
+        ident,
+        provisional_title,
+        extracted,
+        resolution,
+    } = resolve_pdf(&path, resolver, grobid).await?;
 
     // 4. Decide the stored fields, then the cite-key filename.
-    let fields = resolve_fields(heuristic_title, extracted, &ident, resolution);
+    let fields = resolve_fields(provisional_title, extracted, &ident, resolution);
     let cite_key =
         match naming::cite_key_base(&fields.authors, fields.year, fields.title.as_deref()) {
             Some(base) => {
@@ -102,6 +89,50 @@ pub async fn ingest_file(
     // 7. Move the original out of the inbox.
     move_to(&path, &dirs.processed_dir)?;
     Ok(Outcome::Ingested(paper.id))
+}
+
+/// Extract first-page text, identify a DOI/arXiv id, optionally enrich via GROBID
+/// (title-only path), and resolve authoritative metadata. Degrades to
+/// `Resolution::Unresolved` on any resolver/network failure — never aborts.
+pub(crate) async fn resolve_pdf(
+    path: &Path,
+    resolver: &Resolver,
+    grobid: Option<&Grobid>,
+) -> Result<ResolveInputs> {
+    // Extract first-page text (blocking IO off the async runtime) and identify.
+    let text = {
+        let p = path.to_path_buf();
+        tokio::task::spawn_blocking(move || pdf::extract_text(&p, 1)).await??
+    };
+    let ident = identify::identify(&text);
+    let provisional_title = identify::guess_title(&text);
+
+    // For the title-only path, optionally use GROBID for a better header
+    // (degrades to None on failure).
+    let extracted: Option<ResolvedMetadata> = match (&ident, grobid) {
+        (Identifier::None, Some(g)) => match g.extract_header(path).await {
+            Ok(md) => md,
+            Err(e) => {
+                tracing::warn!("grobid extraction failed: {e}");
+                None
+            }
+        },
+        _ => None,
+    };
+
+    // Search query prefers the GROBID title, else the heuristic first line.
+    let title_hint: Option<String> = extracted
+        .as_ref()
+        .and_then(|m| m.title.clone())
+        .or_else(|| provisional_title.clone());
+
+    let resolution = resolver.resolve(&ident, title_hint.as_deref()).await;
+    Ok(ResolveInputs {
+        ident,
+        provisional_title,
+        extracted,
+        resolution,
+    })
 }
 
 /// The metadata a paper should store, decided from the resolution outcome and any
@@ -216,6 +247,26 @@ impl ResolvedFields {
             added_at: chrono::Utc::now().to_rfc3339(),
         }
     }
+
+    /// Overwrite an existing paper's metadata columns from a fresh resolution,
+    /// leaving id/content_hash/rel_path/cite_key/added_at for the caller to manage.
+    pub(crate) fn apply_to(self, paper: &mut Paper) {
+        paper.authors = if self.authors.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&self.authors).ok()
+        };
+        paper.title = self.title;
+        paper.abstract_text = self.abstract_text;
+        paper.venue = self.venue;
+        paper.year = self.year;
+        paper.doi = self.doi;
+        paper.arxiv_id = self.arxiv_id;
+        paper.dblp_key = self.dblp_key;
+        paper.url = self.url;
+        paper.source = self.source;
+        paper.status = self.status;
+    }
 }
 
 /// Move `src` into `dir`, falling back to copy+remove across filesystems.
@@ -228,6 +279,19 @@ pub(crate) fn move_to(src: &Path, dir: &Path) -> Result<()> {
     if std::fs::rename(src, &dest).is_err() {
         std::fs::copy(src, &dest)?;
         std::fs::remove_file(src)?;
+    }
+    Ok(())
+}
+
+/// Move `from` to the exact path `to` (renaming across directories), creating
+/// parent directories, with a copy+remove fallback across filesystems.
+pub(crate) fn move_file(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if std::fs::rename(from, to).is_err() {
+        std::fs::copy(from, to)?;
+        std::fs::remove_file(from)?;
     }
     Ok(())
 }
