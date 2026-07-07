@@ -1,6 +1,7 @@
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use std::collections::HashSet;
 use std::str::FromStr;
 
 use crate::models::Paper;
@@ -28,8 +29,8 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     sqlx::query(
         "INSERT INTO papers \
          (id, content_hash, rel_path, title, abstract, authors, venue, year, \
-          doi, arxiv_id, dblp_key, url, source, status, added_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          doi, arxiv_id, dblp_key, cite_key, url, source, status, added_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(&p.id)
     .bind(&p.content_hash)
@@ -42,6 +43,7 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     .bind(&p.doi)
     .bind(&p.arxiv_id)
     .bind(&p.dblp_key)
+    .bind(&p.cite_key)
     .bind(&p.url)
     .bind(&p.source)
     .bind(&p.status)
@@ -57,6 +59,37 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Paper>> {
         .fetch_optional(pool)
         .await?;
     Ok(p)
+}
+
+/// Cite keys already taken by other papers that share `base` as a prefix.
+/// `exclude_id` skips a paper's own key (used when re-filing during refresh).
+pub async fn cite_keys_with_base(
+    pool: &SqlitePool,
+    base: &str,
+    exclude_id: Option<&str>,
+) -> Result<HashSet<String>> {
+    let pattern = format!("{base}%");
+    let rows: Vec<(String,)> = match exclude_id {
+        Some(id) => {
+            sqlx::query_as(
+                "SELECT cite_key FROM papers \
+                 WHERE cite_key IS NOT NULL AND cite_key LIKE ? AND id <> ?",
+            )
+            .bind(&pattern)
+            .bind(id)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT cite_key FROM papers WHERE cite_key IS NOT NULL AND cite_key LIKE ?",
+            )
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(rows.into_iter().map(|(k,)| k).collect())
 }
 
 #[cfg(test)]
@@ -77,6 +110,7 @@ mod tests {
             doi: None,
             arxiv_id: None,
             dblp_key: None,
+            cite_key: None,
             url: None,
             source: None,
             status: PaperStatus::NeedsReview.as_str().to_string(),
@@ -107,5 +141,26 @@ mod tests {
         assert_eq!(got.content_hash, "abc");
         assert_eq!(got.title.as_deref(), Some("A Title"));
         assert_eq!(got.status, "needs_review");
+    }
+
+    #[tokio::test]
+    async fn cite_keys_with_base_returns_prefix_matches() {
+        let (_dir, pool) = temp_pool().await;
+
+        let mut a = sample_paper("01890000-0000-7000-8000-00000000000a", "ha");
+        a.cite_key = Some("he2016deep".into());
+        insert_paper(&pool, &a).await.unwrap();
+
+        let mut b = sample_paper("01890000-0000-7000-8000-00000000000b", "hb");
+        b.cite_key = Some("he2016deepa".into());
+        insert_paper(&pool, &b).await.unwrap();
+
+        let taken = cite_keys_with_base(&pool, "he2016deep", None).await.unwrap();
+        assert!(taken.contains("he2016deep"));
+        assert!(taken.contains("he2016deepa"));
+
+        let taken_excl = cite_keys_with_base(&pool, "he2016deep", Some(&a.id)).await.unwrap();
+        assert!(!taken_excl.contains("he2016deep"));
+        assert!(taken_excl.contains("he2016deepa"));
     }
 }

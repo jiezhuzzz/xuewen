@@ -38,6 +38,7 @@ pub struct Paper {
     pub doi: Option<String>,
     pub arxiv_id: Option<String>,
     pub dblp_key: Option<String>,
+    pub cite_key: Option<String>,
     pub url: Option<String>,
     pub source: Option<String>,
     pub status: String,
