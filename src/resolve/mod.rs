@@ -2,6 +2,7 @@ pub mod arxiv;
 pub mod crossref;
 pub mod dblp;
 
+use crate::matching;
 use crate::models::Identifier;
 use anyhow::Result;
 use regex::Regex;
@@ -64,6 +65,7 @@ pub struct Resolver {
     http: reqwest::Client,
     arxiv_base: String,
     crossref_base: String,
+    dblp_base: String,
 }
 
 impl Resolver {
@@ -90,15 +92,28 @@ impl Resolver {
             .user_agent(ua)
             .timeout(Duration::from_secs(20))
             .build()?;
-        Ok(Self { http, arxiv_base, crossref_base })
+        Ok(Self {
+            http,
+            arxiv_base,
+            crossref_base,
+            dblp_base: "https://dblp.org".to_string(),
+        })
     }
 
-    /// Route an identifier to its source and return the outcome.
-    pub async fn resolve(&self, ident: &Identifier) -> Resolution {
+    /// Override the DBLP base URL (used by tests to point at a mock server).
+    pub fn with_dblp_base(mut self, base: String) -> Self {
+        self.dblp_base = base;
+        self
+    }
+
+    /// Route an identifier to its source and return the outcome. For a PDF with
+    /// no identifier, `title_hint` (the heuristic title) drives a DBLP/Crossref
+    /// title search.
+    pub async fn resolve(&self, ident: &Identifier, title_hint: Option<&str>) -> Resolution {
         let md = match ident {
             Identifier::Arxiv(id) => self.try_arxiv(id).await,
             Identifier::Doi(doi) => self.try_crossref(doi).await,
-            Identifier::None => None,
+            Identifier::None => self.try_title_search(title_hint).await,
         };
         match md {
             Some(m) => Resolution::Resolved(m),
@@ -145,6 +160,63 @@ impl Resolver {
         let body = crossref::fetch(&self.http, &self.crossref_base, doi).await?;
         crossref::parse(&body)
     }
+
+    /// DBLP first, then Crossref bibliographic search; each filtered by the gate.
+    async fn try_title_search(&self, title: Option<&str>) -> Option<ResolvedMetadata> {
+        let title = title?;
+        if title.trim().is_empty() {
+            return None;
+        }
+        if let Some(md) = self.try_dblp(title).await {
+            return Some(md);
+        }
+        self.try_crossref_search(title).await
+    }
+
+    async fn try_dblp(&self, title: &str) -> Option<ResolvedMetadata> {
+        match self.fetch_parse_dblp(title).await {
+            Ok(cands) => best_match(title, cands),
+            Err(e) => {
+                tracing::warn!("dblp search failed for {title:?}: {e}");
+                None
+            }
+        }
+    }
+
+    async fn fetch_parse_dblp(&self, title: &str) -> Result<Vec<ResolvedMetadata>> {
+        let body = dblp::fetch(&self.http, &self.dblp_base, title).await?;
+        dblp::parse(&body)
+    }
+
+    async fn try_crossref_search(&self, title: &str) -> Option<ResolvedMetadata> {
+        match self.fetch_parse_crossref_search(title).await {
+            Ok(cands) => best_match(title, cands),
+            Err(e) => {
+                tracing::warn!("crossref search failed for {title:?}: {e}");
+                None
+            }
+        }
+    }
+
+    async fn fetch_parse_crossref_search(&self, title: &str) -> Result<Vec<ResolvedMetadata>> {
+        let body = crossref::search(&self.http, &self.crossref_base, title).await?;
+        crossref::parse_search(&body)
+    }
+}
+
+/// Pick the highest-similarity candidate whose title confidently matches `query`.
+fn best_match(query: &str, candidates: Vec<ResolvedMetadata>) -> Option<ResolvedMetadata> {
+    let mut best: Option<(f64, ResolvedMetadata)> = None;
+    for c in candidates {
+        let score = match c.title.as_deref() {
+            Some(t) => matching::title_similarity(query, t),
+            None => continue,
+        };
+        if score >= matching::MATCH_THRESHOLD && best.as_ref().map_or(true, |(bs, _)| score > *bs) {
+            best = Some((score, c));
+        }
+    }
+    best.map(|(_, c)| c)
 }
 
 #[cfg(test)]
