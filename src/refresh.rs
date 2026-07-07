@@ -94,8 +94,20 @@ async fn refresh_one(
                     resolution,
                 } = inputs;
                 let fields = resolve_fields(provisional_title, extracted, &ident, resolution);
-                fields.apply_to(paper);
-                outcome.reresolved = true;
+                // Never downgrade an already-resolved record: if this re-resolution
+                // came back unconfident (needs_review) but the paper is already
+                // resolved, keep the existing metadata rather than wiping it.
+                let would_downgrade = fields.status == PaperStatus::NeedsReview.as_str()
+                    && paper.status == PaperStatus::Resolved.as_str();
+                if would_downgrade {
+                    tracing::warn!(
+                        "re-resolve of {} came back unresolved; keeping existing resolved metadata",
+                        paper.id
+                    );
+                } else {
+                    fields.apply_to(paper);
+                    outcome.reresolved = true;
+                }
             }
             Err(e) => tracing::warn!(
                 "re-resolve failed for {}: {e}; keeping existing metadata",

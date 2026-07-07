@@ -122,3 +122,52 @@ async fn resolved_paper_refiles_without_reresolving() {
     assert!(library.join("he2016deep.pdf").exists());
     assert!(!old.exists());
 }
+
+#[tokio::test]
+async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    let hash = "keepmehash";
+    // A resolved paper at its cite-key path; the PDF has NO identifier, so a
+    // re-resolve attempt yields Unresolved (title search hits an empty mock → 404).
+    let f = library.join("he2016deep.pdf");
+    common::write_test_pdf(&f, &["No identifier in this text"]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let mut p = seed_paper(
+        "01890000-0000-7000-8000-0000000000f6",
+        hash,
+        "he2016deep.pdf",
+        "resolved",
+    );
+    p.title = Some("Deep Residual Learning for Image Recognition".into());
+    p.authors = Some(r#"["Kaiming He"]"#.into());
+    p.year = Some(2016);
+    p.cite_key = Some("he2016deep".into());
+    p.source = Some("crossref".into());
+    db::insert_paper(&pool, &p).await.unwrap();
+
+    // Reachable mock with no mounts → every lookup 404 → Unresolved.
+    let server = MockServer::start().await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+
+    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::All)
+        .await
+        .unwrap();
+    assert_eq!(summary.reresolved, 0); // downgrade prevented → not counted
+
+    let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
+    // Metadata preserved; still resolved; still at its cite-key path.
+    assert_eq!(got.status, "resolved");
+    assert_eq!(
+        got.title.as_deref(),
+        Some("Deep Residual Learning for Image Recognition")
+    );
+    assert_eq!(got.authors.as_deref(), Some(r#"["Kaiming He"]"#));
+    assert_eq!(got.year, Some(2016));
+    assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
+    assert_eq!(got.rel_path, "he2016deep.pdf");
+    assert!(f.exists());
+}
