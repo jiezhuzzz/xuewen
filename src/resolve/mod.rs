@@ -212,7 +212,7 @@ fn best_match(query: &str, candidates: Vec<ResolvedMetadata>) -> Option<Resolved
             Some(t) => matching::title_similarity(query, t),
             None => continue,
         };
-        if score >= matching::MATCH_THRESHOLD && best.as_ref().map_or(true, |(bs, _)| score > *bs) {
+        if score >= matching::MATCH_THRESHOLD && best.as_ref().is_none_or(|(bs, _)| score > *bs) {
             best = Some((score, c));
         }
     }

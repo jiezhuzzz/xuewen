@@ -151,6 +151,34 @@ async fn falls_back_to_crossref_search_when_dblp_empty() {
 }
 
 #[tokio::test]
+async fn dblp_error_falls_back_to_crossref() {
+    let server = MockServer::start().await;
+    // DBLP returns a server error...
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    // ...Crossref bibliographic search then succeeds.
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .and(query_param("query.bibliographic", KGAT_TITLE))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_SEARCH_FIXTURE))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri());
+    let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
+
+    match res {
+        Resolution::Resolved(md) => assert_eq!(md.source, "crossref"),
+        Resolution::Unresolved => panic!("expected Crossref fallback after DBLP 500"),
+    }
+}
+
+#[tokio::test]
 async fn low_similarity_title_is_unresolved() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
