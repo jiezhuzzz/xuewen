@@ -143,8 +143,17 @@ library copy in place.
 ## 8. Error handling
 
 - Missing library PDF for a record → warn, skip (don't fail the whole run).
-- Re-resolution failure → degrades to `needs_review` exactly as ingest does
-  (never aborts the run); the record simply stays `needs_review`.
+- **Refresh never downgrades a record.** A re-resolution that comes back
+  `Unresolved` (network/rate-limit/no confident match) does **not** overwrite an
+  already-`resolved` record: its existing metadata is kept and it stays
+  `resolved`. A `needs_review` record that fails to re-resolve simply stays
+  `needs_review`. Only a confident `Resolved` result (or re-resolving a
+  not-yet-`resolved` record) updates the stored metadata. A local failure to even
+  read the PDF is likewise non-destructive (warn, keep existing metadata).
+  Rationale: unlike ingest — where a fresh PDF degrading to `needs_review` loses
+  nothing — a failed re-resolve of an *already-resolved* paper would otherwise
+  wipe good metadata (a real risk under `--all`/`refresh <id>` during a resolver
+  outage or rate-limit). Resolution never aborts the run.
 - File move failure during re-file → log, leave the record's `rel_path` unchanged
   (the DB stays consistent with disk).
 - `refresh` processes papers independently; one failure never aborts the pass.
