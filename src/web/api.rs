@@ -67,6 +67,22 @@ pub async fn delete_paper(State(app): State<AppState>, Path(id): Path<String>) -
     }
 }
 
+/// Import a PDF (stub — real implementation in the next task).
+pub async fn import_paper(State(app): State<AppState>) -> Response {
+    if app.ingest.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "import not configured"})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({"error": "not implemented"})),
+    )
+        .into_response()
+}
+
 pub async fn stats(State(app): State<AppState>) -> Response {
     match db::stats(&app.pool).await {
         Ok((total, resolved, needs_review)) => Json(Stats {

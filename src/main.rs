@@ -125,7 +125,13 @@ async fn main() -> Result<()> {
             );
         }
         Command::Serve { host, port } => {
-            web::serve(&host, port, pool, cfg.library_root.clone()).await?;
+            let ingest = std::sync::Arc::new(web::Ingest {
+                resolver,
+                grobid,
+                dirs,
+                staging_dir: cfg.inbox_dir.join("_uploads"),
+            });
+            web::serve(&host, port, pool, cfg.library_root.clone(), ingest).await?;
         }
         Command::Delete { id, yes } => {
             let paper = db::find_one(&pool, &id).await?;
