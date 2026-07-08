@@ -108,8 +108,9 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("upload.pdf");
-        let unique = &Uuid::now_v7().to_string()[..8];
-        let staged = ingest.staging_dir.join(format!("{unique}-{stem}"));
+        let staged = ingest
+            .staging_dir
+            .join(format!("{}-{stem}", Uuid::now_v7()));
         if let Err(e) = std::fs::create_dir_all(&ingest.staging_dir) {
             tracing::error!("import staging dir: {e}");
             return internal_error();
@@ -233,7 +234,7 @@ pub(super) fn bad_request(msg: &str) -> Response {
 /// Map a multipart read error to its proper status (e.g. 413 when the body
 /// exceeds the limit) with a JSON body.
 fn multipart_error(e: MultipartError) -> Response {
-    let status = e.into_response().status();
+    let status = e.status();
     (
         status,
         Json(serde_json::json!({
