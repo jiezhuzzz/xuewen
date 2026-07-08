@@ -11,16 +11,13 @@ use axum::routing::get;
 use axum::Router;
 use sqlx::SqlitePool;
 
-use crate::pipeline::Libraries;
-use crate::resolve::grobid::Grobid;
-use crate::resolve::Resolver;
+use crate::pipeline::IngestCtx;
 
 /// Everything the web import handler needs to run the ingest pipeline. Held
-/// behind an `Arc` in `AppState` because `Resolver`/`Grobid` are not `Clone`.
+/// behind an `Arc` in `AppState` because `IngestCtx` is not `Clone` (its
+/// `Resolver`/`Grobid` are not).
 pub struct Ingest {
-    pub resolver: Resolver,
-    pub grobid: Option<Grobid>,
-    pub dirs: Libraries,
+    pub ctx: IngestCtx,
     /// Where uploaded bytes are written before ingest (`inbox_dir/_uploads`).
     pub staging_dir: PathBuf,
 }
@@ -88,4 +85,32 @@ pub async fn serve(
     tracing::info!("xuewen serving on http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Whether `host` is a loopback bind (safe to serve without auth). Non-IP
+/// hostnames other than "localhost" are conservatively treated as remote.
+pub fn is_loopback_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_host;
+
+    #[test]
+    fn classifies_loopback_hosts() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.1.2.3"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("LOCALHOST"));
+        assert!(!is_loopback_host("0.0.0.0"));
+        assert!(!is_loopback_host("192.168.1.10"));
+        assert!(!is_loopback_host("example.com"));
+    }
 }

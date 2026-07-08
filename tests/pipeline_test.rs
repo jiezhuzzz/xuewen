@@ -3,7 +3,8 @@ mod common;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
-use xuewen::pipeline::{ingest_file, Libraries, Outcome};
+use xuewen::models::{Authors, PaperMeta, PaperStatus};
+use xuewen::pipeline::{IngestCtx, Libraries, Outcome};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
 
@@ -32,24 +33,30 @@ async fn ingests_pdf_and_dedups() {
     let pool = db::connect(&url).await.unwrap();
     let mock = MockServer::start().await;
     let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
     // First ingest: stored, filed, moved.
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.title.as_deref(), Some("Attention Is All You Need"));
-    assert_eq!(paper.doi.as_deref(), Some("10.1145/3292500.3330701"));
-    assert_eq!(paper.status, "needs_review");
+    assert_eq!(
+        paper.meta.title.as_deref(),
+        Some("Attention Is All You Need")
+    );
+    assert_eq!(paper.meta.doi.as_deref(), Some("10.1145/3292500.3330701"));
+    assert_eq!(paper.meta.status, PaperStatus::NeedsReview);
 
     // File was copied into the library and the original moved to _processed.
     assert!(library
@@ -61,14 +68,12 @@ async fn ingests_pdf_and_dedups() {
 
     // Re-ingest identical content (from processed copy) -> Duplicate.
     let again = processed.join("paper.pdf");
-    let out2 = ingest_file(&pool, &dirs, &resolver, None, &again)
-        .await
-        .unwrap();
+    let out2 = ctx.ingest_file(&again).await.unwrap();
     assert_eq!(out2, Outcome::Duplicate);
 }
 
 #[tokio::test]
-async fn same_doi_different_bytes_errors_without_orphan() {
+async fn same_doi_different_bytes_reports_same_work() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
@@ -84,34 +89,32 @@ async fn same_doi_different_bytes_errors_without_orphan() {
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
     let mock = MockServer::start().await;
-    let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver: Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap(),
+        grobid: None,
     };
 
-    // First ingests fine.
-    let out = ingest_file(&pool, &dirs, &resolver, None, &a)
-        .await
-        .unwrap();
-    assert!(matches!(out, Outcome::Ingested(_)));
+    let id_a = match ctx.ingest_file(&a).await.unwrap() {
+        Outcome::Ingested(id) => id,
+        other => panic!("expected Ingested, got {other:?}"),
+    };
 
-    // Second: same DOI, different bytes. Content-hash dedup passes, then the
-    // doi UNIQUE constraint rejects it -> Err, and NO orphan file remains.
-    let res = ingest_file(&pool, &dirs, &resolver, None, &b).await;
-    assert!(
-        res.is_err(),
-        "expected a UNIQUE-constraint error on duplicate DOI"
+    // Same DOI, different bytes → reported as the same work; file archived.
+    let out = ctx.ingest_file(&b).await.unwrap();
+    assert_eq!(out, Outcome::SameWork(id_a));
+    assert_eq!(
+        std::fs::read_dir(library.join("_unsorted"))
+            .unwrap()
+            .count(),
+        1
     );
-
-    // Library holds exactly one PDF (paper A); paper B's copy was cleaned up.
-    let count = std::fs::read_dir(library.join("_unsorted"))
-        .unwrap()
-        .count();
-    assert_eq!(count, 1, "library should contain only paper A, no orphan");
-
-    // b.pdf was not moved (ingest errored before the move step).
-    assert!(b.exists());
+    assert!(!b.exists());
+    assert!(processed.join("b.pdf").exists());
 }
 
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
@@ -142,29 +145,32 @@ async fn ingest_with_doi_resolves_via_crossref() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.status, "resolved");
-    assert_eq!(paper.source.as_deref(), Some("crossref"));
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("crossref"));
     assert_eq!(
-        paper.title.as_deref(),
+        paper.meta.title.as_deref(),
         Some("KGAT: Knowledge Graph Attention Network for Recommendation")
     );
-    assert_eq!(paper.doi.as_deref(), Some(doi));
-    assert_eq!(paper.year, Some(2019));
-    assert!(paper.authors.as_deref().unwrap().contains("Xiang Wang"));
+    assert_eq!(paper.meta.doi.as_deref(), Some(doi));
+    assert_eq!(paper.meta.year, Some(2019));
+    assert!(paper.meta.authors.0.iter().any(|a| a == "Xiang Wang"));
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgat"));
     assert!(library.join("wang2019kgat.pdf").exists());
 }
@@ -194,25 +200,31 @@ async fn ingest_with_arxiv_resolves_via_api() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.status, "resolved");
-    assert_eq!(paper.source.as_deref(), Some("arxiv"));
-    assert_eq!(paper.title.as_deref(), Some("Attention Is All You Need"));
-    assert_eq!(paper.arxiv_id.as_deref(), Some(arxiv_id));
-    assert_eq!(paper.year, Some(2017));
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("arxiv"));
+    assert_eq!(
+        paper.meta.title.as_deref(),
+        Some("Attention Is All You Need")
+    );
+    assert_eq!(paper.meta.arxiv_id.as_deref(), Some(arxiv_id));
+    assert_eq!(paper.meta.year, Some(2017));
     assert_eq!(paper.cite_key.as_deref(), Some("vaswani2017attention"));
     assert!(library.join("vaswani2017attention.pdf").exists());
 }
@@ -247,26 +259,29 @@ async fn ingest_without_identifier_resolves_via_dblp() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.status, "resolved");
-    assert_eq!(paper.source.as_deref(), Some("dblp"));
-    assert_eq!(paper.dblp_key.as_deref(), Some("conf/kdd/WangHCLC19"));
-    assert_eq!(paper.venue.as_deref(), Some("KDD"));
-    assert_eq!(paper.year, Some(2019));
-    assert!(paper.doi.as_deref().is_some());
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("dblp"));
+    assert_eq!(paper.meta.dblp_key.as_deref(), Some("conf/kdd/WangHCLC19"));
+    assert_eq!(paper.meta.venue.as_deref(), Some("KDD"));
+    assert_eq!(paper.meta.year, Some(2019));
+    assert!(paper.meta.doi.as_deref().is_some());
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgat"));
     assert!(library.join("wang2019kgat.pdf").exists());
 }
@@ -304,24 +319,28 @@ async fn grobid_title_drives_dblp_resolution() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: Some(grobid),
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, Some(&grobid), &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
     // DBLP matched (its title fuzzily matches the GROBID title) -> resolved via dblp.
-    assert_eq!(paper.status, "resolved");
-    assert_eq!(paper.source.as_deref(), Some("dblp"));
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("dblp"));
     // DBLP has no abstract; the GROBID abstract is backfilled.
     assert!(paper
+        .meta
         .abstract_text
         .as_deref()
         .unwrap()
@@ -355,26 +374,29 @@ async fn grobid_enriches_needs_review_when_unmatched() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: Some(grobid),
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, Some(&grobid), &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.status, "needs_review");
-    assert_eq!(paper.source.as_deref(), Some("grobid"));
+    assert_eq!(paper.meta.status, PaperStatus::NeedsReview);
+    assert_eq!(paper.meta.source.as_deref(), Some("grobid"));
     assert_eq!(
-        paper.title.as_deref(),
+        paper.meta.title.as_deref(),
         Some("BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding")
     );
-    assert!(paper.authors.as_deref().unwrap().contains("Jacob Devlin"));
+    assert!(paper.meta.authors.0.iter().any(|a| a == "Jacob Devlin"));
 }
 
 #[tokio::test]
@@ -405,33 +427,38 @@ async fn colliding_cite_key_gets_letter_suffix() {
         id: "01890000-0000-7000-8000-0000000000ff".to_string(),
         content_hash: "seedhash".to_string(),
         rel_path: "wang2019kgat.pdf".to_string(),
-        title: Some("Seed".to_string()),
-        abstract_text: None,
-        authors: None,
-        venue: None,
-        year: Some(2019),
-        doi: None,
-        arxiv_id: None,
-        dblp_key: None,
         cite_key: Some("wang2019kgat".to_string()),
-        url: None,
-        source: Some("crossref".to_string()),
-        status: "resolved".to_string(),
         added_at: "2026-07-07T00:00:00Z".to_string(),
         deleted_at: None,
+        meta: PaperMeta {
+            title: Some("Seed".to_string()),
+            abstract_text: None,
+            authors: Authors::default(),
+            venue: None,
+            year: Some(2019),
+            doi: None,
+            arxiv_id: None,
+            dblp_key: None,
+            url: None,
+            source: Some("crossref".to_string()),
+            status: PaperStatus::Resolved,
+        },
     };
     db::insert_paper(&pool, &seed).await.unwrap();
 
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgata"));
@@ -439,7 +466,7 @@ async fn colliding_cite_key_gets_letter_suffix() {
 }
 
 #[tokio::test]
-async fn reingesting_a_trashed_paper_is_still_duplicate() {
+async fn reingesting_a_trashed_paper_reports_in_trash() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
@@ -459,24 +486,62 @@ async fn reingesting_a_trashed_paper_is_still_duplicate() {
     let pool = db::connect(&url).await.unwrap();
     let mock = MockServer::start().await;
     let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
     db::soft_delete(&pool, &id).await.unwrap();
 
-    // Dedup is by content_hash, and the trashed row still holds it → Duplicate.
+    // Dedup is by content_hash, and the trashed row still holds it → InTrash.
     let again = processed.join("paper.pdf");
-    let out2 = ingest_file(&pool, &dirs, &resolver, None, &again)
-        .await
-        .unwrap();
-    assert_eq!(out2, Outcome::Duplicate);
+    let out2 = ctx.ingest_file(&again).await.unwrap();
+    assert_eq!(out2, Outcome::InTrash(id));
+}
+
+#[tokio::test]
+async fn same_doi_of_trashed_paper_reports_in_trash() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    let processed = inbox.join("_processed");
+    std::fs::create_dir_all(&inbox).unwrap();
+
+    let doi_line = "https://doi.org/10.1000/xyz123";
+    let a = inbox.join("a.pdf");
+    let b = inbox.join("b.pdf");
+    common::write_test_pdf(&a, &["Paper A Title", doi_line]);
+    common::write_test_pdf(&b, &["Paper B Different Title", doi_line]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let mock = MockServer::start().await;
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver: Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap(),
+        grobid: None,
+    };
+
+    let id_a = match ctx.ingest_file(&a).await.unwrap() {
+        Outcome::Ingested(id) => id,
+        other => panic!("expected Ingested, got {other:?}"),
+    };
+    db::soft_delete(&pool, &id_a).await.unwrap();
+
+    let out = ctx.ingest_file(&b).await.unwrap();
+    assert_eq!(out, Outcome::InTrash(id_a));
 }

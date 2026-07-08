@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use xuewen::config::Config;
 use xuewen::db;
-use xuewen::pipeline::{ingest_file, Libraries, Outcome};
+use xuewen::pipeline::{IngestCtx, Libraries, Outcome};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::grobid::Grobid;
+use xuewen::resolve::http::RetryPolicy;
 use xuewen::resolve::Resolver;
 use xuewen::web;
 
@@ -48,7 +49,7 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
-    /// Serve the read-only web UI over HTTP (localhost).
+    /// Serve the web UI over HTTP (loopback by default).
     Serve {
         /// Address to bind.
         #[arg(long, default_value = "127.0.0.1")]
@@ -56,6 +57,9 @@ enum Command {
         /// Port to bind.
         #[arg(long, default_value_t = 8080)]
         port: u16,
+        /// Allow binding a non-loopback address (mutating endpoints have no auth).
+        #[arg(long)]
+        allow_remote: bool,
     },
     /// Soft-delete a paper: hide it from the library (recoverable).
     Delete {
@@ -64,6 +68,11 @@ enum Command {
         /// Skip the confirmation prompt.
         #[arg(long)]
         yes: bool,
+    },
+    /// Restore a trashed paper back into the library.
+    Restore {
+        /// Paper id (exact or unique prefix).
+        id: String,
     },
     /// Permanently remove trashed papers and their PDF files.
     Purge {
@@ -88,22 +97,38 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load(&cli.config)?;
     let pool = db::connect(&cfg.database_url).await?;
-    let resolver = Resolver::new(cfg.contact_email.as_deref())?;
+    // Interactive serving answers uploads synchronously; keep retries short there.
+    let retry = match &cli.command {
+        Command::Serve { .. } => RetryPolicy::interactive(),
+        _ => RetryPolicy::production(),
+    };
+    let resolver = Resolver::new_with_policy(cfg.contact_email.as_deref(), retry)?;
     let grobid = cfg.grobid_url.as_deref().map(Grobid::new).transpose()?;
     let dirs = Libraries {
         library_root: cfg.library_root.clone(),
         processed_dir: cfg.inbox_dir.join("_processed"),
     };
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs,
+        resolver,
+        grobid,
+    };
 
     match cli.command {
-        Command::Ingest { path } => {
-            match ingest_file(&pool, &dirs, &resolver, grobid.as_ref(), &path).await? {
-                Outcome::Ingested(id) => println!("ingested {id}"),
-                Outcome::Duplicate => println!("duplicate, skipped"),
+        Command::Ingest { path } => match ctx.ingest_file(&path).await? {
+            Outcome::Ingested(id) => println!("ingested {id}"),
+            Outcome::Duplicate => println!("duplicate, skipped"),
+            Outcome::SameWork(id) => {
+                match db::get_by_id(&pool, &id).await?.and_then(|p| p.cite_key) {
+                    Some(key) => println!("already in library as {key} ({id})"),
+                    None => println!("already in library ({id})"),
+                }
             }
-        }
+            Outcome::InTrash(id) => println!("in trash — run: xuewen restore {id}"),
+        },
         Command::Watch => {
-            xuewen::watcher::run(&pool, &dirs, &resolver, grobid.as_ref(), &cfg.inbox_dir).await?;
+            xuewen::watcher::run(&ctx, &cfg.inbox_dir).await?;
         }
         Command::Refresh { id, all } => {
             let target = match (id, all) {
@@ -111,24 +136,32 @@ async fn main() -> Result<()> {
                 (None, true) => RefreshTarget::All,
                 (None, false) => RefreshTarget::NeedsReview,
             };
-            let summary = refresh::run(
-                &pool,
-                &dirs.library_root,
-                &resolver,
-                grobid.as_ref(),
-                target,
-            )
-            .await?;
+            let summary = refresh::run(&ctx, target).await?;
             println!(
                 "refresh: {} processed, {} re-resolved, {} re-filed",
                 summary.processed, summary.reresolved, summary.refiled
             );
         }
-        Command::Serve { host, port } => {
+        Command::Serve {
+            host,
+            port,
+            allow_remote,
+        } => {
+            if !web::is_loopback_host(&host) {
+                if allow_remote {
+                    eprintln!(
+                        "warning: binding {host}: the web UI has mutating endpoints and no auth — \
+                         anyone who can reach this address can import and delete papers"
+                    );
+                } else {
+                    anyhow::bail!(
+                        "refusing to bind non-loopback address {host}: the web UI has no auth; \
+                         pass --allow-remote to override"
+                    );
+                }
+            }
             let ingest = std::sync::Arc::new(web::Ingest {
-                resolver,
-                grobid,
-                dirs,
+                ctx,
                 staging_dir: cfg.inbox_dir.join("_uploads"),
             });
             web::serve(&host, port, pool, cfg.library_root.clone(), ingest).await?;
@@ -138,7 +171,7 @@ async fn main() -> Result<()> {
             if paper.deleted_at.is_some() {
                 println!("already deleted: {}", paper.id);
             } else {
-                let title = paper.title.as_deref().unwrap_or("(untitled)");
+                let title = paper.meta.title.as_deref().unwrap_or("(untitled)");
                 if yes || confirm(&format!("Delete {title:?}?"))? {
                     db::soft_delete(&pool, &paper.id).await?;
                     println!("deleted {}", paper.id);
@@ -146,6 +179,17 @@ async fn main() -> Result<()> {
                     println!("cancelled");
                 }
             }
+        }
+        Command::Restore { id } => {
+            let paper = db::find_one(&pool, &id).await?;
+            // Unlike delete's soft "already deleted" no-op, a restore of an active
+            // paper is a hard error: it usually means a mistyped id prefix, and
+            // silently "succeeding" would hide that.
+            if paper.deleted_at.is_none() {
+                anyhow::bail!("{} is not in the trash", paper.id);
+            }
+            db::restore(&pool, &paper.id).await?;
+            println!("restored {}", paper.id);
         }
         Command::Purge { id, all, yes } => {
             let targets = match (id, all) {

@@ -20,9 +20,12 @@
   }
 
   const summary = $derived.by(() => {
-    const c = { ingested: 0, duplicate: 0, failed: 0 };
+    const c = { ingested: 0, skipped: 0, failed: 0 };
     for (const i of importState.items) {
-      if (i.status in c) c[i.status as keyof typeof c]++;
+      if (i.status === 'ingested') c.ingested++;
+      else if (i.status === 'duplicate' || i.status === 'same-work' || i.status === 'in-trash')
+        c.skipped++;
+      else if (i.status === 'failed') c.failed++;
     }
     return c;
   });
@@ -81,7 +84,7 @@
                 <Loader size={14} class="shrink-0 animate-spin text-indigo-500" />
               {:else if item.status === 'ingested'}
                 <Check size={14} class="shrink-0 text-emerald-500" />
-              {:else if item.status === 'duplicate'}
+              {:else if item.status === 'duplicate' || item.status === 'same-work' || item.status === 'in-trash'}
                 <Copy size={14} class="shrink-0 text-slate-400" />
               {:else if item.status === 'failed'}
                 <CircleAlert size={14} class="shrink-0 text-red-500" />
@@ -102,6 +105,8 @@
                   title={item.message}
                 >
                   {#if item.status === 'duplicate'}duplicate
+                  {:else if item.status === 'same-work'}already in library
+                  {:else if item.status === 'in-trash'}in trash — run: xuewen restore {item.message}
                   {:else if item.status === 'failed'}{item.message}
                   {:else if item.status === 'importing'}importing…
                   {:else}queued{/if}
@@ -115,7 +120,7 @@
 
     {#if importState.items.length}
       <div class="border-t border-slate-200 p-3 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
-        {summary.ingested} ingested, {summary.duplicate} duplicate, {summary.failed} failed
+        {summary.ingested} ingested, {summary.skipped} skipped, {summary.failed} failed
       </div>
     {/if}
   </div>

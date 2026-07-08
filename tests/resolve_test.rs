@@ -2,7 +2,7 @@ use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use xuewen::models::Identifier;
-use xuewen::resolve::{Resolution, Resolver};
+use xuewen::resolve::Resolver;
 
 const ARXIV_FIXTURE: &str = include_str!("fixtures/arxiv_attention.xml");
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
@@ -23,7 +23,7 @@ async fn resolves_doi_via_crossref() {
         .await;
 
     match res {
-        Resolution::Resolved(md) => {
+        Some(md) => {
             assert_eq!(md.source, "crossref");
             assert_eq!(
                 md.title.as_deref(),
@@ -32,7 +32,7 @@ async fn resolves_doi_via_crossref() {
             assert_eq!(md.doi.as_deref(), Some(doi));
             assert_eq!(md.year, Some(2019));
         }
-        Resolution::Unresolved => panic!("expected Resolved"),
+        None => panic!("expected Resolved"),
     }
 }
 
@@ -53,12 +53,12 @@ async fn resolves_arxiv_via_api() {
         .await;
 
     match res {
-        Resolution::Resolved(md) => {
+        Some(md) => {
             assert_eq!(md.source, "arxiv");
             assert_eq!(md.title.as_deref(), Some("Attention Is All You Need"));
             assert_eq!(md.arxiv_id.as_deref(), Some(id)); // stamped by the resolver
         }
-        Resolution::Unresolved => panic!("expected Resolved"),
+        None => panic!("expected Resolved"),
     }
 }
 
@@ -70,16 +70,13 @@ async fn http_error_degrades_to_unresolved() {
     let res = resolver
         .resolve(&Identifier::Doi("10.9999/nope".to_string()), None)
         .await;
-    assert_eq!(res, Resolution::Unresolved);
+    assert_eq!(res, None);
 }
 
 #[tokio::test]
 async fn none_identifier_is_unresolved() {
     let resolver = Resolver::new(None).unwrap();
-    assert_eq!(
-        resolver.resolve(&Identifier::None, None).await,
-        Resolution::Unresolved
-    );
+    assert_eq!(resolver.resolve(&Identifier::None, None).await, None);
 }
 
 #[tokio::test]
@@ -97,7 +94,7 @@ async fn parse_error_degrades_to_unresolved() {
     let res = resolver
         .resolve(&Identifier::Doi(doi.to_string()), None)
         .await;
-    assert_eq!(res, Resolution::Unresolved);
+    assert_eq!(res, None);
 }
 
 const DBLP_FIXTURE: &str = include_str!("fixtures/dblp_kgat.json");
@@ -120,13 +117,13 @@ async fn resolves_title_via_dblp() {
     let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
 
     match res {
-        Resolution::Resolved(md) => {
+        Some(md) => {
             assert_eq!(md.source, "dblp");
             assert_eq!(md.dblp_key.as_deref(), Some("conf/kdd/WangHCLC19"));
             assert_eq!(md.venue.as_deref(), Some("KDD"));
             assert_eq!(md.year, Some(2019));
         }
-        Resolution::Unresolved => panic!("expected Resolved via DBLP"),
+        None => panic!("expected Resolved via DBLP"),
     }
 }
 
@@ -153,11 +150,11 @@ async fn falls_back_to_crossref_search_when_dblp_empty() {
     let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
 
     match res {
-        Resolution::Resolved(md) => {
+        Some(md) => {
             assert_eq!(md.source, "crossref");
             assert_eq!(md.doi.as_deref(), Some("10.1145/3292500.3330701"));
         }
-        Resolution::Unresolved => panic!("expected Resolved via Crossref fallback"),
+        None => panic!("expected Resolved via Crossref fallback"),
     }
 }
 
@@ -184,8 +181,8 @@ async fn dblp_error_falls_back_to_crossref() {
     let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
 
     match res {
-        Resolution::Resolved(md) => assert_eq!(md.source, "crossref"),
-        Resolution::Unresolved => panic!("expected Crossref fallback after DBLP 500"),
+        Some(md) => assert_eq!(md.source, "crossref"),
+        None => panic!("expected Crossref fallback after DBLP 500"),
     }
 }
 
@@ -208,7 +205,7 @@ async fn low_similarity_title_is_unresolved() {
             Some("An Entirely Unrelated Paper Title About Frogs"),
         )
         .await;
-    assert_eq!(res, Resolution::Unresolved);
+    assert_eq!(res, None);
 }
 
 #[tokio::test]
@@ -233,5 +230,5 @@ async fn resolves_after_transient_429() {
         .resolve(&Identifier::Doi(doi.to_string()), None)
         .await;
 
-    assert!(matches!(res, Resolution::Resolved(_)));
+    assert!(res.is_some());
 }

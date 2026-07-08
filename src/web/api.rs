@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::dto::{PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
-use crate::pipeline::{ingest_file, Outcome};
+use crate::pipeline::Outcome;
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -111,29 +111,24 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
         let staged = ingest
             .staging_dir
             .join(format!("{}-{stem}", Uuid::now_v7()));
-        if let Err(e) = std::fs::create_dir_all(&ingest.staging_dir) {
+        if let Err(e) = tokio::fs::create_dir_all(&ingest.staging_dir).await {
             tracing::error!("import staging dir: {e}");
             return internal_error();
         }
-        if let Err(e) = std::fs::write(&staged, data.as_ref()) {
+        if let Err(e) = tokio::fs::write(&staged, data.as_ref()).await {
             tracing::error!("import stage write: {e}");
             return internal_error();
         }
 
-        return match ingest_file(
-            &app.pool,
-            &ingest.dirs,
-            &ingest.resolver,
-            ingest.grobid.as_ref(),
-            &staged,
-        )
-        .await
-        {
+        return match ingest.ctx.ingest_file(&staged).await {
             Ok(Outcome::Ingested(id)) => {
                 // Look up the fresh row so the UI can show title + resolved/needs_review.
-                let (title, status) = match db::get_by_id(&app.pool, &id).await {
-                    Ok(Some(p)) => (serde_json::json!(p.title), p.status),
-                    _ => (serde_json::Value::Null, "needs_review".to_string()),
+                let (title, status) = match db::get_by_id(&ingest.ctx.pool, &id).await {
+                    Ok(Some(p)) => (serde_json::json!(p.meta.title), p.meta.status),
+                    _ => (
+                        serde_json::Value::Null,
+                        crate::models::PaperStatus::NeedsReview,
+                    ),
                 };
                 Json(serde_json::json!({
                     "outcome": "ingested",
@@ -146,10 +141,16 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             Ok(Outcome::Duplicate) => {
                 Json(serde_json::json!({"outcome": "duplicate"})).into_response()
             }
+            Ok(Outcome::SameWork(id)) => {
+                Json(serde_json::json!({"outcome": "same_work", "id": id})).into_response()
+            }
+            Ok(Outcome::InTrash(id)) => {
+                Json(serde_json::json!({"outcome": "in_trash", "id": id})).into_response()
+            }
             Err(e) => {
                 tracing::error!("import ingest: {e}");
                 // On error the pipeline did not move the original — clean it up.
-                let _ = std::fs::remove_file(&staged);
+                let _ = tokio::fs::remove_file(&staged).await;
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "import failed"})),
@@ -188,12 +189,17 @@ pub async fn pdf(State(app): State<AppState>, Path(id): Path<String>, req: Reque
     };
     let path = app.library_root.join(&paper.rel_path);
     // Defense in depth: the canonical file must live under the library root.
-    let under_root = match (
-        std::fs::canonicalize(&path),
-        std::fs::canonicalize(&app.library_root),
-    ) {
-        (Ok(file), Ok(root)) => file.starts_with(&root),
-        _ => false, // missing file or unresolvable path
+    let under_root = {
+        let (p, root) = (path.clone(), app.library_root.clone());
+        tokio::task::spawn_blocking(move || {
+            match (std::fs::canonicalize(&p), std::fs::canonicalize(&root)) {
+                (Ok(file), Ok(root)) => file.starts_with(&root),
+                _ => false, // missing file or unresolvable path
+            }
+        })
+        .await
+        .inspect_err(|e| tracing::error!("canonicalize check panicked: {e}"))
+        .unwrap_or(false)
     };
     if !under_root {
         return not_found();

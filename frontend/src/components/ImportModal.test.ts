@@ -106,4 +106,15 @@ describe('enqueueFiles', () => {
     expect(importState.items[0].status).toBe('duplicate');
     expect(importState.items[0].message).toBeUndefined(); // no 'STALE' leak
   });
+
+  it('records same_work and in_trash outcomes', async () => {
+    stubFetch((name) =>
+      name === 'dup.pdf' ? { outcome: 'same_work', id: 'x1' } : { outcome: 'in_trash', id: 'x2' },
+    );
+
+    await enqueueFiles([pdf('dup.pdf'), pdf('trashed.pdf')]);
+
+    expect(importState.items.map((i) => i.status)).toEqual(['same-work', 'in-trash']);
+    expect(importState.items[1].message).toBe('x2');
+  });
 });

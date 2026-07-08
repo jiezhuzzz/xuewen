@@ -1,10 +1,6 @@
 use anyhow::{anyhow, Result};
 use std::time::Duration;
 
-/// A `Retry-After` value is honored but never allowed to stall ingest longer
-/// than this.
-const RETRY_AFTER_CAP: Duration = Duration::from_secs(30);
-
 /// How `HttpClient` retries transient HTTP failures.
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -14,6 +10,8 @@ pub struct RetryPolicy {
     pub base_delay: Duration,
     /// Upper bound on any single back-off sleep.
     pub max_delay: Duration,
+    /// Upper bound on honoring a server's Retry-After header.
+    pub retry_after_cap: Duration,
 }
 
 impl RetryPolicy {
@@ -23,6 +21,18 @@ impl RetryPolicy {
             max_attempts: 4,
             base_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(16),
+            retry_after_cap: Duration::from_secs(30),
+        }
+    }
+
+    /// Short budget for interactive use (web import): a single quick retry so a
+    /// synchronous upload response never stalls for minutes.
+    pub fn interactive() -> Self {
+        Self {
+            max_attempts: 2,
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(2),
+            retry_after_cap: Duration::from_secs(2),
         }
     }
 
@@ -32,6 +42,7 @@ impl RetryPolicy {
             max_attempts: 4,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_millis(5),
+            retry_after_cap: Duration::from_millis(5),
         }
     }
 }
@@ -98,7 +109,7 @@ impl HttpClient {
     /// exponential; both capped.
     fn delay_for(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
         match retry_after {
-            Some(d) => d.min(RETRY_AFTER_CAP),
+            Some(d) => d.min(self.retry.retry_after_cap),
             None => {
                 let shift = attempt.min(16); // guard the shift against overflow
                 self.retry
@@ -255,14 +266,23 @@ mod tests {
                 max_attempts: 4,
                 base_delay: Duration::from_secs(10),
                 max_delay: Duration::from_secs(1),
+                retry_after_cap: Duration::from_secs(30),
             },
         );
         // Exponential 10s * 2^3 = 80s, clamped to max_delay (1s).
         assert_eq!(http.delay_for(3, None), Duration::from_secs(1));
-        // Retry-After 120s clamped to the 30s RETRY_AFTER_CAP.
+        // Retry-After 120s clamped to the policy's 30s retry_after_cap.
         assert_eq!(
             http.delay_for(0, Some(Duration::from_secs(120))),
             Duration::from_secs(30)
+        );
+
+        // Under an interactive-like policy the cap is much tighter, so a
+        // single 429 can't eat the whole interactive budget.
+        let quick = HttpClient::new(reqwest::Client::new(), RetryPolicy::interactive());
+        assert_eq!(
+            quick.delay_for(0, Some(Duration::from_secs(120))),
+            Duration::from_secs(2)
         );
     }
 }

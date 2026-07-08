@@ -18,12 +18,58 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-pub async fn exists_by_hash(pool: &SqlitePool, content_hash: &str) -> Result<bool> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT id FROM papers WHERE content_hash = ?")
+/// The paper (active or trashed) whose stored bytes match `content_hash`.
+pub async fn find_by_hash(pool: &SqlitePool, content_hash: &str) -> Result<Option<Paper>> {
+    let p = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE content_hash = ?")
         .bind(content_hash)
         .fetch_optional(pool)
         .await?;
-    Ok(row.is_some())
+    Ok(p)
+}
+
+/// The paper (active or trashed) already holding `doi` or `arxiv_id`.
+/// A DOI match wins over an arXiv match when both exist.
+pub async fn find_by_identifier(
+    pool: &SqlitePool,
+    doi: Option<&str>,
+    arxiv_id: Option<&str>,
+) -> Result<Option<Paper>> {
+    if let Some(doi) = doi {
+        let hit = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE doi = ?")
+            .bind(doi)
+            .fetch_optional(pool)
+            .await?;
+        if hit.is_some() {
+            return Ok(hit);
+        }
+    }
+    if let Some(arxiv_id) = arxiv_id {
+        let hit = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE arxiv_id = ?")
+            .bind(arxiv_id)
+            .fetch_optional(pool)
+            .await?;
+        if hit.is_some() {
+            return Ok(hit);
+        }
+    }
+    Ok(None)
+}
+
+/// Un-trash a paper. Returns true if a row was actually restored.
+pub async fn restore(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let res =
+        sqlx::query("UPDATE papers SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Whether `e` (from a db call) is a UNIQUE-constraint violation.
+pub fn is_unique_violation(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<sqlx::Error>()
+        .and_then(|e| e.as_database_error())
+        .is_some_and(|d| d.kind() == sqlx::error::ErrorKind::UniqueViolation)
 }
 
 pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
@@ -36,18 +82,18 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     .bind(&p.id)
     .bind(&p.content_hash)
     .bind(&p.rel_path)
-    .bind(&p.title)
-    .bind(&p.abstract_text)
-    .bind(&p.authors)
-    .bind(&p.venue)
-    .bind(p.year)
-    .bind(&p.doi)
-    .bind(&p.arxiv_id)
-    .bind(&p.dblp_key)
+    .bind(&p.meta.title)
+    .bind(&p.meta.abstract_text)
+    .bind(&p.meta.authors)
+    .bind(&p.meta.venue)
+    .bind(p.meta.year)
+    .bind(&p.meta.doi)
+    .bind(&p.meta.arxiv_id)
+    .bind(&p.meta.dblp_key)
     .bind(&p.cite_key)
-    .bind(&p.url)
-    .bind(&p.source)
-    .bind(&p.status)
+    .bind(&p.meta.url)
+    .bind(&p.meta.source)
+    .bind(p.meta.status)
     .bind(&p.added_at)
     .bind(&p.deleted_at)
     .execute(pool)
@@ -104,18 +150,18 @@ pub async fn update_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
          WHERE id = ?",
     )
     .bind(&p.rel_path)
-    .bind(&p.title)
-    .bind(&p.abstract_text)
-    .bind(&p.authors)
-    .bind(&p.venue)
-    .bind(p.year)
-    .bind(&p.doi)
-    .bind(&p.arxiv_id)
-    .bind(&p.dblp_key)
+    .bind(&p.meta.title)
+    .bind(&p.meta.abstract_text)
+    .bind(&p.meta.authors)
+    .bind(&p.meta.venue)
+    .bind(p.meta.year)
+    .bind(&p.meta.doi)
+    .bind(&p.meta.arxiv_id)
+    .bind(&p.meta.dblp_key)
     .bind(&p.cite_key)
-    .bind(&p.url)
-    .bind(&p.source)
-    .bind(&p.status)
+    .bind(&p.meta.url)
+    .bind(&p.meta.source)
+    .bind(p.meta.status)
     .bind(&p.deleted_at)
     .bind(&p.id)
     .execute(pool)
@@ -187,6 +233,13 @@ pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
     }
 }
 
+/// Escape `\`, `%`, `_` in a user search term for `LIKE … ESCAPE '\'`.
+fn escape_like(term: &str) -> String {
+    term.replace('\\', r"\\")
+        .replace('%', r"\%")
+        .replace('_', r"\_")
+}
+
 /// List papers with optional case-insensitive search (`q` over title+authors),
 /// optional status filter, and a whitelisted sort. Unknown status/sort values
 /// are ignored (never an error).
@@ -199,12 +252,12 @@ pub async fn list_papers(
     let mut qb: QueryBuilder<sqlx::Sqlite> =
         QueryBuilder::new("SELECT * FROM papers WHERE deleted_at IS NULL");
     if let Some(term) = q.map(str::trim).filter(|s| !s.is_empty()) {
-        let like = format!("%{term}%");
+        let like = format!("%{}%", escape_like(term));
         qb.push(" AND (title LIKE ")
             .push_bind(like.clone())
-            .push(" OR authors LIKE ")
+            .push(" ESCAPE '\\' OR authors LIKE ")
             .push_bind(like)
-            .push(")");
+            .push(" ESCAPE '\\')");
     }
     if let Some(st) = status.filter(|s| matches!(*s, "resolved" | "needs_review")) {
         qb.push(" AND status = ").push_bind(st.to_string());
@@ -214,7 +267,8 @@ pub async fn list_papers(
         Some("year_asc") => "year ASC NULLS LAST",
         Some("added_desc") => "added_at DESC",
         Some("title") => "title COLLATE NOCASE ASC",
-        _ => "year DESC",
+        Some("year_desc") => "year DESC",
+        _ => "year DESC", // unknown values fall back to the default
     };
     qb.push(" ORDER BY ").push(order);
     let papers = qb.build_query_as::<Paper>().fetch_all(pool).await?;
@@ -237,27 +291,29 @@ pub async fn stats(pool: &SqlitePool) -> Result<(i64, i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::PaperStatus;
+    use crate::models::{Authors, PaperMeta, PaperStatus};
 
     fn sample_paper(id: &str, hash: &str) -> Paper {
         Paper {
             id: id.to_string(),
             content_hash: hash.to_string(),
             rel_path: format!("{hash}.pdf"),
-            title: Some("A Title".into()),
-            abstract_text: None,
-            authors: None,
-            venue: None,
-            year: None,
-            doi: None,
-            arxiv_id: None,
-            dblp_key: None,
             cite_key: None,
-            url: None,
-            source: None,
-            status: PaperStatus::NeedsReview.as_str().to_string(),
             added_at: "2026-07-06T00:00:00Z".to_string(),
             deleted_at: None,
+            meta: PaperMeta {
+                title: Some("A Title".into()),
+                abstract_text: None,
+                authors: Authors::default(),
+                venue: None,
+                year: None,
+                doi: None,
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
+                status: PaperStatus::NeedsReview,
+            },
         }
     }
 
@@ -269,21 +325,29 @@ mod tests {
         (dir, pool)
     }
 
+    #[test]
+    fn escape_like_escapes_backslash_percent_and_underscore() {
+        assert_eq!(escape_like("100%"), r"100\%");
+        assert_eq!(escape_like("a_b"), r"a\_b");
+        assert_eq!(escape_like(r"back\slash"), r"back\\slash");
+        assert_eq!(escape_like("%_\\"), r"\%\_\\");
+    }
+
     #[tokio::test]
     async fn insert_then_fetch_and_dedup() {
         let (_dir, pool) = temp_pool().await;
 
-        assert!(!exists_by_hash(&pool, "abc").await.unwrap());
+        assert!(find_by_hash(&pool, "abc").await.unwrap().is_none());
 
         let p = sample_paper("01890000-0000-7000-8000-000000000000", "abc");
         insert_paper(&pool, &p).await.unwrap();
 
-        assert!(exists_by_hash(&pool, "abc").await.unwrap());
+        assert!(find_by_hash(&pool, "abc").await.unwrap().is_some());
 
         let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
         assert_eq!(got.content_hash, "abc");
-        assert_eq!(got.title.as_deref(), Some("A Title"));
-        assert_eq!(got.status, "needs_review");
+        assert_eq!(got.meta.title.as_deref(), Some("A Title"));
+        assert_eq!(got.meta.status, PaperStatus::NeedsReview);
     }
 
     #[tokio::test]
@@ -318,35 +382,35 @@ mod tests {
         insert_paper(&pool, &p).await.unwrap();
 
         // Mutate every updatable column to catch a dropped SET clause.
-        p.title = Some("New Title".into());
-        p.abstract_text = Some("New abstract".into());
-        p.authors = Some(r#"["Ada Lovelace"]"#.into());
-        p.venue = Some("KDD".into());
-        p.year = Some(2019);
-        p.doi = Some("10.1/new".into());
-        p.arxiv_id = Some("2001.00001".into());
-        p.dblp_key = Some("conf/kdd/X".into());
+        p.meta.title = Some("New Title".into());
+        p.meta.abstract_text = Some("New abstract".into());
+        p.meta.authors = Authors(vec!["Ada Lovelace".into()]);
+        p.meta.venue = Some("KDD".into());
+        p.meta.year = Some(2019);
+        p.meta.doi = Some("10.1/new".into());
+        p.meta.arxiv_id = Some("2001.00001".into());
+        p.meta.dblp_key = Some("conf/kdd/X".into());
         p.rel_path = "he2016deep.pdf".into();
         p.cite_key = Some("he2016deep".into());
-        p.url = Some("https://example.org/x".into());
-        p.source = Some("crossref".into());
-        p.status = PaperStatus::Resolved.as_str().to_string();
+        p.meta.url = Some("https://example.org/x".into());
+        p.meta.source = Some("crossref".into());
+        p.meta.status = PaperStatus::Resolved;
         update_paper(&pool, &p).await.unwrap();
 
         let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
-        assert_eq!(got.title.as_deref(), Some("New Title"));
-        assert_eq!(got.abstract_text.as_deref(), Some("New abstract"));
-        assert_eq!(got.authors.as_deref(), Some(r#"["Ada Lovelace"]"#));
-        assert_eq!(got.venue.as_deref(), Some("KDD"));
-        assert_eq!(got.year, Some(2019));
-        assert_eq!(got.doi.as_deref(), Some("10.1/new"));
-        assert_eq!(got.arxiv_id.as_deref(), Some("2001.00001"));
-        assert_eq!(got.dblp_key.as_deref(), Some("conf/kdd/X"));
+        assert_eq!(got.meta.title.as_deref(), Some("New Title"));
+        assert_eq!(got.meta.abstract_text.as_deref(), Some("New abstract"));
+        assert_eq!(got.meta.authors, Authors(vec!["Ada Lovelace".into()]));
+        assert_eq!(got.meta.venue.as_deref(), Some("KDD"));
+        assert_eq!(got.meta.year, Some(2019));
+        assert_eq!(got.meta.doi.as_deref(), Some("10.1/new"));
+        assert_eq!(got.meta.arxiv_id.as_deref(), Some("2001.00001"));
+        assert_eq!(got.meta.dblp_key.as_deref(), Some("conf/kdd/X"));
         assert_eq!(got.rel_path, "he2016deep.pdf");
         assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
-        assert_eq!(got.url.as_deref(), Some("https://example.org/x"));
-        assert_eq!(got.source.as_deref(), Some("crossref"));
-        assert_eq!(got.status, "resolved");
+        assert_eq!(got.meta.url.as_deref(), Some("https://example.org/x"));
+        assert_eq!(got.meta.source.as_deref(), Some("crossref"));
+        assert_eq!(got.meta.status, PaperStatus::Resolved);
         assert_eq!(got.content_hash, "h1"); // immutable columns untouched
     }
 
@@ -372,36 +436,76 @@ mod tests {
         assert_eq!(both.len(), 2);
     }
 
-    #[test]
-    fn authors_vec_parses_and_defaults() {
-        let mut p = sample_paper("01890000-0000-7000-8000-0000000000e5", "he");
-        assert!(p.authors_vec().is_empty()); // None → empty
-        p.authors = Some(r#"["Kaiming He","Xiangyu Zhang"]"#.into());
-        assert_eq!(p.authors_vec(), vec!["Kaiming He", "Xiangyu Zhang"]);
-        p.authors = Some("not json".into());
-        assert!(p.authors_vec().is_empty()); // invalid → empty
+    #[tokio::test]
+    async fn authors_roundtrip_null_json_and_garbage() {
+        let (_dir, pool) = temp_pool().await;
+        // Empty -> stored NULL -> decodes empty.
+        let a = sample_paper("01890000-0000-7000-8000-0000000000e5", "he");
+        insert_paper(&pool, &a).await.unwrap();
+        let raw: (Option<String>,) = sqlx::query_as("SELECT authors FROM papers WHERE id = ?")
+            .bind(&a.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(raw.0, None, "empty authors must be stored as SQL NULL");
+        assert!(get_by_id(&pool, &a.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .meta
+            .authors
+            .0
+            .is_empty());
+        // Non-empty round-trips.
+        let mut b = sample_paper("01890000-0000-7000-8000-0000000000e6", "hf");
+        b.meta.authors = Authors(vec!["Kaiming He".into(), "Xiangyu Zhang".into()]);
+        insert_paper(&pool, &b).await.unwrap();
+        assert_eq!(
+            get_by_id(&pool, &b.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .meta
+                .authors
+                .0,
+            vec!["Kaiming He", "Xiangyu Zhang"]
+        );
+        // Garbage in the column decodes to empty (legacy tolerance).
+        sqlx::query("UPDATE papers SET authors = 'not json' WHERE id = ?")
+            .bind(&b.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(get_by_id(&pool, &b.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .meta
+            .authors
+            .0
+            .is_empty());
     }
 
     #[tokio::test]
     async fn list_papers_filters_and_sorts() {
         let (_dir, pool) = temp_pool().await;
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
-        a.title = Some("Deep Residual Learning".into());
-        a.authors = Some(r#"["Kaiming He"]"#.into());
-        a.year = Some(2016);
-        a.status = PaperStatus::Resolved.as_str().to_string();
+        a.meta.title = Some("Deep Residual Learning".into());
+        a.meta.authors = Authors(vec!["Kaiming He".into()]);
+        a.meta.year = Some(2016);
+        a.meta.status = PaperStatus::Resolved;
         let mut b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
-        b.title = Some("Attention Is All You Need".into());
-        b.authors = Some(r#"["Ashish Vaswani"]"#.into());
-        b.year = Some(2017);
-        b.status = PaperStatus::NeedsReview.as_str().to_string();
+        b.meta.title = Some("Attention Is All You Need".into());
+        b.meta.authors = Authors(vec!["Ashish Vaswani".into()]);
+        b.meta.year = Some(2017);
+        b.meta.status = PaperStatus::NeedsReview;
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
 
         // No filters → both, default sort year DESC (2017 before 2016).
         let all = list_papers(&pool, None, None, None).await.unwrap();
         assert_eq!(all.len(), 2);
-        assert_eq!(all[0].year, Some(2017));
+        assert_eq!(all[0].meta.year, Some(2017));
 
         // q matches title (case-insensitive) or authors.
         let hits = list_papers(&pool, Some("residual"), None, None)
@@ -437,7 +541,7 @@ mod tests {
         let asc = list_papers(&pool, None, None, Some("year_asc"))
             .await
             .unwrap();
-        assert_eq!(asc[0].year, Some(2016));
+        assert_eq!(asc[0].meta.year, Some(2016));
 
         // An unknown status is ignored (not an error) → both rows.
         let bogus = list_papers(&pool, None, Some("nonsense"), None)
@@ -447,11 +551,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_treats_like_wildcards_literally() {
+        let (_dir, pool) = temp_pool().await;
+        let mut a = sample_paper("01890000-0000-7000-8000-0000000000f1", "wa");
+        a.meta.title = Some("100% Accurate Results".into());
+        let mut b = sample_paper("01890000-0000-7000-8000-0000000000f2", "wb");
+        b.meta.title = Some("1000 Accurate Results".into());
+        insert_paper(&pool, &a).await.unwrap();
+        insert_paper(&pool, &b).await.unwrap();
+
+        // "%" must match only the literal percent title, not act as a wildcard.
+        let hits = list_papers(&pool, Some("100%"), None, None).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, a.id);
+    }
+
+    #[tokio::test]
     async fn stats_counts_by_status() {
         let (_dir, pool) = temp_pool().await;
         assert_eq!(stats(&pool).await.unwrap(), (0, 0, 0));
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
-        a.status = PaperStatus::Resolved.as_str().to_string();
+        a.meta.status = PaperStatus::Resolved;
         let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb"); // needs_review
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
@@ -486,7 +606,7 @@ mod tests {
     async fn soft_delete_hides_and_purge_removes() {
         let (_dir, pool) = temp_pool().await;
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
-        a.status = PaperStatus::Resolved.as_str().to_string();
+        a.meta.status = PaperStatus::Resolved;
         let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
@@ -515,5 +635,106 @@ mod tests {
         delete_row(&pool, &a.id).await.unwrap();
         assert!(get_by_id(&pool, &a.id).await.unwrap().is_none());
         assert!(trashed_papers(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_by_hash_sees_active_and_trashed() {
+        let (_dir, pool) = temp_pool().await;
+        assert!(find_by_hash(&pool, "abc").await.unwrap().is_none());
+        let p = sample_paper("01890000-0000-7000-8000-000000000001", "abc");
+        insert_paper(&pool, &p).await.unwrap();
+        assert_eq!(find_by_hash(&pool, "abc").await.unwrap().unwrap().id, p.id);
+        soft_delete(&pool, &p.id).await.unwrap();
+        let hit = find_by_hash(&pool, "abc").await.unwrap().unwrap();
+        assert!(hit.deleted_at.is_some()); // trashed rows still match
+    }
+
+    #[tokio::test]
+    async fn find_by_identifier_matches_doi_or_arxiv() {
+        let (_dir, pool) = temp_pool().await;
+        let mut p = sample_paper("01890000-0000-7000-8000-000000000002", "h2");
+        p.meta.doi = Some("10.1/x".into());
+        p.meta.arxiv_id = Some("2001.00001".into());
+        insert_paper(&pool, &p).await.unwrap();
+
+        assert_eq!(
+            find_by_identifier(&pool, Some("10.1/x"), None)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            p.id
+        );
+        assert_eq!(
+            find_by_identifier(&pool, None, Some("2001.00001"))
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            p.id
+        );
+        assert!(find_by_identifier(&pool, Some("10.9/other"), None)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(find_by_identifier(&pool, None, None)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_identifier_prefers_doi_over_arxiv() {
+        let (_dir, pool) = temp_pool().await;
+        // Row A holds only the DOI; row B holds only the arXiv id.
+        let mut a = sample_paper("01890000-0000-7000-8000-000000000006", "h6");
+        a.meta.doi = Some("10.1/x".into());
+        insert_paper(&pool, &a).await.unwrap();
+        let mut b = sample_paper("01890000-0000-7000-8000-000000000007", "h7");
+        b.meta.arxiv_id = Some("2001.00001".into());
+        insert_paper(&pool, &b).await.unwrap();
+
+        // Both identifiers match different rows: the DOI match wins.
+        let hit = find_by_identifier(&pool, Some("10.1/x"), Some("2001.00001"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.id, a.id);
+
+        // An unmatched DOI still falls through to the arXiv match.
+        let fallback = find_by_identifier(&pool, Some("10.9/other"), Some("2001.00001"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fallback.id, b.id);
+    }
+
+    #[tokio::test]
+    async fn restore_untrashes_only_trashed_rows() {
+        let (_dir, pool) = temp_pool().await;
+        let p = sample_paper("01890000-0000-7000-8000-000000000003", "h3");
+        insert_paper(&pool, &p).await.unwrap();
+        assert!(!restore(&pool, &p.id).await.unwrap()); // active: nothing to restore
+        soft_delete(&pool, &p.id).await.unwrap();
+        assert!(restore(&pool, &p.id).await.unwrap());
+        assert!(!restore(&pool, &p.id).await.unwrap()); // idempotent: already active
+        assert!(get_by_id(&pool, &p.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_none());
+        assert_eq!(list_papers(&pool, None, None, None).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unique_violation_is_detected() {
+        let (_dir, pool) = temp_pool().await;
+        let a = sample_paper("01890000-0000-7000-8000-000000000004", "same");
+        let b = sample_paper("01890000-0000-7000-8000-000000000005", "same");
+        insert_paper(&pool, &a).await.unwrap();
+        let err = insert_paper(&pool, &b).await.unwrap_err();
+        assert!(is_unique_violation(&err));
+        assert!(!is_unique_violation(&anyhow::anyhow!("something else")));
     }
 }

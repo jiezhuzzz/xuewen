@@ -35,4 +35,6 @@ export interface Filters {
 
 export type ImportResult =
   | { outcome: 'ingested'; id: string; title: string | null; status: string }
-  | { outcome: 'duplicate' };
+  | { outcome: 'duplicate' }
+  | { outcome: 'same_work'; id: string }
+  | { outcome: 'in_trash'; id: string };

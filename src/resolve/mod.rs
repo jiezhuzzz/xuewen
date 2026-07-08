@@ -29,28 +29,6 @@ pub struct ResolvedMetadata {
     pub source: String,
 }
 
-impl ResolvedMetadata {
-    /// The authors as a JSON array string for the `papers.authors` column,
-    /// or `None` when there are no authors.
-    pub fn authors_json(&self) -> Option<String> {
-        if self.authors.is_empty() {
-            None
-        } else {
-            serde_json::to_string(&self.authors).ok()
-        }
-    }
-}
-
-/// Outcome of a resolution attempt.
-// Resolution is short-lived (built in resolve(), consumed immediately in build_paper);
-// boxing the large variant would add churn with no measurable benefit.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Resolution {
-    Resolved(ResolvedMetadata),
-    Unresolved,
-}
-
 /// Collapse all runs of whitespace to single spaces and trim.
 pub(crate) fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -64,7 +42,7 @@ pub(crate) fn strip_tags(s: &str) -> String {
 }
 
 /// Fetches authoritative metadata for an identifier. A network or parse failure
-/// degrades to `Resolution::Unresolved` — resolution never aborts ingestion.
+/// degrades to `None` — resolution never aborts ingestion.
 pub struct Resolver {
     http: HttpClient,
     arxiv_base: String,
@@ -76,11 +54,16 @@ impl Resolver {
     /// Build a resolver pointing at the real arXiv and Crossref endpoints, with a
     /// polite retry/back-off policy.
     pub fn new(contact_email: Option<&str>) -> Result<Self> {
+        Self::new_with_policy(contact_email, RetryPolicy::production())
+    }
+
+    /// Build a resolver for the real endpoints with an explicit retry policy.
+    pub fn new_with_policy(contact_email: Option<&str>, retry: RetryPolicy) -> Result<Self> {
         Self::build(
             contact_email,
             "https://export.arxiv.org".to_string(),
             "https://api.crossref.org".to_string(),
-            RetryPolicy::production(),
+            retry,
         )
     }
 
@@ -127,18 +110,18 @@ impl Resolver {
         self
     }
 
-    /// Route an identifier to its source and return the outcome. For a PDF with
-    /// no identifier, `title_hint` (the heuristic title) drives a DBLP/Crossref
-    /// title search.
-    pub async fn resolve(&self, ident: &Identifier, title_hint: Option<&str>) -> Resolution {
-        let md = match ident {
+    /// Route an identifier to its source and return the metadata, or `None` when
+    /// nothing resolves confidently. For a PDF with no identifier, `title_hint`
+    /// drives a DBLP/Crossref title search.
+    pub async fn resolve(
+        &self,
+        ident: &Identifier,
+        title_hint: Option<&str>,
+    ) -> Option<ResolvedMetadata> {
+        match ident {
             Identifier::Arxiv(id) => self.try_arxiv(id).await,
             Identifier::Doi(doi) => self.try_crossref(doi).await,
             Identifier::None => self.try_title_search(title_hint).await,
-        };
-        match md {
-            Some(m) => Resolution::Resolved(m),
-            None => Resolution::Unresolved,
         }
     }
 
@@ -255,20 +238,5 @@ mod tests {
             strip_tags("<jats:p>Hello  <b>world</b></jats:p>"),
             "Hello world"
         );
-    }
-
-    #[test]
-    fn authors_json_roundtrip() {
-        let md = ResolvedMetadata {
-            authors: vec!["Ada Lovelace".into(), "Alan Turing".into()],
-            ..Default::default()
-        };
-        assert_eq!(
-            md.authors_json().as_deref(),
-            Some(r#"["Ada Lovelace","Alan Turing"]"#)
-        );
-
-        let empty = ResolvedMetadata::default();
-        assert_eq!(empty.authors_json(), None);
     }
 }

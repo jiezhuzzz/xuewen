@@ -3,8 +3,8 @@ mod common;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::TestServer;
 use xuewen::db;
-use xuewen::models::Paper;
-use xuewen::pipeline::Libraries;
+use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
+use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::resolve::Resolver;
 use xuewen::web::{build_router, build_router_with_ingest, Ingest};
 
@@ -15,25 +15,27 @@ async fn temp_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
     (dir, pool)
 }
 
-fn paper(id: &str, title: &str, status: &str) -> Paper {
+fn paper(id: &str, title: &str, status: PaperStatus) -> Paper {
     Paper {
         id: id.into(),
         content_hash: id.into(),
         rel_path: format!("{id}.pdf"),
-        title: Some(title.into()),
-        abstract_text: Some("An abstract.".into()),
-        authors: Some(r#"["Ada Lovelace"]"#.into()),
-        venue: Some("KDD".into()),
-        year: Some(2020),
-        doi: None,
-        arxiv_id: None,
-        dblp_key: None,
         cite_key: Some(id.into()),
-        url: None,
-        source: Some("crossref".into()),
-        status: status.into(),
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
+        meta: PaperMeta {
+            title: Some(title.into()),
+            abstract_text: Some("An abstract.".into()),
+            authors: Authors(vec!["Ada Lovelace".into()]),
+            venue: Some("KDD".into()),
+            year: Some(2020),
+            doi: None,
+            arxiv_id: None,
+            dblp_key: None,
+            url: None,
+            source: Some("crossref".into()),
+            status,
+        },
     }
 }
 
@@ -42,13 +44,17 @@ async fn lists_and_details_papers() {
     let (dir, pool) = temp_pool().await;
     db::insert_paper(
         &pool,
-        &paper("aaaa1111", "Deep Residual Learning", "resolved"),
+        &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved),
     )
     .await
     .unwrap();
     db::insert_paper(
         &pool,
-        &paper("bbbb2222", "Attention Is All You Need", "needs_review"),
+        &paper(
+            "bbbb2222",
+            "Attention Is All You Need",
+            PaperStatus::NeedsReview,
+        ),
     )
     .await
     .unwrap();
@@ -96,13 +102,13 @@ async fn streams_pdf_with_range_and_guards_paths() {
     std::fs::create_dir_all(&library).unwrap();
 
     // A real paper whose PDF exists inside the library.
-    let mut ok = paper("cccc3333", "A Paper", "resolved");
+    let mut ok = paper("cccc3333", "A Paper", PaperStatus::Resolved);
     ok.rel_path = "cccc3333.pdf".into();
     common::write_test_pdf(&library.join("cccc3333.pdf"), &["Hello PDF"]);
     db::insert_paper(&pool, &ok).await.unwrap();
 
     // A rogue record whose rel_path escapes the library.
-    let mut escape = paper("dddd4444", "Escape", "resolved");
+    let mut escape = paper("dddd4444", "Escape", PaperStatus::Resolved);
     escape.rel_path = "../outside.pdf".into();
     std::fs::write(dir.path().join("outside.pdf"), b"secret").unwrap();
     db::insert_paper(&pool, &escape).await.unwrap();
@@ -143,12 +149,15 @@ async fn streams_pdf_with_range_and_guards_paths() {
 #[tokio::test]
 async fn deletes_a_paper_softly() {
     let (dir, pool) = temp_pool().await;
-    db::insert_paper(&pool, &paper("aaaa1111", "First", "resolved"))
+    db::insert_paper(&pool, &paper("aaaa1111", "First", PaperStatus::Resolved))
         .await
         .unwrap();
-    db::insert_paper(&pool, &paper("bbbb2222", "Second", "needs_review"))
-        .await
-        .unwrap();
+    db::insert_paper(
+        &pool,
+        &paper("bbbb2222", "Second", PaperStatus::NeedsReview),
+    )
+    .await
+    .unwrap();
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
 
     // Before: both listed.
@@ -204,11 +213,14 @@ async fn imports_a_pdf_dedups_and_rejects_non_pdf() {
     .with_dblp_base("http://127.0.0.1:1".to_string());
 
     let ingest = std::sync::Arc::new(Ingest {
-        resolver,
-        grobid: None,
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: inbox.join("_processed"),
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
         },
         staging_dir: inbox.join("_uploads"),
     });
@@ -278,11 +290,14 @@ async fn import_sanitizes_traversal_filenames() {
     .unwrap()
     .with_dblp_base("http://127.0.0.1:1".to_string());
     let ingest = std::sync::Arc::new(Ingest {
-        resolver,
-        grobid: None,
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: inbox.join("_processed"),
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
         },
         staging_dir: inbox.join("_uploads"),
     });
@@ -318,4 +333,116 @@ async fn import_returns_503_when_not_configured() {
         .multipart(form)
         .await
         .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn import_reports_in_trash_for_deleted_paper() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".to_string(),
+        "http://127.0.0.1:1".to_string(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".to_string());
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(
+        pool.clone(),
+        library.clone(),
+        ingest,
+    ))
+    .unwrap();
+
+    let pdf_path = dir.path().join("paper.pdf");
+    common::write_test_pdf(&pdf_path, &["A Paper With No Identifier"]);
+    let pdf_bytes = std::fs::read(&pdf_path).unwrap();
+
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes(pdf_bytes.clone()).file_name("paper.pdf"),
+    );
+    let body: serde_json::Value = server.post("/api/papers").multipart(form).await.json();
+    assert_eq!(body["outcome"], "ingested");
+    let id = body["id"].as_str().unwrap().to_string();
+
+    db::soft_delete(&pool, &id).await.unwrap();
+
+    // Re-upload the same bytes → in_trash with the trashed paper's id.
+    let form2 =
+        MultipartForm::new().add_part("file", Part::bytes(pdf_bytes).file_name("paper.pdf"));
+    let body2: serde_json::Value = server.post("/api/papers").multipart(form2).await.json();
+    assert_eq!(body2["outcome"], "in_trash");
+    assert_eq!(body2["id"], serde_json::json!(id));
+}
+
+#[tokio::test]
+async fn import_reports_same_work_for_known_doi() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // Seed an active paper that already owns this DOI.
+    let mut existing = paper(
+        "01890000-0000-7000-8000-0000000000aa",
+        "Seed",
+        PaperStatus::Resolved,
+    );
+    existing.meta.doi = Some("10.1000/xyz123".into());
+    db::insert_paper(&pool, &existing).await.unwrap();
+
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".to_string(),
+        "http://127.0.0.1:1".to_string(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".to_string());
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
+
+    // Upload a different file whose first page carries the same DOI. The
+    // resolver is offline, but the extracted identifier still lands in the
+    // decided fields, so the identifier dedup fires.
+    let pdf_path = dir.path().join("other.pdf");
+    common::write_test_pdf(
+        &pdf_path,
+        &["A Different Upload", "https://doi.org/10.1000/xyz123"],
+    );
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes(std::fs::read(&pdf_path).unwrap()).file_name("other.pdf"),
+    );
+    let body: serde_json::Value = server.post("/api/papers").multipart(form).await.json();
+    assert_eq!(body["outcome"], "same_work");
+    assert_eq!(body["id"], serde_json::json!(existing.id));
 }

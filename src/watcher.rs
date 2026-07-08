@@ -3,11 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
-use sqlx::SqlitePool;
 
-use crate::pipeline::{ingest_file, move_to, Libraries};
-use crate::resolve::grobid::Grobid;
-use crate::resolve::Resolver;
+use crate::pipeline::{move_to_async, IngestCtx};
 
 /// Tunables for the watch loop. `Default` is for production; tests use small values.
 #[derive(Debug, Clone)]
@@ -89,19 +86,17 @@ async fn stabilize(path: &Path, cfg: &WatchConfig) -> bool {
 }
 
 /// Ingest a file, retrying with exponential backoff. Re-ingestion is safe: the
-/// content-hash dedup makes a retry after a partial failure return `Duplicate`.
+/// content-hash/identifier dedup makes a retry after a partial failure report
+/// the existing row (`Duplicate`/`SameWork`/`InTrash`).
 async fn ingest_with_retry(
-    pool: &SqlitePool,
-    dirs: &Libraries,
-    resolver: &Resolver,
-    grobid: Option<&Grobid>,
+    ctx: &IngestCtx,
     cfg: &WatchConfig,
     path: &Path,
 ) -> Result<crate::pipeline::Outcome> {
     let mut delay = cfg.retry_base_delay;
     let mut last_err = None;
     for attempt in 1..=cfg.max_attempts {
-        match ingest_file(pool, dirs, resolver, grobid, path).await {
+        match ctx.ingest_file(path).await {
             Ok(o) => return Ok(o),
             Err(e) => {
                 tracing::warn!("ingest attempt {attempt}/{} failed: {e}", cfg.max_attempts);
@@ -117,26 +112,18 @@ async fn ingest_with_retry(
 }
 
 /// Stabilize then ingest one path; on repeated failure, quarantine to `failed_dir`.
-async fn process_one(
-    pool: &SqlitePool,
-    dirs: &Libraries,
-    resolver: &Resolver,
-    grobid: Option<&Grobid>,
-    failed_dir: &Path,
-    cfg: &WatchConfig,
-    path: &Path,
-) {
+async fn process_one(ctx: &IngestCtx, failed_dir: &Path, cfg: &WatchConfig, path: &Path) {
     if !stabilize(path, cfg).await {
         return; // file vanished (e.g. already processed by a prior event)
     }
-    match ingest_with_retry(pool, dirs, resolver, grobid, cfg, path).await {
-        Ok(outcome) => tracing::info!("ingested {}: {outcome:?}", path.display()),
+    match ingest_with_retry(ctx, cfg, path).await {
+        Ok(outcome) => tracing::info!("processed {}: {outcome:?}", path.display()),
         Err(e) => {
             tracing::error!(
                 "giving up on {}: {e}; quarantining to _failed",
                 path.display()
             );
-            if let Err(mv) = move_to(path, failed_dir) {
+            if let Err(mv) = move_to_async(path, failed_dir).await {
                 tracing::error!("could not quarantine {}: {mv}", path.display());
             }
         }
@@ -145,19 +132,13 @@ async fn process_one(
 
 /// Run the watch loop: catch up on existing files, then watch for new ones until
 /// the process is stopped. Blocks (the `notify` watcher is held for the loop's life).
-pub async fn run(
-    pool: &SqlitePool,
-    dirs: &Libraries,
-    resolver: &Resolver,
-    grobid: Option<&Grobid>,
-    inbox: &Path,
-) -> Result<()> {
+pub async fn run(ctx: &IngestCtx, inbox: &Path) -> Result<()> {
     let cfg = WatchConfig::default();
     let failed_dir = inbox.join("_failed");
 
     // Catch-up: ingest anything already sitting in the inbox.
     for path in catch_up_scan(inbox)? {
-        process_one(pool, dirs, resolver, grobid, &failed_dir, &cfg, &path).await;
+        process_one(ctx, &failed_dir, &cfg, &path).await;
     }
 
     // Live watch. `notify` calls the handler on its own thread; forward pdf paths
@@ -185,7 +166,7 @@ pub async fn run(
     tracing::info!("watching {}", inbox.display());
 
     while let Some(path) = rx.recv().await {
-        process_one(pool, dirs, resolver, grobid, &failed_dir, &cfg, &path).await;
+        process_one(ctx, &failed_dir, &cfg, &path).await;
     }
     Ok(())
 }
@@ -193,7 +174,10 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::Libraries;
+    use crate::resolve::Resolver;
     use printpdf::{BuiltinFont, Mm, PdfDocument};
+    use sqlx::SqlitePool;
     use std::fs::File;
     use std::io::{BufWriter, Write};
 
@@ -271,22 +255,17 @@ mod tests {
         write_pdf(&pdf, "A Paper With No Identifier Here");
 
         let pool = temp_pool(dir.path()).await;
-        let dirs = Libraries {
-            library_root: dir.path().join("library"),
-            processed_dir: inbox.join("_processed"),
+        let ctx = IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: dir.path().join("library"),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver: offline_resolver(),
+            grobid: None,
         };
-        let resolver = offline_resolver();
 
-        process_one(
-            &pool,
-            &dirs,
-            &resolver,
-            None,
-            &inbox.join("_failed"),
-            &fast_cfg(),
-            &pdf,
-        )
-        .await;
+        process_one(&ctx, &inbox.join("_failed"), &fast_cfg(), &pdf).await;
 
         assert!(inbox.join("_processed/paper.pdf").exists());
         assert!(!pdf.exists());
@@ -306,14 +285,18 @@ mod tests {
         std::fs::write(&bad, b"this is not a pdf").unwrap();
 
         let pool = temp_pool(dir.path()).await;
-        let dirs = Libraries {
-            library_root: dir.path().join("library"),
-            processed_dir: inbox.join("_processed"),
+        let ctx = IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: dir.path().join("library"),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver: offline_resolver(),
+            grobid: None,
         };
-        let resolver = offline_resolver();
         let failed = inbox.join("_failed");
 
-        process_one(&pool, &dirs, &resolver, None, &failed, &fast_cfg(), &bad).await;
+        process_one(&ctx, &failed, &fast_cfg(), &bad).await;
 
         assert!(failed.join("bad.pdf").exists(), "should be quarantined");
         assert!(!bad.exists());

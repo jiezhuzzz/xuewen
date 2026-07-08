@@ -126,7 +126,7 @@ export function toggleTheme(): void {
 
 export interface ImportItem {
   name: string;
-  status: 'queued' | 'importing' | 'ingested' | 'duplicate' | 'failed';
+  status: 'queued' | 'importing' | 'ingested' | 'duplicate' | 'same-work' | 'in-trash' | 'failed';
   message?: string;
   needsReview?: boolean;
 }
@@ -169,6 +169,11 @@ async function drainQueue(): Promise<void> {
       if (job.session !== importSession) continue; // a new session started mid-upload
       if (res.outcome === 'duplicate') {
         importState.items[job.index].status = 'duplicate';
+      } else if (res.outcome === 'same_work') {
+        importState.items[job.index].status = 'same-work';
+      } else if (res.outcome === 'in_trash') {
+        importState.items[job.index].status = 'in-trash';
+        importState.items[job.index].message = res.id;
       } else {
         importState.items[job.index].status = 'ingested';
         importState.items[job.index].message = res.title ?? '(untitled)';

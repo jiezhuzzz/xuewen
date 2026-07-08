@@ -3,32 +3,35 @@ mod common;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
-use xuewen::models::Paper;
+use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
+use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::Resolver;
 
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
 
 /// A minimal stored paper for seeding; callers set the fields they care about.
-fn seed_paper(id: &str, hash: &str, rel_path: &str, status: &str) -> Paper {
+fn seed_paper(id: &str, hash: &str, rel_path: &str, status: PaperStatus) -> Paper {
     Paper {
         id: id.into(),
         content_hash: hash.into(),
         rel_path: rel_path.into(),
-        title: None,
-        abstract_text: None,
-        authors: None,
-        venue: None,
-        year: None,
-        doi: None,
-        arxiv_id: None,
-        dblp_key: None,
         cite_key: None,
-        url: None,
-        source: None,
-        status: status.into(),
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
+        meta: PaperMeta {
+            title: None,
+            abstract_text: None,
+            authors: Authors::default(),
+            venue: None,
+            year: None,
+            doi: None,
+            arxiv_id: None,
+            dblp_key: None,
+            url: None,
+            source: None,
+            status,
+        },
     }
 }
 
@@ -53,7 +56,7 @@ async fn needs_review_reresolves_and_refiles() {
         "01890000-0000-7000-8000-0000000000a1",
         hash,
         &format!("_unsorted/{hash}.pdf"),
-        "needs_review",
+        PaperStatus::NeedsReview,
     );
     db::insert_paper(&pool, &p).await.unwrap();
 
@@ -65,14 +68,23 @@ async fn needs_review_reresolves_and_refiles() {
         .await;
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
 
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::NeedsReview)
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
         .await
         .unwrap();
     assert_eq!(summary.reresolved, 1);
     assert_eq!(summary.refiled, 1);
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
-    assert_eq!(got.status, "resolved");
+    assert_eq!(got.meta.status, PaperStatus::Resolved);
     assert_eq!(got.cite_key.as_deref(), Some("wang2019kgat"));
     assert_eq!(got.rel_path, "wang2019kgat.pdf");
     assert!(library.join("wang2019kgat.pdf").exists());
@@ -95,12 +107,12 @@ async fn resolved_paper_refiles_without_reresolving() {
         "01890000-0000-7000-8000-0000000000b2",
         hash,
         &format!("{hash}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
-    p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Some(r#"["Kaiming He"]"#.into());
-    p.year = Some(2016);
-    p.source = Some("crossref".into());
+    p.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p.meta.year = Some(2016);
+    p.meta.source = Some("crossref".into());
     db::insert_paper(&pool, &p).await.unwrap();
 
     // Unreachable resolver: a resolved paper must NOT be re-resolved, so no HTTP happens.
@@ -111,7 +123,16 @@ async fn resolved_paper_refiles_without_reresolving() {
     )
     .unwrap();
 
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::NeedsReview)
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
         .await
         .unwrap();
     assert_eq!(summary.reresolved, 0);
@@ -119,12 +140,12 @@ async fn resolved_paper_refiles_without_reresolving() {
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
     // Metadata unchanged; only the location moved to the cite-key path.
-    assert_eq!(got.status, "resolved");
+    assert_eq!(got.meta.status, PaperStatus::Resolved);
     assert_eq!(
-        got.title.as_deref(),
+        got.meta.title.as_deref(),
         Some("Deep Residual Learning for Image Recognition")
     );
-    assert_eq!(got.year, Some(2016));
+    assert_eq!(got.meta.year, Some(2016));
     assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
     assert_eq!(got.rel_path, "he2016deep.pdf");
     assert!(library.join("he2016deep.pdf").exists());
@@ -148,33 +169,40 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
         "01890000-0000-7000-8000-0000000000f6",
         hash,
         "he2016deep.pdf",
-        "resolved",
+        PaperStatus::Resolved,
     );
-    p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Some(r#"["Kaiming He"]"#.into());
-    p.year = Some(2016);
+    p.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p.meta.year = Some(2016);
     p.cite_key = Some("he2016deep".into());
-    p.source = Some("crossref".into());
+    p.meta.source = Some("crossref".into());
     db::insert_paper(&pool, &p).await.unwrap();
 
     // Reachable mock with no mounts → every lookup 404 → Unresolved.
     let server = MockServer::start().await;
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
 
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::All)
-        .await
-        .unwrap();
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::All).await.unwrap();
     assert_eq!(summary.reresolved, 0); // downgrade prevented → not counted
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
     // Metadata preserved; still resolved; still at its cite-key path.
-    assert_eq!(got.status, "resolved");
+    assert_eq!(got.meta.status, PaperStatus::Resolved);
     assert_eq!(
-        got.title.as_deref(),
+        got.meta.title.as_deref(),
         Some("Deep Residual Learning for Image Recognition")
     );
-    assert_eq!(got.authors.as_deref(), Some(r#"["Kaiming He"]"#));
-    assert_eq!(got.year, Some(2016));
+    assert_eq!(got.meta.authors, Authors(vec!["Kaiming He".into()]));
+    assert_eq!(got.meta.year, Some(2016));
     assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
     assert_eq!(got.rel_path, "he2016deep.pdf");
     assert!(f.exists());
@@ -202,16 +230,16 @@ async fn refresh_by_id_prefix_targets_one() {
         "01890000-0000-7000-8000-0000000000a1",
         h1,
         &format!("{h1}.pdf"),
-        "needs_review",
+        PaperStatus::NeedsReview,
     );
     db::insert_paper(&pool, &p1).await.unwrap();
     let mut p2 = seed_paper(
         "01890000-0000-7000-8000-0000000000b2",
         h2,
         &format!("{h2}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
-    p2.title = Some("Some Resolved Paper".into());
+    p2.meta.title = Some("Some Resolved Paper".into());
     db::insert_paper(&pool, &p2).await.unwrap();
 
     let server = MockServer::start().await;
@@ -222,12 +250,18 @@ async fn refresh_by_id_prefix_targets_one() {
         .await;
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
 
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
     // A prefix unique to P1 (P2's id ends ...0000b2).
     let summary = refresh::run(
-        &pool,
-        &library,
-        &resolver,
-        None,
+        &ctx,
         RefreshTarget::One("01890000-0000-7000-8000-0000000000a".into()),
     )
     .await
@@ -236,7 +270,7 @@ async fn refresh_by_id_prefix_targets_one() {
 
     let got1 = db::get_by_id(&pool, &p1.id).await.unwrap().unwrap();
     assert_eq!(got1.rel_path, "wang2019kgat.pdf");
-    assert_eq!(got1.status, "resolved");
+    assert_eq!(got1.meta.status, PaperStatus::Resolved);
 
     // P2 completely untouched.
     let got2 = db::get_by_id(&pool, &p2.id).await.unwrap().unwrap();
@@ -262,11 +296,11 @@ async fn all_reresolves_resolved_paper() {
         "01890000-0000-7000-8000-0000000000d4",
         hash,
         "old2000stale.pdf",
-        "resolved",
+        PaperStatus::Resolved,
     );
-    p.title = Some("Old Stale Title".into());
-    p.authors = Some(r#"["Old Author"]"#.into());
-    p.year = Some(2000);
+    p.meta.title = Some("Old Stale Title".into());
+    p.meta.authors = Authors(vec!["Old Author".into()]);
+    p.meta.year = Some(2000);
     p.cite_key = Some("old2000stale".into());
     db::insert_paper(&pool, &p).await.unwrap();
 
@@ -278,18 +312,25 @@ async fn all_reresolves_resolved_paper() {
         .await;
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
 
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::All)
-        .await
-        .unwrap();
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::All).await.unwrap();
     assert_eq!(summary.reresolved, 1);
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
     // Stale metadata replaced by the freshly-resolved record, and re-filed.
     assert_eq!(
-        got.title.as_deref(),
+        got.meta.title.as_deref(),
         Some("KGAT: Knowledge Graph Attention Network for Recommendation")
     );
-    assert_eq!(got.year, Some(2019));
+    assert_eq!(got.meta.year, Some(2019));
     assert_eq!(got.rel_path, "wang2019kgat.pdf");
     assert!(library.join("wang2019kgat.pdf").exists());
     assert!(!f.exists());
@@ -319,11 +360,11 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         "01890000-0000-7000-8000-00000000aa01",
         h1,
         &format!("{h1}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
-    p1.title = Some("Deep Residual Learning for Image Recognition".into());
-    p1.authors = Some(r#"["Kaiming He"]"#.into());
-    p1.year = Some(2016);
+    p1.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p1.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p1.meta.year = Some(2016);
     p1.added_at = "2026-07-07T00:00:00Z".into();
     db::insert_paper(&pool, &p1).await.unwrap();
 
@@ -331,11 +372,11 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         "01890000-0000-7000-8000-00000000bb02",
         h2,
         &format!("{h2}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
-    p2.title = Some("Deep Residual Learning for Image Recognition".into());
-    p2.authors = Some(r#"["Kaiming He"]"#.into());
-    p2.year = Some(2016);
+    p2.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p2.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p2.meta.year = Some(2016);
     p2.added_at = "2026-07-07T00:00:01Z".into(); // ordered after p1
     db::insert_paper(&pool, &p2).await.unwrap();
 
@@ -347,7 +388,16 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         "http://127.0.0.1:1".into(),
     )
     .unwrap();
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::NeedsReview)
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
         .await
         .unwrap();
     assert_eq!(summary.refiled, 2);
@@ -378,11 +428,11 @@ async fn refresh_skips_a_trashed_paper() {
         "01890000-0000-7000-8000-0000000000e7",
         hash,
         &format!("{hash}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
-    p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Some(r#"["Kaiming He"]"#.into());
-    p.year = Some(2016);
+    p.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p.meta.year = Some(2016);
     db::insert_paper(&pool, &p).await.unwrap();
     db::soft_delete(&pool, &p.id).await.unwrap();
 
@@ -393,16 +443,138 @@ async fn refresh_skips_a_trashed_paper() {
         "http://127.0.0.1:1".into(),
     )
     .unwrap();
-    let summary = refresh::run(
-        &pool,
-        &library,
-        &resolver,
-        None,
-        RefreshTarget::One(p.id.clone()),
-    )
-    .await
-    .unwrap();
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::One(p.id.clone()))
+        .await
+        .unwrap();
     assert_eq!(summary.processed, 0);
     assert!(old.exists());
     assert!(!library.join("he2016deep.pdf").exists());
+}
+
+#[tokio::test]
+async fn refile_copy_failure_keeps_db_and_file_consistent() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    let hash = "copyfailhash";
+    let unsorted = library.join(format!("_unsorted/{hash}.pdf"));
+    std::fs::create_dir_all(unsorted.parent().unwrap()).unwrap();
+    let doi = "10.1145/3292500.3330701";
+    common::write_test_pdf(&unsorted, &["Header", &format!("https://doi.org/{doi}")]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let p = seed_paper(
+        "01890000-0000-7000-8000-0000000000c9",
+        hash,
+        &format!("_unsorted/{hash}.pdf"),
+        PaperStatus::NeedsReview,
+    );
+    db::insert_paper(&pool, &p).await.unwrap();
+
+    // Make the re-file destination impossible: a DIRECTORY occupies the
+    // target path "wang2019kgat.pdf", so the copy must fail.
+    std::fs::create_dir_all(library.join("wang2019kgat.pdf")).unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver: Resolver::with_bases(None, server.uri(), server.uri()).unwrap(),
+        grobid: None,
+    };
+
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
+        .await
+        .unwrap();
+    assert_eq!(summary.reresolved, 1);
+    assert_eq!(summary.refiled, 0); // copy failed → not refiled
+
+    // DB still points at the ORIGINAL path, and that file still exists:
+    // metadata updated, location untouched, nothing orphaned.
+    let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
+    assert_eq!(got.meta.status, PaperStatus::Resolved);
+    assert_eq!(got.rel_path, format!("_unsorted/{hash}.pdf"));
+    assert!(unsorted.exists());
+}
+
+#[tokio::test]
+async fn refile_rolls_back_copy_when_update_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    let hash = "rollbackhash";
+    let unsorted = library.join(format!("_unsorted/{hash}.pdf"));
+    std::fs::create_dir_all(unsorted.parent().unwrap()).unwrap();
+    let doi = "10.1145/3292500.3330701";
+    common::write_test_pdf(&unsorted, &["Header", &format!("https://doi.org/{doi}")]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // Paper A: needs_review, will re-resolve to the KGAT record (and its DOI).
+    let a = seed_paper(
+        "01890000-0000-7000-8000-0000000000d1",
+        hash,
+        &format!("_unsorted/{hash}.pdf"),
+        PaperStatus::NeedsReview,
+    );
+    db::insert_paper(&pool, &a).await.unwrap();
+
+    // Paper B already owns that DOI (no cite_key, no file on disk → refresh
+    // skips it), so A's post-copy update_paper hits the doi UNIQUE constraint.
+    let mut b = seed_paper(
+        "01890000-0000-7000-8000-0000000000d2",
+        "otherhash",
+        "missing/nowhere.pdf",
+        PaperStatus::Resolved,
+    );
+    b.meta.doi = Some(doi.to_string());
+    db::insert_paper(&pool, &b).await.unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver: Resolver::with_bases(None, server.uri(), server.uri()).unwrap(),
+        grobid: None,
+    };
+
+    // The per-paper error is logged, not propagated: run() succeeds.
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
+        .await
+        .unwrap();
+    assert_eq!(summary.refiled, 0);
+
+    // Rollback: the copied file at the would-be new path was removed…
+    assert!(!library.join("wang2019kgat.pdf").exists());
+    // …and A's row is untouched (old path, still needs_review, no DOI).
+    let got = db::get_by_id(&pool, &a.id).await.unwrap().unwrap();
+    assert_eq!(got.rel_path, format!("_unsorted/{hash}.pdf"));
+    assert_eq!(got.meta.status, PaperStatus::NeedsReview);
+    assert_eq!(got.meta.doi, None);
+    assert!(unsorted.exists());
 }
