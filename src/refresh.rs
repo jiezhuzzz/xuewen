@@ -1,13 +1,9 @@
 use anyhow::Result;
-use sqlx::SqlitePool;
-use std::path::Path;
 
 use crate::db;
 use crate::models::{Paper, PaperStatus};
 use crate::naming;
-use crate::pipeline::{move_file, resolve_fields, resolve_pdf, ResolveInputs};
-use crate::resolve::grobid::Grobid;
-use crate::resolve::Resolver;
+use crate::pipeline::{move_file, resolve_fields, IngestCtx, ResolveInputs};
 
 /// Which papers a refresh pass re-resolves. Every processed paper is re-filed
 /// regardless; this only controls whose metadata is re-fetched.
@@ -30,18 +26,12 @@ pub struct RefreshSummary {
 
 /// Run one refresh pass over the library. Each paper is handled independently:
 /// a per-paper failure is logged and never aborts the run.
-pub async fn run(
-    pool: &SqlitePool,
-    library_root: &Path,
-    resolver: &Resolver,
-    grobid: Option<&Grobid>,
-    target: RefreshTarget,
-) -> Result<RefreshSummary> {
+pub async fn run(ctx: &IngestCtx, target: RefreshTarget) -> Result<RefreshSummary> {
     let (papers, reresolve_all) = match target {
-        RefreshTarget::NeedsReview => (db::all_papers(pool).await?, false),
-        RefreshTarget::All => (db::all_papers(pool).await?, true),
+        RefreshTarget::NeedsReview => (db::all_papers(&ctx.pool).await?, false),
+        RefreshTarget::All => (db::all_papers(&ctx.pool).await?, true),
         RefreshTarget::One(id) => {
-            let p = db::find_one(pool, &id).await?;
+            let p = db::find_one(&ctx.pool, &id).await?;
             if p.deleted_at.is_some() {
                 tracing::warn!("{} is in the trash; skipping refresh", p.id);
                 return Ok(RefreshSummary::default());
@@ -54,7 +44,7 @@ pub async fn run(
     for mut paper in papers {
         summary.processed += 1;
         let reresolve = reresolve_all || paper.meta.status == PaperStatus::NeedsReview;
-        match refresh_one(pool, library_root, resolver, grobid, &mut paper, reresolve).await {
+        match refresh_one(ctx, &mut paper, reresolve).await {
             Ok(outcome) => {
                 summary.reresolved += outcome.reresolved as usize;
                 summary.refiled += outcome.refiled as usize;
@@ -71,15 +61,9 @@ struct OneOutcome {
     refiled: bool,
 }
 
-async fn refresh_one(
-    pool: &SqlitePool,
-    library_root: &Path,
-    resolver: &Resolver,
-    grobid: Option<&Grobid>,
-    paper: &mut Paper,
-    reresolve: bool,
-) -> Result<OneOutcome> {
+async fn refresh_one(ctx: &IngestCtx, paper: &mut Paper, reresolve: bool) -> Result<OneOutcome> {
     let mut outcome = OneOutcome::default();
+    let library_root = &ctx.dirs.library_root;
     let pdf = library_root.join(&paper.rel_path);
     if !pdf.exists() {
         tracing::warn!(
@@ -92,7 +76,7 @@ async fn refresh_one(
 
     // Re-resolve metadata from the stored PDF (best-effort; keep old data on failure).
     if reresolve {
-        match resolve_pdf(&pdf, resolver, grobid).await {
+        match ctx.resolve_pdf(&pdf).await {
             Ok(inputs) => {
                 let ResolveInputs {
                     ident,
@@ -131,7 +115,7 @@ async fn refresh_one(
         paper.meta.title.as_deref(),
     ) {
         Some(base) => {
-            let taken = db::cite_keys_with_base(pool, &base, Some(&paper.id)).await?;
+            let taken = db::cite_keys_with_base(&ctx.pool, &base, Some(&paper.id)).await?;
             Some(naming::disambiguate(&base, &taken))
         }
         None => None,
@@ -152,6 +136,6 @@ async fn refresh_one(
         }
     }
 
-    db::update_paper(pool, paper).await?;
+    db::update_paper(&ctx.pool, paper).await?;
     Ok(outcome)
 }

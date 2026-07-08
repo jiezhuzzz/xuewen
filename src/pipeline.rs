@@ -30,109 +30,109 @@ pub(crate) struct ResolveInputs {
     pub(crate) resolution: Resolution,
 }
 
-/// Ingest a single PDF: hash, dedup, extract, identify, file, and store.
-pub async fn ingest_file(
-    pool: &SqlitePool,
-    dirs: &Libraries,
-    resolver: &Resolver,
-    grobid: Option<&Grobid>,
-    path: &Path,
-) -> Result<Outcome> {
-    let path = path.to_path_buf();
-
-    // 1. Hash (blocking IO off the async runtime).
-    let content_hash = {
-        let p = path.clone();
-        tokio::task::spawn_blocking(move || hash::sha256_file(&p)).await??
-    };
-
-    // 2. Dedup.
-    if db::exists_by_hash(pool, &content_hash).await? {
-        move_to(&path, &dirs.processed_dir)?;
-        return Ok(Outcome::Duplicate);
-    }
-
-    // 3. Extract, identify, optionally GROBID, and resolve (factored for reuse).
-    let ResolveInputs {
-        ident,
-        provisional_title,
-        extracted,
-        resolution,
-    } = resolve_pdf(&path, resolver, grobid).await?;
-
-    // 4. Decide the stored fields, then the cite-key filename.
-    let fields = resolve_fields(provisional_title, extracted, &ident, resolution);
-    let cite_key =
-        match naming::cite_key_base(&fields.authors.0, fields.year, fields.title.as_deref()) {
-            Some(base) => {
-                let taken = db::cite_keys_with_base(pool, &base, None).await?;
-                Some(naming::disambiguate(&base, &taken))
-            }
-            None => None,
-        };
-    let rel_path = naming::library_rel_path(cite_key.as_deref(), &content_hash);
-
-    // 5. File the PDF into the managed library.
-    let dest = dirs.library_root.join(&rel_path);
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::copy(&path, &dest)?;
-
-    // 6. Build and store the record.
-    let paper = fields.into_paper(content_hash, rel_path, cite_key);
-    if let Err(e) = db::insert_paper(pool, &paper).await {
-        let _ = std::fs::remove_file(&dest);
-        return Err(e);
-    }
-
-    // 7. Move the original out of the inbox.
-    move_to(&path, &dirs.processed_dir)?;
-    Ok(Outcome::Ingested(paper.id))
+/// Everything the ingest/refresh pipeline needs; built once in `main`.
+pub struct IngestCtx {
+    pub pool: SqlitePool,
+    pub dirs: Libraries,
+    pub resolver: Resolver,
+    pub grobid: Option<Grobid>,
 }
 
-/// Extract first-page text, identify a DOI/arXiv id, optionally enrich via GROBID
-/// (title-only path), and resolve authoritative metadata. Degrades to
-/// `Resolution::Unresolved` on any resolver/network failure — never aborts.
-pub(crate) async fn resolve_pdf(
-    path: &Path,
-    resolver: &Resolver,
-    grobid: Option<&Grobid>,
-) -> Result<ResolveInputs> {
-    // Extract first-page text (blocking IO off the async runtime) and identify.
-    let text = {
-        let p = path.to_path_buf();
-        tokio::task::spawn_blocking(move || pdf::extract_text(&p, 1)).await??
-    };
-    let ident = identify::identify(&text);
-    let provisional_title = identify::guess_title(&text);
+impl IngestCtx {
+    /// Ingest a single PDF: hash, dedup, extract, identify, file, and store.
+    pub async fn ingest_file(&self, path: &Path) -> Result<Outcome> {
+        let path = path.to_path_buf();
 
-    // For the title-only path, optionally use GROBID for a better header
-    // (degrades to None on failure).
-    let extracted: Option<ResolvedMetadata> = match (&ident, grobid) {
-        (Identifier::None, Some(g)) => match g.extract_header(path).await {
-            Ok(md) => md,
-            Err(e) => {
-                tracing::warn!("grobid extraction failed: {e}");
-                None
-            }
-        },
-        _ => None,
-    };
+        // 1. Hash (blocking IO off the async runtime).
+        let content_hash = {
+            let p = path.clone();
+            tokio::task::spawn_blocking(move || hash::sha256_file(&p)).await??
+        };
 
-    // Search query prefers the GROBID title, else the heuristic first line.
-    let title_hint: Option<String> = extracted
-        .as_ref()
-        .and_then(|m| m.title.clone())
-        .or_else(|| provisional_title.clone());
+        // 2. Dedup.
+        if db::exists_by_hash(&self.pool, &content_hash).await? {
+            move_to(&path, &self.dirs.processed_dir)?;
+            return Ok(Outcome::Duplicate);
+        }
 
-    let resolution = resolver.resolve(&ident, title_hint.as_deref()).await;
-    Ok(ResolveInputs {
-        ident,
-        provisional_title,
-        extracted,
-        resolution,
-    })
+        // 3. Extract, identify, optionally GROBID, and resolve (factored for reuse).
+        let ResolveInputs {
+            ident,
+            provisional_title,
+            extracted,
+            resolution,
+        } = self.resolve_pdf(&path).await?;
+
+        // 4. Decide the stored fields, then the cite-key filename.
+        let fields = resolve_fields(provisional_title, extracted, &ident, resolution);
+        let cite_key =
+            match naming::cite_key_base(&fields.authors.0, fields.year, fields.title.as_deref()) {
+                Some(base) => {
+                    let taken = db::cite_keys_with_base(&self.pool, &base, None).await?;
+                    Some(naming::disambiguate(&base, &taken))
+                }
+                None => None,
+            };
+        let rel_path = naming::library_rel_path(cite_key.as_deref(), &content_hash);
+
+        // 5. File the PDF into the managed library.
+        let dest = self.dirs.library_root.join(&rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&path, &dest)?;
+
+        // 6. Build and store the record.
+        let paper = fields.into_paper(content_hash, rel_path, cite_key);
+        if let Err(e) = db::insert_paper(&self.pool, &paper).await {
+            let _ = std::fs::remove_file(&dest);
+            return Err(e);
+        }
+
+        // 7. Move the original out of the inbox.
+        move_to(&path, &self.dirs.processed_dir)?;
+        Ok(Outcome::Ingested(paper.id))
+    }
+
+    /// Extract first-page text, identify a DOI/arXiv id, optionally enrich via GROBID
+    /// (title-only path), and resolve authoritative metadata. Degrades to
+    /// `Resolution::Unresolved` on any resolver/network failure — never aborts.
+    pub(crate) async fn resolve_pdf(&self, path: &Path) -> Result<ResolveInputs> {
+        // Extract first-page text (blocking IO off the async runtime) and identify.
+        let text = {
+            let p = path.to_path_buf();
+            tokio::task::spawn_blocking(move || pdf::extract_text(&p, 1)).await??
+        };
+        let ident = identify::identify(&text);
+        let provisional_title = identify::guess_title(&text);
+
+        // For the title-only path, optionally use GROBID for a better header
+        // (degrades to None on failure).
+        let extracted: Option<ResolvedMetadata> = match (&ident, self.grobid.as_ref()) {
+            (Identifier::None, Some(g)) => match g.extract_header(path).await {
+                Ok(md) => md,
+                Err(e) => {
+                    tracing::warn!("grobid extraction failed: {e}");
+                    None
+                }
+            },
+            _ => None,
+        };
+
+        // Search query prefers the GROBID title, else the heuristic first line.
+        let title_hint: Option<String> = extracted
+            .as_ref()
+            .and_then(|m| m.title.clone())
+            .or_else(|| provisional_title.clone());
+
+        let resolution = self.resolver.resolve(&ident, title_hint.as_deref()).await;
+        Ok(ResolveInputs {
+            ident,
+            provisional_title,
+            extracted,
+            resolution,
+        })
+    }
 }
 
 /// Decide the stored fields. A confident resolution yields `resolved` (with a

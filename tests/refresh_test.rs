@@ -4,6 +4,7 @@ use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
 use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
+use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::Resolver;
 
@@ -67,7 +68,16 @@ async fn needs_review_reresolves_and_refiles() {
         .await;
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
 
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::NeedsReview)
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
         .await
         .unwrap();
     assert_eq!(summary.reresolved, 1);
@@ -113,7 +123,16 @@ async fn resolved_paper_refiles_without_reresolving() {
     )
     .unwrap();
 
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::NeedsReview)
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
         .await
         .unwrap();
     assert_eq!(summary.reresolved, 0);
@@ -163,9 +182,16 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
     let server = MockServer::start().await;
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
 
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::All)
-        .await
-        .unwrap();
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::All).await.unwrap();
     assert_eq!(summary.reresolved, 0); // downgrade prevented → not counted
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
@@ -224,12 +250,18 @@ async fn refresh_by_id_prefix_targets_one() {
         .await;
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
 
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
     // A prefix unique to P1 (P2's id ends ...0000b2).
     let summary = refresh::run(
-        &pool,
-        &library,
-        &resolver,
-        None,
+        &ctx,
         RefreshTarget::One("01890000-0000-7000-8000-0000000000a".into()),
     )
     .await
@@ -280,9 +312,16 @@ async fn all_reresolves_resolved_paper() {
         .await;
     let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
 
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::All)
-        .await
-        .unwrap();
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::All).await.unwrap();
     assert_eq!(summary.reresolved, 1);
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
@@ -349,7 +388,16 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         "http://127.0.0.1:1".into(),
     )
     .unwrap();
-    let summary = refresh::run(&pool, &library, &resolver, None, RefreshTarget::NeedsReview)
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
         .await
         .unwrap();
     assert_eq!(summary.refiled, 2);
@@ -395,15 +443,18 @@ async fn refresh_skips_a_trashed_paper() {
         "http://127.0.0.1:1".into(),
     )
     .unwrap();
-    let summary = refresh::run(
-        &pool,
-        &library,
-        &resolver,
-        None,
-        RefreshTarget::One(p.id.clone()),
-    )
-    .await
-    .unwrap();
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+    let summary = refresh::run(&ctx, RefreshTarget::One(p.id.clone()))
+        .await
+        .unwrap();
     assert_eq!(summary.processed, 0);
     assert!(old.exists());
     assert!(!library.join("he2016deep.pdf").exists());

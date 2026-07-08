@@ -4,7 +4,7 @@ use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
 use xuewen::models::{Authors, PaperMeta, PaperStatus};
-use xuewen::pipeline::{ingest_file, Libraries, Outcome};
+use xuewen::pipeline::{IngestCtx, Libraries, Outcome};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
 
@@ -33,15 +33,18 @@ async fn ingests_pdf_and_dedups() {
     let pool = db::connect(&url).await.unwrap();
     let mock = MockServer::start().await;
     let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
     // First ingest: stored, filed, moved.
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -65,9 +68,7 @@ async fn ingests_pdf_and_dedups() {
 
     // Re-ingest identical content (from processed copy) -> Duplicate.
     let again = processed.join("paper.pdf");
-    let out2 = ingest_file(&pool, &dirs, &resolver, None, &again)
-        .await
-        .unwrap();
+    let out2 = ctx.ingest_file(&again).await.unwrap();
     assert_eq!(out2, Outcome::Duplicate);
 }
 
@@ -89,20 +90,23 @@ async fn same_doi_different_bytes_errors_without_orphan() {
     let pool = db::connect(&url).await.unwrap();
     let mock = MockServer::start().await;
     let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
     // First ingests fine.
-    let out = ingest_file(&pool, &dirs, &resolver, None, &a)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&a).await.unwrap();
     assert!(matches!(out, Outcome::Ingested(_)));
 
     // Second: same DOI, different bytes. Content-hash dedup passes, then the
     // doi UNIQUE constraint rejects it -> Err, and NO orphan file remains.
-    let res = ingest_file(&pool, &dirs, &resolver, None, &b).await;
+    let res = ctx.ingest_file(&b).await;
     assert!(
         res.is_err(),
         "expected a UNIQUE-constraint error on duplicate DOI"
@@ -146,14 +150,17 @@ async fn ingest_with_doi_resolves_via_crossref() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -198,14 +205,17 @@ async fn ingest_with_arxiv_resolves_via_api() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -254,14 +264,17 @@ async fn ingest_without_identifier_resolves_via_dblp() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -311,14 +324,17 @@ async fn grobid_title_drives_dblp_resolution() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: Some(grobid),
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, Some(&grobid), &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -363,14 +379,17 @@ async fn grobid_enriches_needs_review_when_unmatched() {
 
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: Some(grobid),
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, Some(&grobid), &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -432,13 +451,16 @@ async fn colliding_cite_key_gets_letter_suffix() {
     };
     db::insert_paper(&pool, &seed).await.unwrap();
 
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -469,14 +491,17 @@ async fn reingesting_a_trashed_paper_is_still_duplicate() {
     let pool = db::connect(&url).await.unwrap();
     let mock = MockServer::start().await;
     let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
-    let dirs = Libraries {
-        library_root: library.clone(),
-        processed_dir: processed.clone(),
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver,
+        grobid: None,
     };
 
-    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
-        .await
-        .unwrap();
+    let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
         Outcome::Duplicate => panic!("expected Ingested"),
@@ -485,8 +510,6 @@ async fn reingesting_a_trashed_paper_is_still_duplicate() {
 
     // Dedup is by content_hash, and the trashed row still holds it → Duplicate.
     let again = processed.join("paper.pdf");
-    let out2 = ingest_file(&pool, &dirs, &resolver, None, &again)
-        .await
-        .unwrap();
+    let out2 = ctx.ingest_file(&again).await.unwrap();
     assert_eq!(out2, Outcome::Duplicate);
 }

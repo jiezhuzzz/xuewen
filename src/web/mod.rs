@@ -11,16 +11,12 @@ use axum::routing::get;
 use axum::Router;
 use sqlx::SqlitePool;
 
-use crate::pipeline::Libraries;
-use crate::resolve::grobid::Grobid;
-use crate::resolve::Resolver;
+use crate::pipeline::IngestCtx;
 
 /// Everything the web import handler needs to run the ingest pipeline. Held
 /// behind an `Arc` in `AppState` because `Resolver`/`Grobid` are not `Clone`.
 pub struct Ingest {
-    pub resolver: Resolver,
-    pub grobid: Option<Grobid>,
-    pub dirs: Libraries,
+    pub ctx: IngestCtx,
     /// Where uploaded bytes are written before ingest (`inbox_dir/_uploads`).
     pub staging_dir: PathBuf,
 }

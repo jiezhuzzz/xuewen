@@ -4,7 +4,7 @@ use axum_test::multipart::{MultipartForm, Part};
 use axum_test::TestServer;
 use xuewen::db;
 use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
-use xuewen::pipeline::Libraries;
+use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::resolve::Resolver;
 use xuewen::web::{build_router, build_router_with_ingest, Ingest};
 
@@ -213,11 +213,14 @@ async fn imports_a_pdf_dedups_and_rejects_non_pdf() {
     .with_dblp_base("http://127.0.0.1:1".to_string());
 
     let ingest = std::sync::Arc::new(Ingest {
-        resolver,
-        grobid: None,
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: inbox.join("_processed"),
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
         },
         staging_dir: inbox.join("_uploads"),
     });
@@ -287,11 +290,14 @@ async fn import_sanitizes_traversal_filenames() {
     .unwrap()
     .with_dblp_base("http://127.0.0.1:1".to_string());
     let ingest = std::sync::Arc::new(Ingest {
-        resolver,
-        grobid: None,
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: inbox.join("_processed"),
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
         },
         staging_dir: inbox.join("_uploads"),
     });

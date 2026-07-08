@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::dto::{PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
-use crate::pipeline::{ingest_file, Outcome};
+use crate::pipeline::Outcome;
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -120,15 +120,7 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             return internal_error();
         }
 
-        return match ingest_file(
-            &app.pool,
-            &ingest.dirs,
-            &ingest.resolver,
-            ingest.grobid.as_ref(),
-            &staged,
-        )
-        .await
-        {
+        return match ingest.ctx.ingest_file(&staged).await {
             Ok(Outcome::Ingested(id)) => {
                 // Look up the fresh row so the UI can show title + resolved/needs_review.
                 let (title, status) = match db::get_by_id(&app.pool, &id).await {

@@ -3,7 +3,7 @@ mod common;
 use std::time::Duration;
 
 use xuewen::db;
-use xuewen::pipeline::Libraries;
+use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::resolve::Resolver;
 
 // Upstreams refuse instantly -> lookups degrade to Unresolved (offline, fast).
@@ -44,12 +44,16 @@ async fn watcher_catches_up_and_watches_new_files() {
     let db_url = url.clone();
     let handle = tokio::spawn(async move {
         let pool = db::connect(&db_url).await.unwrap();
-        let dirs = Libraries {
-            library_root: inbox_for_task.parent().unwrap().join("library"),
-            processed_dir: inbox_for_task.join("_processed"),
+        let ctx = IngestCtx {
+            pool,
+            dirs: Libraries {
+                library_root: inbox_for_task.parent().unwrap().join("library"),
+                processed_dir: inbox_for_task.join("_processed"),
+            },
+            resolver: offline_resolver(),
+            grobid: None,
         };
-        let resolver = offline_resolver();
-        let _ = xuewen::watcher::run(&pool, &dirs, &resolver, None, &inbox_for_task).await;
+        let _ = xuewen::watcher::run(&ctx, &inbox_for_task).await;
     });
 
     // Give the watcher time to finish catch-up and start watching, then drop a

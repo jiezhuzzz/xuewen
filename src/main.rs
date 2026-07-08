@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use xuewen::config::Config;
 use xuewen::db;
-use xuewen::pipeline::{ingest_file, Libraries, Outcome};
+use xuewen::pipeline::{IngestCtx, Libraries, Outcome};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
@@ -94,16 +94,20 @@ async fn main() -> Result<()> {
         library_root: cfg.library_root.clone(),
         processed_dir: cfg.inbox_dir.join("_processed"),
     };
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs,
+        resolver,
+        grobid,
+    };
 
     match cli.command {
-        Command::Ingest { path } => {
-            match ingest_file(&pool, &dirs, &resolver, grobid.as_ref(), &path).await? {
-                Outcome::Ingested(id) => println!("ingested {id}"),
-                Outcome::Duplicate => println!("duplicate, skipped"),
-            }
-        }
+        Command::Ingest { path } => match ctx.ingest_file(&path).await? {
+            Outcome::Ingested(id) => println!("ingested {id}"),
+            Outcome::Duplicate => println!("duplicate, skipped"),
+        },
         Command::Watch => {
-            xuewen::watcher::run(&pool, &dirs, &resolver, grobid.as_ref(), &cfg.inbox_dir).await?;
+            xuewen::watcher::run(&ctx, &cfg.inbox_dir).await?;
         }
         Command::Refresh { id, all } => {
             let target = match (id, all) {
@@ -111,14 +115,7 @@ async fn main() -> Result<()> {
                 (None, true) => RefreshTarget::All,
                 (None, false) => RefreshTarget::NeedsReview,
             };
-            let summary = refresh::run(
-                &pool,
-                &dirs.library_root,
-                &resolver,
-                grobid.as_ref(),
-                target,
-            )
-            .await?;
+            let summary = refresh::run(&ctx, target).await?;
             println!(
                 "refresh: {} processed, {} re-resolved, {} re-filed",
                 summary.processed, summary.reresolved, summary.refiled
@@ -126,9 +123,7 @@ async fn main() -> Result<()> {
         }
         Command::Serve { host, port } => {
             let ingest = std::sync::Arc::new(web::Ingest {
-                resolver,
-                grobid,
-                dirs,
+                ctx,
                 staging_dir: cfg.inbox_dir.join("_uploads"),
             });
             web::serve(&host, port, pool, cfg.library_root.clone(), ingest).await?;
