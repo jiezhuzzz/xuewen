@@ -1,8 +1,10 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 
 use super::dto::{PaperDetail, PaperSummary, Stats};
 use super::AppState;
@@ -56,6 +58,38 @@ pub async fn stats(State(app): State<AppState>) -> Response {
         .into_response(),
         Err(e) => {
             tracing::error!("stats: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// Stream a paper's PDF from the library. Range-aware (via `ServeFile`) and
+/// path-safe: the resolved file must live under `library_root`.
+pub async fn pdf(State(app): State<AppState>, Path(id): Path<String>, req: Request) -> Response {
+    let paper = match db::get_by_id(&app.pool, &id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::error!("pdf lookup: {e}");
+            return internal_error();
+        }
+    };
+    let path = app.library_root.join(&paper.rel_path);
+    // Defense in depth: the canonical file must live under the library root.
+    let under_root = match (
+        std::fs::canonicalize(&path),
+        std::fs::canonicalize(&app.library_root),
+    ) {
+        (Ok(file), Ok(root)) => file.starts_with(&root),
+        _ => false, // missing file or unresolvable path
+    };
+    if !under_root {
+        return not_found();
+    }
+    match ServeFile::new(&path).oneshot(req).await {
+        Ok(resp) => resp.map(axum::body::Body::new).into_response(),
+        Err(e) => {
+            tracing::error!("serve pdf: {e}");
             internal_error()
         }
     }

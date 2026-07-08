@@ -1,3 +1,5 @@
+mod common;
+
 use axum_test::TestServer;
 use xuewen::db;
 use xuewen::models::Paper;
@@ -81,4 +83,55 @@ async fn lists_and_details_papers() {
     assert_eq!(s["total"], 2);
     assert_eq!(s["resolved"], 1);
     assert_eq!(s["needs_review"], 1);
+}
+
+#[tokio::test]
+async fn streams_pdf_with_range_and_guards_paths() {
+    let (dir, pool) = temp_pool().await;
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+
+    // A real paper whose PDF exists inside the library.
+    let mut ok = paper("cccc3333", "A Paper", "resolved");
+    ok.rel_path = "cccc3333.pdf".into();
+    common::write_test_pdf(&library.join("cccc3333.pdf"), &["Hello PDF"]);
+    db::insert_paper(&pool, &ok).await.unwrap();
+
+    // A rogue record whose rel_path escapes the library.
+    let mut escape = paper("dddd4444", "Escape", "resolved");
+    escape.rel_path = "../outside.pdf".into();
+    std::fs::write(dir.path().join("outside.pdf"), b"secret").unwrap();
+    db::insert_paper(&pool, &escape).await.unwrap();
+
+    let server = TestServer::new(build_router(pool, library.clone())).unwrap();
+
+    // Full GET → 200, application/pdf.
+    let resp = server.get("/papers/cccc3333/pdf").await;
+    resp.assert_status_ok();
+    assert_eq!(
+        resp.header("content-type").to_str().unwrap(),
+        "application/pdf"
+    );
+    let full_len = resp.as_bytes().len();
+    assert!(full_len > 0);
+
+    // Range request → 206 Partial Content, 100 bytes.
+    let resp = server
+        .get("/papers/cccc3333/pdf")
+        .add_header(axum::http::header::RANGE, "bytes=0-99")
+        .await;
+    resp.assert_status(axum::http::StatusCode::PARTIAL_CONTENT);
+    assert_eq!(resp.as_bytes().len(), 100);
+
+    // Missing id → 404.
+    server
+        .get("/papers/zzzz9999/pdf")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // Path-escaping record → 404 (guard rejects it, does NOT serve outside file).
+    server
+        .get("/papers/dddd4444/pdf")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
 }

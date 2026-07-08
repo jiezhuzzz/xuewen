@@ -23,6 +23,7 @@ pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
         .route("/api/papers", get(api::list_papers))
         .route("/api/papers/{id}", get(api::get_paper))
         .route("/api/stats", get(api::stats))
+        .route("/papers/{id}/pdf", get(api::pdf))
         .fallback(assets::static_handler)
         .with_state(state)
 }
