@@ -1,4 +1,4 @@
-import type { Filters, PaperDetail, PaperSummary, Stats } from './types';
+import type { Filters, ImportResult, PaperDetail, PaperSummary, Stats } from './types';
 
 export async function listPapers(f: Filters): Promise<PaperSummary[]> {
   const params = new URLSearchParams();
@@ -29,4 +29,21 @@ export function pdfUrl(id: string): string {
 export async function deletePaper(id: string): Promise<void> {
   const res = await fetch(`/api/papers/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+}
+
+export async function importPaper(file: File): Promise<ImportResult> {
+  const body = new FormData();
+  body.append('file', file, file.name);
+  const res = await fetch('/api/papers', { method: 'POST', body });
+  if (!res.ok) {
+    let msg = `import failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j && typeof j.error === 'string') msg = j.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg);
+  }
+  return res.json();
 }

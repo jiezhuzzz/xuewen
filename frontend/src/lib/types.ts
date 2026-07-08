@@ -32,3 +32,7 @@ export interface Filters {
   status: StatusFilter;
   sort: Sort;
 }
+
+export type ImportResult =
+  | { outcome: 'ingested'; id: string; title: string | null; status: string }
+  | { outcome: 'duplicate' };
