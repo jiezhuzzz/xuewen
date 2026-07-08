@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Library, Moon, PanelLeft, Sun } from 'lucide-svelte';
-  import { stats, theme, toggleSidebar, toggleTheme } from '../lib/state.svelte';
+  import { Library, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
+  import { openImport, stats, theme, toggleSidebar, toggleTheme } from '../lib/state.svelte';
 </script>
 
 <header class="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
@@ -24,6 +24,13 @@
         <span class="text-amber-600 dark:text-amber-400">{stats.value.needs_review} to review</span>
       </div>
     {/if}
+    <button
+      type="button"
+      onclick={openImport}
+      class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+    >
+      <Upload size={16} /> Import
+    </button>
     <button
       type="button"
       onclick={toggleTheme}
