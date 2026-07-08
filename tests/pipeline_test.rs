@@ -47,7 +47,7 @@ async fn ingests_pdf_and_dedups() {
     let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
@@ -73,7 +73,7 @@ async fn ingests_pdf_and_dedups() {
 }
 
 #[tokio::test]
-async fn same_doi_different_bytes_errors_without_orphan() {
+async fn same_doi_different_bytes_reports_same_work() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
@@ -89,37 +89,32 @@ async fn same_doi_different_bytes_errors_without_orphan() {
     let url = format!("sqlite:{}", dir.path().join("library.db").display());
     let pool = db::connect(&url).await.unwrap();
     let mock = MockServer::start().await;
-    let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
         dirs: Libraries {
             library_root: library.clone(),
             processed_dir: processed.clone(),
         },
-        resolver,
+        resolver: Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap(),
         grobid: None,
     };
 
-    // First ingests fine.
-    let out = ctx.ingest_file(&a).await.unwrap();
-    assert!(matches!(out, Outcome::Ingested(_)));
+    let id_a = match ctx.ingest_file(&a).await.unwrap() {
+        Outcome::Ingested(id) => id,
+        other => panic!("expected Ingested, got {other:?}"),
+    };
 
-    // Second: same DOI, different bytes. Content-hash dedup passes, then the
-    // doi UNIQUE constraint rejects it -> Err, and NO orphan file remains.
-    let res = ctx.ingest_file(&b).await;
-    assert!(
-        res.is_err(),
-        "expected a UNIQUE-constraint error on duplicate DOI"
+    // Same DOI, different bytes → reported as the same work; file archived.
+    let out = ctx.ingest_file(&b).await.unwrap();
+    assert_eq!(out, Outcome::SameWork(id_a));
+    assert_eq!(
+        std::fs::read_dir(library.join("_unsorted"))
+            .unwrap()
+            .count(),
+        1
     );
-
-    // Library holds exactly one PDF (paper A); paper B's copy was cleaned up.
-    let count = std::fs::read_dir(library.join("_unsorted"))
-        .unwrap()
-        .count();
-    assert_eq!(count, 1, "library should contain only paper A, no orphan");
-
-    // b.pdf was not moved (ingest errored before the move step).
-    assert!(b.exists());
+    assert!(!b.exists());
+    assert!(processed.join("b.pdf").exists());
 }
 
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
@@ -163,7 +158,7 @@ async fn ingest_with_doi_resolves_via_crossref() {
     let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
@@ -218,7 +213,7 @@ async fn ingest_with_arxiv_resolves_via_api() {
     let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
@@ -277,7 +272,7 @@ async fn ingest_without_identifier_resolves_via_dblp() {
     let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
@@ -337,7 +332,7 @@ async fn grobid_title_drives_dblp_resolution() {
     let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
     // DBLP matched (its title fuzzily matches the GROBID title) -> resolved via dblp.
@@ -392,7 +387,7 @@ async fn grobid_enriches_needs_review_when_unmatched() {
     let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
     assert_eq!(paper.meta.status, PaperStatus::NeedsReview);
@@ -463,7 +458,7 @@ async fn colliding_cite_key_gets_letter_suffix() {
     let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgata"));
@@ -471,7 +466,7 @@ async fn colliding_cite_key_gets_letter_suffix() {
 }
 
 #[tokio::test]
-async fn reingesting_a_trashed_paper_is_still_duplicate() {
+async fn reingesting_a_trashed_paper_reports_in_trash() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
@@ -504,12 +499,49 @@ async fn reingesting_a_trashed_paper_is_still_duplicate() {
     let out = ctx.ingest_file(&pdf_path).await.unwrap();
     let id = match out {
         Outcome::Ingested(id) => id,
-        Outcome::Duplicate => panic!("expected Ingested"),
+        other => panic!("expected Ingested, got {other:?}"),
     };
     db::soft_delete(&pool, &id).await.unwrap();
 
-    // Dedup is by content_hash, and the trashed row still holds it → Duplicate.
+    // Dedup is by content_hash, and the trashed row still holds it → InTrash.
     let again = processed.join("paper.pdf");
     let out2 = ctx.ingest_file(&again).await.unwrap();
-    assert_eq!(out2, Outcome::Duplicate);
+    assert_eq!(out2, Outcome::InTrash(id));
+}
+
+#[tokio::test]
+async fn same_doi_of_trashed_paper_reports_in_trash() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    let processed = inbox.join("_processed");
+    std::fs::create_dir_all(&inbox).unwrap();
+
+    let doi_line = "https://doi.org/10.1000/xyz123";
+    let a = inbox.join("a.pdf");
+    let b = inbox.join("b.pdf");
+    common::write_test_pdf(&a, &["Paper A Title", doi_line]);
+    common::write_test_pdf(&b, &["Paper B Different Title", doi_line]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let mock = MockServer::start().await;
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver: Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap(),
+        grobid: None,
+    };
+
+    let id_a = match ctx.ingest_file(&a).await.unwrap() {
+        Outcome::Ingested(id) => id,
+        other => panic!("expected Ingested, got {other:?}"),
+    };
+    db::soft_delete(&pool, &id_a).await.unwrap();
+
+    let out = ctx.ingest_file(&b).await.unwrap();
+    assert_eq!(out, Outcome::InTrash(id_a));
 }

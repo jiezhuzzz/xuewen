@@ -105,6 +105,8 @@ async fn main() -> Result<()> {
         Command::Ingest { path } => match ctx.ingest_file(&path).await? {
             Outcome::Ingested(id) => println!("ingested {id}"),
             Outcome::Duplicate => println!("duplicate, skipped"),
+            Outcome::SameWork(id) => println!("already in library ({id})"),
+            Outcome::InTrash(id) => println!("in trash ({id})"),
         },
         Command::Watch => {
             xuewen::watcher::run(&ctx, &cfg.inbox_dir).await?;

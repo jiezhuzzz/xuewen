@@ -18,7 +18,9 @@ pub struct Libraries {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     Ingested(String), // new paper id
-    Duplicate,
+    Duplicate,        // same bytes as an active paper
+    SameWork(String), // same DOI/arXiv id as an active paper → its id
+    InTrash(String),  // same bytes or identifier as a trashed paper → its id
 }
 
 /// The raw inputs a resolution produces from a stored PDF, shared by ingest and
@@ -49,10 +51,14 @@ impl IngestCtx {
             tokio::task::spawn_blocking(move || hash::sha256_file(&p)).await??
         };
 
-        // 2. Dedup.
-        if db::find_by_hash(&self.pool, &content_hash).await?.is_some() {
+        // 2. Dedup by content (active → Duplicate, trashed → InTrash).
+        if let Some(existing) = db::find_by_hash(&self.pool, &content_hash).await? {
             move_to(&path, &self.dirs.processed_dir)?;
-            return Ok(Outcome::Duplicate);
+            return Ok(if existing.deleted_at.is_some() {
+                Outcome::InTrash(existing.id)
+            } else {
+                Outcome::Duplicate
+            });
         }
 
         // 3. Extract, identify, optionally GROBID, and resolve (factored for reuse).
@@ -65,6 +71,23 @@ impl IngestCtx {
 
         // 4. Decide the stored fields, then the cite-key filename.
         let fields = resolve_fields(provisional_title, extracted, &ident, resolution);
+
+        // 4b. A different file of a work we already have (same DOI/arXiv id)?
+        if let Some(existing) = db::find_by_identifier(
+            &self.pool,
+            fields.doi.as_deref(),
+            fields.arxiv_id.as_deref(),
+        )
+        .await?
+        {
+            move_to(&path, &self.dirs.processed_dir)?;
+            return Ok(if existing.deleted_at.is_some() {
+                Outcome::InTrash(existing.id)
+            } else {
+                Outcome::SameWork(existing.id)
+            });
+        }
+
         let cite_key =
             match naming::cite_key_base(&fields.authors.0, fields.year, fields.title.as_deref()) {
                 Some(base) => {

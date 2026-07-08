@@ -141,6 +141,14 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             Ok(Outcome::Duplicate) => {
                 Json(serde_json::json!({"outcome": "duplicate"})).into_response()
             }
+            // TODO(Task 10): surface richer same-work/in-trash responses (e.g. the
+            // existing paper's title) once the frontend is updated to handle them.
+            Ok(Outcome::SameWork(id)) => {
+                Json(serde_json::json!({"outcome": "same_work", "id": id})).into_response()
+            }
+            Ok(Outcome::InTrash(id)) => {
+                Json(serde_json::json!({"outcome": "in_trash", "id": id})).into_response()
+            }
             Err(e) => {
                 tracing::error!("import ingest: {e}");
                 // On error the pipeline did not move the original — clean it up.
