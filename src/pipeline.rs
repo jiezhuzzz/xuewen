@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::models::{Authors, Identifier, Paper, PaperMeta, PaperStatus};
 use crate::naming;
 use crate::resolve::grobid::Grobid;
-use crate::resolve::{Resolution, ResolvedMetadata, Resolver};
+use crate::resolve::{ResolvedMetadata, Resolver};
 use crate::{db, hash, identify, pdf};
 
 /// Directories the pipeline manages.
@@ -27,7 +27,7 @@ pub(crate) struct ResolveInputs {
     pub(crate) ident: Identifier,
     pub(crate) provisional_title: Option<String>,
     pub(crate) extracted: Option<ResolvedMetadata>,
-    pub(crate) resolution: Resolution,
+    pub(crate) resolution: Option<ResolvedMetadata>,
 }
 
 /// Everything the ingest/refresh pipeline needs; built once in `main`.
@@ -96,7 +96,7 @@ impl IngestCtx {
 
     /// Extract first-page text, identify a DOI/arXiv id, optionally enrich via GROBID
     /// (title-only path), and resolve authoritative metadata. Degrades to
-    /// `Resolution::Unresolved` on any resolver/network failure — never aborts.
+    /// `None` on any resolver/network failure — never aborts.
     pub(crate) async fn resolve_pdf(&self, path: &Path) -> Result<ResolveInputs> {
         // Extract first-page text (blocking IO off the async runtime) and identify.
         let text = {
@@ -142,7 +142,7 @@ pub(crate) fn resolve_fields(
     provisional_title: Option<String>,
     extracted: Option<ResolvedMetadata>,
     ident: &Identifier,
-    resolution: Resolution,
+    resolution: Option<ResolvedMetadata>,
 ) -> PaperMeta {
     let (ext_doi, ext_arxiv) = match ident {
         Identifier::Doi(d) => (Some(d.clone()), None),
@@ -150,7 +150,7 @@ pub(crate) fn resolve_fields(
         Identifier::None => (None, None),
     };
     match resolution {
-        Resolution::Resolved(md) => {
+        Some(md) => {
             let abstract_text = md
                 .abstract_text
                 .or_else(|| extracted.and_then(|g| g.abstract_text));
@@ -168,7 +168,7 @@ pub(crate) fn resolve_fields(
                 status: PaperStatus::Resolved,
             }
         }
-        Resolution::Unresolved => match extracted {
+        None => match extracted {
             Some(g) => PaperMeta {
                 title: g.title.or(provisional_title),
                 abstract_text: g.abstract_text,

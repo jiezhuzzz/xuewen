@@ -18,11 +18,6 @@ pub fn title_similarity(a: &str, b: &str) -> f64 {
     normalized_levenshtein(&normalize_title(a), &normalize_title(b))
 }
 
-/// Whether `candidate` is a confident title match for `query`.
-pub fn is_confident_match(query: &str, candidate: &str) -> bool {
-    title_similarity(query, candidate) >= MATCH_THRESHOLD
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,18 +31,19 @@ mod tests {
     }
 
     #[test]
-    fn identical_titles_are_confident() {
+    fn identical_titles_clear_the_threshold() {
         let q = "KGAT: Knowledge Graph Attention Network for Recommendation";
         let c = "KGAT: Knowledge Graph Attention Network for Recommendation.";
-        assert!(title_similarity(q, c) > 0.95);
-        assert!(is_confident_match(q, c));
+        assert!(title_similarity(q, c) >= MATCH_THRESHOLD);
     }
 
     #[test]
-    fn unrelated_titles_are_not_confident() {
-        assert!(!is_confident_match(
-            "Deep Residual Learning for Image Recognition",
-            "Attention Is All You Need"
-        ));
+    fn unrelated_titles_fall_below_the_threshold() {
+        assert!(
+            title_similarity(
+                "Deep Residual Learning for Image Recognition",
+                "Attention Is All You Need"
+            ) < MATCH_THRESHOLD
+        );
     }
 }
