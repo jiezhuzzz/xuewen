@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use sqlx::SqlitePool;
 use std::path::Path;
 
@@ -40,7 +40,7 @@ pub async fn run(
     let (papers, reresolve_all) = match target {
         RefreshTarget::NeedsReview => (db::all_papers(pool).await?, false),
         RefreshTarget::All => (db::all_papers(pool).await?, true),
-        RefreshTarget::One(id) => (vec![find_one(pool, &id).await?], true),
+        RefreshTarget::One(id) => (vec![db::find_one(pool, &id).await?], true),
     };
 
     let mut summary = RefreshSummary::default();
@@ -144,17 +144,4 @@ async fn refresh_one(
 
     db::update_paper(pool, paper).await?;
     Ok(outcome)
-}
-
-/// Resolve a paper by exact id, else by unique id prefix.
-async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
-    if let Some(p) = db::get_by_id(pool, id).await? {
-        return Ok(p);
-    }
-    let mut matches = db::find_by_id_prefix(pool, id).await?;
-    match matches.len() {
-        0 => bail!("no paper with id or prefix {id:?}"),
-        1 => Ok(matches.pop().unwrap()),
-        n => bail!("ambiguous id prefix {id:?} matches {n} papers"),
-    }
 }

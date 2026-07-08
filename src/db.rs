@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::QueryBuilder;
 use sqlx::SqlitePool;
@@ -125,9 +125,11 @@ pub async fn update_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
 
 /// Every paper, oldest first.
 pub async fn all_papers(pool: &SqlitePool) -> Result<Vec<Paper>> {
-    let papers = sqlx::query_as::<_, Paper>("SELECT * FROM papers ORDER BY added_at")
-        .fetch_all(pool)
-        .await?;
+    let papers = sqlx::query_as::<_, Paper>(
+        "SELECT * FROM papers WHERE deleted_at IS NULL ORDER BY added_at",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(papers)
 }
 
@@ -141,6 +143,50 @@ pub async fn find_by_id_prefix(pool: &SqlitePool, prefix: &str) -> Result<Vec<Pa
     Ok(papers)
 }
 
+/// Mark a paper as trashed (soft-delete). Returns true if a row was newly
+/// trashed (false if it didn't exist or was already trashed).
+pub async fn soft_delete(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let ts = chrono::Utc::now().to_rfc3339();
+    let res = sqlx::query("UPDATE papers SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+        .bind(ts)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Every trashed paper, oldest-trashed first.
+pub async fn trashed_papers(pool: &SqlitePool) -> Result<Vec<Paper>> {
+    let papers = sqlx::query_as::<_, Paper>(
+        "SELECT * FROM papers WHERE deleted_at IS NOT NULL ORDER BY deleted_at",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(papers)
+}
+
+/// Permanently remove a paper row (the caller removes the PDF file).
+pub async fn delete_row(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM papers WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Find a paper by exact id, else by unique id prefix (active or trashed).
+pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
+    if let Some(p) = get_by_id(pool, id).await? {
+        return Ok(p);
+    }
+    let mut matches = find_by_id_prefix(pool, id).await?;
+    match matches.len() {
+        0 => bail!("no paper with id or prefix {id:?}"),
+        1 => Ok(matches.pop().unwrap()),
+        n => bail!("ambiguous id prefix {id:?} matches {n} papers"),
+    }
+}
+
 /// List papers with optional case-insensitive search (`q` over title+authors),
 /// optional status filter, and a whitelisted sort. Unknown status/sort values
 /// are ignored (never an error).
@@ -150,21 +196,18 @@ pub async fn list_papers(
     status: Option<&str>,
     sort: Option<&str>,
 ) -> Result<Vec<Paper>> {
-    let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("SELECT * FROM papers");
-    let mut has_where = false;
+    let mut qb: QueryBuilder<sqlx::Sqlite> =
+        QueryBuilder::new("SELECT * FROM papers WHERE deleted_at IS NULL");
     if let Some(term) = q.map(str::trim).filter(|s| !s.is_empty()) {
         let like = format!("%{term}%");
-        qb.push(" WHERE (title LIKE ")
+        qb.push(" AND (title LIKE ")
             .push_bind(like.clone())
             .push(" OR authors LIKE ")
             .push_bind(like)
             .push(")");
-        has_where = true;
     }
     if let Some(st) = status.filter(|s| matches!(*s, "resolved" | "needs_review")) {
-        qb.push(if has_where { " AND " } else { " WHERE " })
-            .push("status = ")
-            .push_bind(st.to_string());
+        qb.push(" AND status = ").push_bind(st.to_string());
     }
     // Whitelisted ORDER BY (never interpolate raw user input).
     let order = match sort {
@@ -184,7 +227,7 @@ pub async fn stats(pool: &SqlitePool) -> Result<(i64, i64, i64)> {
         "SELECT COUNT(*), \
          COALESCE(SUM(status = 'resolved'), 0), \
          COALESCE(SUM(status = 'needs_review'), 0) \
-         FROM papers",
+         FROM papers WHERE deleted_at IS NULL",
     )
     .fetch_one(pool)
     .await?;
@@ -437,5 +480,40 @@ mod tests {
                 .as_deref(),
             Some("2026-07-07T12:00:00Z")
         );
+    }
+
+    #[tokio::test]
+    async fn soft_delete_hides_and_purge_removes() {
+        let (_dir, pool) = temp_pool().await;
+        let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
+        a.status = PaperStatus::Resolved.as_str().to_string();
+        let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
+        insert_paper(&pool, &a).await.unwrap();
+        insert_paper(&pool, &b).await.unwrap();
+
+        // Soft-delete a: hidden from list/stats/all_papers; b remains.
+        assert!(soft_delete(&pool, &a.id).await.unwrap());
+        assert!(!soft_delete(&pool, &a.id).await.unwrap()); // idempotent: already trashed
+        let listed = list_papers(&pool, None, None, None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, b.id);
+        assert_eq!(stats(&pool).await.unwrap().0, 1); // total counts only active
+        assert_eq!(all_papers(&pool).await.unwrap().len(), 1);
+
+        // trashed_papers sees a.
+        let trashed = trashed_papers(&pool).await.unwrap();
+        assert_eq!(trashed.len(), 1);
+        assert_eq!(trashed[0].id, a.id);
+
+        // find_one still resolves a trashed paper (by prefix), and get_by_id sees it.
+        let found = find_one(&pool, "01890000-0000-7000-8000-0000000000a")
+            .await
+            .unwrap();
+        assert_eq!(found.id, a.id);
+
+        // purge (delete_row) removes it entirely.
+        delete_row(&pool, &a.id).await.unwrap();
+        assert!(get_by_id(&pool, &a.id).await.unwrap().is_none());
+        assert!(trashed_papers(&pool).await.unwrap().is_empty());
     }
 }
