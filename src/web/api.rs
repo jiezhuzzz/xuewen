@@ -1,14 +1,17 @@
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::multipart::MultipartError;
+use axum::extract::{Multipart, Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
+use uuid::Uuid;
 
 use super::dto::{PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
+use crate::pipeline::{ingest_file, Outcome};
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -64,6 +67,96 @@ pub async fn delete_paper(State(app): State<AppState>, Path(id): Path<String>) -
             tracing::error!("delete_paper lookup: {e}");
             internal_error()
         }
+    }
+}
+
+/// Import a single uploaded PDF: validate, stage into `inbox_dir/_uploads`, and
+/// run the ingest pipeline. One PDF per request (the frontend uploads files one
+/// at a time). Returns `ingested` (with title/status), `duplicate`, or an error.
+pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart) -> Response {
+    let ingest = match &app.ingest {
+        Some(i) => i.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "import not configured"})),
+            )
+                .into_response()
+        }
+    };
+
+    // Take the first file part; skip any non-file fields.
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => return bad_request("no file"),
+            Err(e) => return multipart_error(e),
+        };
+        let Some(filename) = field.file_name().map(|s| s.to_string()) else {
+            continue;
+        };
+        let data = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => return multipart_error(e),
+        };
+        if !data.starts_with(b"%PDF") {
+            return bad_request("not a PDF");
+        }
+
+        // Stage the bytes under a sanitized, collision-safe name.
+        let stem = std::path::Path::new(&filename)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("upload.pdf");
+        let staged = ingest
+            .staging_dir
+            .join(format!("{}-{stem}", Uuid::now_v7()));
+        if let Err(e) = std::fs::create_dir_all(&ingest.staging_dir) {
+            tracing::error!("import staging dir: {e}");
+            return internal_error();
+        }
+        if let Err(e) = std::fs::write(&staged, data.as_ref()) {
+            tracing::error!("import stage write: {e}");
+            return internal_error();
+        }
+
+        return match ingest_file(
+            &app.pool,
+            &ingest.dirs,
+            &ingest.resolver,
+            ingest.grobid.as_ref(),
+            &staged,
+        )
+        .await
+        {
+            Ok(Outcome::Ingested(id)) => {
+                // Look up the fresh row so the UI can show title + resolved/needs_review.
+                let (title, status) = match db::get_by_id(&app.pool, &id).await {
+                    Ok(Some(p)) => (serde_json::json!(p.title), p.status),
+                    _ => (serde_json::Value::Null, "needs_review".to_string()),
+                };
+                Json(serde_json::json!({
+                    "outcome": "ingested",
+                    "id": id,
+                    "title": title,
+                    "status": status,
+                }))
+                .into_response()
+            }
+            Ok(Outcome::Duplicate) => {
+                Json(serde_json::json!({"outcome": "duplicate"})).into_response()
+            }
+            Err(e) => {
+                tracing::error!("import ingest: {e}");
+                // On error the pipeline did not move the original — clean it up.
+                let _ = std::fs::remove_file(&staged);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "import failed"})),
+                )
+                    .into_response()
+            }
+        };
     }
 }
 
@@ -126,6 +219,27 @@ pub(super) fn internal_error() -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(serde_json::json!({"error": "internal error"})),
+    )
+        .into_response()
+}
+
+pub(super) fn bad_request(msg: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": msg })),
+    )
+        .into_response()
+}
+
+/// Map a multipart read error to its proper status (e.g. 413 when the body
+/// exceeds the limit) with a JSON body.
+fn multipart_error(e: MultipartError) -> Response {
+    let status = e.status();
+    (
+        status,
+        Json(serde_json::json!({
+            "error": status.canonical_reason().unwrap_or("upload error").to_lowercase()
+        })),
     )
         .into_response()
 }

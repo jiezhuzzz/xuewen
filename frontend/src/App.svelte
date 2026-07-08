@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import EmptyState from './components/EmptyState.svelte';
+  import ImportModal from './components/ImportModal.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
   import PdfViewer from './components/PdfViewer.svelte';
   import Sidebar from './components/Sidebar.svelte';
@@ -36,3 +37,4 @@
     </main>
   </div>
 </div>
+{#if ui.importOpen}<ImportModal />{/if}
