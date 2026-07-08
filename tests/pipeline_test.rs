@@ -437,3 +437,46 @@ async fn colliding_cite_key_gets_letter_suffix() {
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgata"));
     assert!(library.join("wang2019kgata.pdf").exists());
 }
+
+#[tokio::test]
+async fn reingesting_a_trashed_paper_is_still_duplicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    let processed = inbox.join("_processed");
+    std::fs::create_dir_all(&inbox).unwrap();
+
+    let pdf_path = inbox.join("paper.pdf");
+    common::write_test_pdf(
+        &pdf_path,
+        &[
+            "Attention Is All You Need",
+            "https://doi.org/10.1145/3292500.3330701",
+        ],
+    );
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let mock = MockServer::start().await;
+    let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
+    let dirs = Libraries {
+        library_root: library.clone(),
+        processed_dir: processed.clone(),
+    };
+
+    let out = ingest_file(&pool, &dirs, &resolver, None, &pdf_path)
+        .await
+        .unwrap();
+    let id = match out {
+        Outcome::Ingested(id) => id,
+        Outcome::Duplicate => panic!("expected Ingested"),
+    };
+    db::soft_delete(&pool, &id).await.unwrap();
+
+    // Dedup is by content_hash, and the trashed row still holds it → Duplicate.
+    let again = processed.join("paper.pdf");
+    let out2 = ingest_file(&pool, &dirs, &resolver, None, &again)
+        .await
+        .unwrap();
+    assert_eq!(out2, Outcome::Duplicate);
+}

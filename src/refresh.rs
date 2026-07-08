@@ -40,7 +40,14 @@ pub async fn run(
     let (papers, reresolve_all) = match target {
         RefreshTarget::NeedsReview => (db::all_papers(pool).await?, false),
         RefreshTarget::All => (db::all_papers(pool).await?, true),
-        RefreshTarget::One(id) => (vec![db::find_one(pool, &id).await?], true),
+        RefreshTarget::One(id) => {
+            let p = db::find_one(pool, &id).await?;
+            if p.deleted_at.is_some() {
+                tracing::warn!("{} is in the trash; skipping refresh", p.id);
+                return Ok(RefreshSummary::default());
+            }
+            (vec![p], true)
+        }
     };
 
     let mut summary = RefreshSummary::default();

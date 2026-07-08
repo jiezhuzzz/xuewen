@@ -362,3 +362,47 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
     assert!(library.join("he2016deep.pdf").exists());
     assert!(library.join("he2016deepa.pdf").exists());
 }
+
+#[tokio::test]
+async fn refresh_skips_a_trashed_paper() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    let hash = "trashedhash";
+    let old = library.join(format!("{hash}.pdf"));
+    common::write_test_pdf(&old, &["Whatever"]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let mut p = seed_paper(
+        "01890000-0000-7000-8000-0000000000e7",
+        hash,
+        &format!("{hash}.pdf"),
+        "resolved",
+    );
+    p.title = Some("Deep Residual Learning for Image Recognition".into());
+    p.authors = Some(r#"["Kaiming He"]"#.into());
+    p.year = Some(2016);
+    db::insert_paper(&pool, &p).await.unwrap();
+    db::soft_delete(&pool, &p.id).await.unwrap();
+
+    // Explicitly refreshing a trashed paper is a no-op (frozen); its file is not moved.
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".into(),
+        "http://127.0.0.1:1".into(),
+    )
+    .unwrap();
+    let summary = refresh::run(
+        &pool,
+        &library,
+        &resolver,
+        None,
+        RefreshTarget::One(p.id.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(summary.processed, 0);
+    assert!(old.exists());
+    assert!(!library.join("he2016deep.pdf").exists());
+}
