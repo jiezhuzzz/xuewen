@@ -50,7 +50,7 @@ impl IngestCtx {
         };
 
         // 2. Dedup.
-        if db::exists_by_hash(&self.pool, &content_hash).await? {
+        if db::find_by_hash(&self.pool, &content_hash).await?.is_some() {
             move_to(&path, &self.dirs.processed_dir)?;
             return Ok(Outcome::Duplicate);
         }

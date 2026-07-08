@@ -18,12 +18,58 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-pub async fn exists_by_hash(pool: &SqlitePool, content_hash: &str) -> Result<bool> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT id FROM papers WHERE content_hash = ?")
+/// The paper (active or trashed) whose stored bytes match `content_hash`.
+pub async fn find_by_hash(pool: &SqlitePool, content_hash: &str) -> Result<Option<Paper>> {
+    let p = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE content_hash = ?")
         .bind(content_hash)
         .fetch_optional(pool)
         .await?;
-    Ok(row.is_some())
+    Ok(p)
+}
+
+/// The paper (active or trashed) already holding `doi` or `arxiv_id`.
+/// A DOI match wins over an arXiv match when both exist.
+pub async fn find_by_identifier(
+    pool: &SqlitePool,
+    doi: Option<&str>,
+    arxiv_id: Option<&str>,
+) -> Result<Option<Paper>> {
+    if let Some(doi) = doi {
+        let hit = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE doi = ?")
+            .bind(doi)
+            .fetch_optional(pool)
+            .await?;
+        if hit.is_some() {
+            return Ok(hit);
+        }
+    }
+    if let Some(arxiv_id) = arxiv_id {
+        let hit = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE arxiv_id = ?")
+            .bind(arxiv_id)
+            .fetch_optional(pool)
+            .await?;
+        if hit.is_some() {
+            return Ok(hit);
+        }
+    }
+    Ok(None)
+}
+
+/// Un-trash a paper. Returns true if a row was actually restored.
+pub async fn restore(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let res =
+        sqlx::query("UPDATE papers SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Whether `e` (from a db call) is a UNIQUE-constraint violation.
+pub fn is_unique_violation(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<sqlx::Error>()
+        .and_then(|e| e.as_database_error())
+        .is_some_and(|d| d.kind() == sqlx::error::ErrorKind::UniqueViolation)
 }
 
 pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
@@ -275,12 +321,12 @@ mod tests {
     async fn insert_then_fetch_and_dedup() {
         let (_dir, pool) = temp_pool().await;
 
-        assert!(!exists_by_hash(&pool, "abc").await.unwrap());
+        assert!(find_by_hash(&pool, "abc").await.unwrap().is_none());
 
         let p = sample_paper("01890000-0000-7000-8000-000000000000", "abc");
         insert_paper(&pool, &p).await.unwrap();
 
-        assert!(exists_by_hash(&pool, "abc").await.unwrap());
+        assert!(find_by_hash(&pool, "abc").await.unwrap().is_some());
 
         let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
         assert_eq!(got.content_hash, "abc");
@@ -557,5 +603,106 @@ mod tests {
         delete_row(&pool, &a.id).await.unwrap();
         assert!(get_by_id(&pool, &a.id).await.unwrap().is_none());
         assert!(trashed_papers(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_by_hash_sees_active_and_trashed() {
+        let (_dir, pool) = temp_pool().await;
+        assert!(find_by_hash(&pool, "abc").await.unwrap().is_none());
+        let p = sample_paper("01890000-0000-7000-8000-000000000001", "abc");
+        insert_paper(&pool, &p).await.unwrap();
+        assert_eq!(find_by_hash(&pool, "abc").await.unwrap().unwrap().id, p.id);
+        soft_delete(&pool, &p.id).await.unwrap();
+        let hit = find_by_hash(&pool, "abc").await.unwrap().unwrap();
+        assert!(hit.deleted_at.is_some()); // trashed rows still match
+    }
+
+    #[tokio::test]
+    async fn find_by_identifier_matches_doi_or_arxiv() {
+        let (_dir, pool) = temp_pool().await;
+        let mut p = sample_paper("01890000-0000-7000-8000-000000000002", "h2");
+        p.meta.doi = Some("10.1/x".into());
+        p.meta.arxiv_id = Some("2001.00001".into());
+        insert_paper(&pool, &p).await.unwrap();
+
+        assert_eq!(
+            find_by_identifier(&pool, Some("10.1/x"), None)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            p.id
+        );
+        assert_eq!(
+            find_by_identifier(&pool, None, Some("2001.00001"))
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            p.id
+        );
+        assert!(find_by_identifier(&pool, Some("10.9/other"), None)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(find_by_identifier(&pool, None, None)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_identifier_prefers_doi_over_arxiv() {
+        let (_dir, pool) = temp_pool().await;
+        // Row A holds only the DOI; row B holds only the arXiv id.
+        let mut a = sample_paper("01890000-0000-7000-8000-000000000006", "h6");
+        a.meta.doi = Some("10.1/x".into());
+        insert_paper(&pool, &a).await.unwrap();
+        let mut b = sample_paper("01890000-0000-7000-8000-000000000007", "h7");
+        b.meta.arxiv_id = Some("2001.00001".into());
+        insert_paper(&pool, &b).await.unwrap();
+
+        // Both identifiers match different rows: the DOI match wins.
+        let hit = find_by_identifier(&pool, Some("10.1/x"), Some("2001.00001"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.id, a.id);
+
+        // An unmatched DOI still falls through to the arXiv match.
+        let fallback = find_by_identifier(&pool, Some("10.9/other"), Some("2001.00001"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fallback.id, b.id);
+    }
+
+    #[tokio::test]
+    async fn restore_untrashes_only_trashed_rows() {
+        let (_dir, pool) = temp_pool().await;
+        let p = sample_paper("01890000-0000-7000-8000-000000000003", "h3");
+        insert_paper(&pool, &p).await.unwrap();
+        assert!(!restore(&pool, &p.id).await.unwrap()); // active: nothing to restore
+        soft_delete(&pool, &p.id).await.unwrap();
+        assert!(restore(&pool, &p.id).await.unwrap());
+        assert!(!restore(&pool, &p.id).await.unwrap()); // idempotent: already active
+        assert!(get_by_id(&pool, &p.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_none());
+        assert_eq!(list_papers(&pool, None, None, None).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unique_violation_is_detected() {
+        let (_dir, pool) = temp_pool().await;
+        let a = sample_paper("01890000-0000-7000-8000-000000000004", "same");
+        let b = sample_paper("01890000-0000-7000-8000-000000000005", "same");
+        insert_paper(&pool, &a).await.unwrap();
+        let err = insert_paper(&pool, &b).await.unwrap_err();
+        assert!(is_unique_violation(&err));
+        assert!(!is_unique_violation(&anyhow::anyhow!("something else")));
     }
 }
