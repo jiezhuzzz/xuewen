@@ -1,9 +1,12 @@
 mod common;
 
+use axum_test::multipart::{MultipartForm, Part};
 use axum_test::TestServer;
 use xuewen::db;
 use xuewen::models::Paper;
-use xuewen::web::build_router;
+use xuewen::pipeline::Libraries;
+use xuewen::resolve::Resolver;
+use xuewen::web::{build_router, build_router_with_ingest, Ingest};
 
 async fn temp_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
     let dir = tempfile::tempdir().unwrap();
@@ -179,4 +182,82 @@ async fn deletes_a_paper_softly() {
         .delete("/api/papers/nope")
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn imports_a_pdf_dedups_and_rejects_non_pdf() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // Offline resolver: upstreams refuse instantly, so resolution degrades to
+    // needs_review with no network wait (same trick as the watcher tests).
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".to_string(),
+        "http://127.0.0.1:1".to_string(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".to_string());
+
+    let ingest = std::sync::Arc::new(Ingest {
+        resolver,
+        grobid: None,
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: inbox.join("_processed"),
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
+
+    // A real one-page PDF whose header has no DOI/arXiv id.
+    let pdf_path = dir.path().join("paper.pdf");
+    common::write_test_pdf(&pdf_path, &["A Paper With No Identifier"]);
+    let pdf_bytes = std::fs::read(&pdf_path).unwrap();
+
+    // Import -> 200 ingested, needs_review.
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes(pdf_bytes.clone()).file_name("paper.pdf"),
+    );
+    let resp = server.post("/api/papers").multipart(form).await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["outcome"], "ingested");
+    assert_eq!(body["status"], "needs_review");
+
+    // It now shows up in the list and the stats.
+    assert_eq!(
+        server
+            .get("/api/papers")
+            .await
+            .json::<Vec<serde_json::Value>>()
+            .len(),
+        1
+    );
+    assert_eq!(
+        server.get("/api/stats").await.json::<serde_json::Value>()["total"],
+        1
+    );
+
+    // Re-import identical bytes -> 200 duplicate.
+    let form2 =
+        MultipartForm::new().add_part("file", Part::bytes(pdf_bytes).file_name("paper.pdf"));
+    let dup: serde_json::Value = server.post("/api/papers").multipart(form2).await.json();
+    assert_eq!(dup["outcome"], "duplicate");
+
+    // Non-PDF bytes -> 400.
+    let form3 = MultipartForm::new().add_part(
+        "file",
+        Part::bytes(b"not a pdf".to_vec()).file_name("x.pdf"),
+    );
+    server
+        .post("/api/papers")
+        .multipart(form3)
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
