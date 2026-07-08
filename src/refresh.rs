@@ -65,7 +65,7 @@ async fn refresh_one(ctx: &IngestCtx, paper: &mut Paper, reresolve: bool) -> Res
     let mut outcome = OneOutcome::default();
     let library_root = &ctx.dirs.library_root;
     let pdf = library_root.join(&paper.rel_path);
-    if !pdf.exists() {
+    if !tokio::fs::try_exists(&pdf).await.unwrap_or(false) {
         tracing::warn!(
             "library file missing for {} ({}); skipping",
             paper.id,
