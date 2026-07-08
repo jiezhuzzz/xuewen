@@ -117,7 +117,7 @@ async fn process_one(ctx: &IngestCtx, failed_dir: &Path, cfg: &WatchConfig, path
         return; // file vanished (e.g. already processed by a prior event)
     }
     match ingest_with_retry(ctx, cfg, path).await {
-        Ok(outcome) => tracing::info!("ingested {}: {outcome:?}", path.display()),
+        Ok(outcome) => tracing::info!("processed {}: {outcome:?}", path.display()),
         Err(e) => {
             tracing::error!(
                 "giving up on {}: {e}; quarantining to _failed",

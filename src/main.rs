@@ -65,6 +65,11 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Restore a trashed paper back into the library.
+    Restore {
+        /// Paper id (exact or unique prefix).
+        id: String,
+    },
     /// Permanently remove trashed papers and their PDF files.
     Purge {
         /// A trashed paper id (exact or unique prefix) to purge.
@@ -105,8 +110,13 @@ async fn main() -> Result<()> {
         Command::Ingest { path } => match ctx.ingest_file(&path).await? {
             Outcome::Ingested(id) => println!("ingested {id}"),
             Outcome::Duplicate => println!("duplicate, skipped"),
-            Outcome::SameWork(id) => println!("already in library ({id})"),
-            Outcome::InTrash(id) => println!("in trash ({id})"),
+            Outcome::SameWork(id) => {
+                match db::get_by_id(&pool, &id).await?.and_then(|p| p.cite_key) {
+                    Some(key) => println!("already in library as {key} ({id})"),
+                    None => println!("already in library ({id})"),
+                }
+            }
+            Outcome::InTrash(id) => println!("in trash — run: xuewen restore {id}"),
         },
         Command::Watch => {
             xuewen::watcher::run(&ctx, &cfg.inbox_dir).await?;
@@ -143,6 +153,17 @@ async fn main() -> Result<()> {
                     println!("cancelled");
                 }
             }
+        }
+        Command::Restore { id } => {
+            let paper = db::find_one(&pool, &id).await?;
+            // Unlike delete's soft "already deleted" no-op, a restore of an active
+            // paper is a hard error: it usually means a mistyped id prefix, and
+            // silently "succeeding" would hide that.
+            if paper.deleted_at.is_none() {
+                anyhow::bail!("{} is not in the trash", paper.id);
+            }
+            db::restore(&pool, &paper.id).await?;
+            println!("restored {}", paper.id);
         }
         Command::Purge { id, all, yes } => {
             let targets = match (id, all) {
