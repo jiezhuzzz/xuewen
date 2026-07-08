@@ -1,8 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import EmptyState from './components/EmptyState.svelte';
+  import InfoPanel from './components/InfoPanel.svelte';
+  import PdfViewer from './components/PdfViewer.svelte';
   import Sidebar from './components/Sidebar.svelte';
+  import TabBar from './components/TabBar.svelte';
   import TopBar from './components/TopBar.svelte';
-  import { initTheme, loadPapers, loadStats } from './lib/state.svelte';
+  import { initTheme, loadPapers, loadStats, viewer } from './lib/state.svelte';
 
   onMount(() => {
     initTheme();
@@ -15,8 +19,18 @@
   <TopBar />
   <div class="flex min-h-0 flex-1">
     <Sidebar />
-    <main class="grid min-h-0 flex-1 place-items-center text-slate-500 dark:text-slate-400">
-      <p>Select a paper to open its PDF.</p>
+    <main class="flex min-h-0 flex-1 flex-col">
+      {#if viewer.tabs.length === 0}
+        <EmptyState />
+      {:else}
+        <TabBar />
+        <div class="flex min-h-0 flex-1">
+          <PdfViewer />
+          {#if viewer.infoOpen && viewer.activeId}
+            <InfoPanel id={viewer.activeId} />
+          {/if}
+        </div>
+      {/if}
     </main>
   </div>
 </div>
