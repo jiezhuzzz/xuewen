@@ -111,11 +111,11 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
         let staged = ingest
             .staging_dir
             .join(format!("{}-{stem}", Uuid::now_v7()));
-        if let Err(e) = std::fs::create_dir_all(&ingest.staging_dir) {
+        if let Err(e) = tokio::fs::create_dir_all(&ingest.staging_dir).await {
             tracing::error!("import staging dir: {e}");
             return internal_error();
         }
-        if let Err(e) = std::fs::write(&staged, data.as_ref()) {
+        if let Err(e) = tokio::fs::write(&staged, data.as_ref()).await {
             tracing::error!("import stage write: {e}");
             return internal_error();
         }
@@ -150,7 +150,7 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             Err(e) => {
                 tracing::error!("import ingest: {e}");
                 // On error the pipeline did not move the original — clean it up.
-                let _ = std::fs::remove_file(&staged);
+                let _ = tokio::fs::remove_file(&staged).await;
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "import failed"})),
@@ -189,12 +189,16 @@ pub async fn pdf(State(app): State<AppState>, Path(id): Path<String>, req: Reque
     };
     let path = app.library_root.join(&paper.rel_path);
     // Defense in depth: the canonical file must live under the library root.
-    let under_root = match (
-        std::fs::canonicalize(&path),
-        std::fs::canonicalize(&app.library_root),
-    ) {
-        (Ok(file), Ok(root)) => file.starts_with(&root),
-        _ => false, // missing file or unresolvable path
+    let under_root = {
+        let (p, root) = (path.clone(), app.library_root.clone());
+        tokio::task::spawn_blocking(move || {
+            match (std::fs::canonicalize(&p), std::fs::canonicalize(&root)) {
+                (Ok(file), Ok(root)) => file.starts_with(&root),
+                _ => false, // missing file or unresolvable path
+            }
+        })
+        .await
+        .unwrap_or(false)
     };
     if !under_root {
         return not_found();
