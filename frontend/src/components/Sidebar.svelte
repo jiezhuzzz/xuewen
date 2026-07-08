@@ -17,7 +17,7 @@
 <aside class="flex h-full w-80 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
   <div class="space-y-3 border-b border-slate-200 p-3 dark:border-slate-800">
     <div class="relative">
-      <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-400" />
       <input
         type="search"
         aria-label="Search papers"

@@ -23,6 +23,11 @@ export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: b
 
 export const theme = $state<{ mode: 'light' | 'dark' }>({ mode: 'light' });
 
+export const ui = $state<{ sidebarOpen: boolean }>({ sidebarOpen: true });
+export function toggleSidebar(): void {
+  ui.sidebarOpen = !ui.sidebarOpen;
+}
+
 const detailCache = new Map<string, PaperDetail>();
 
 export async function loadStats(): Promise<void> {

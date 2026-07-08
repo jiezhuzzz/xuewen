@@ -1,10 +1,18 @@
 <script lang="ts">
-  import { Library, Moon, Sun } from 'lucide-svelte';
-  import { stats, theme, toggleTheme } from '../lib/state.svelte';
+  import { Library, Moon, PanelLeft, Sun } from 'lucide-svelte';
+  import { stats, theme, toggleSidebar, toggleTheme } from '../lib/state.svelte';
 </script>
 
 <header class="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
   <div class="flex items-center gap-2">
+    <button
+      type="button"
+      onclick={toggleSidebar}
+      aria-label="Toggle sidebar"
+      class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+    >
+      <PanelLeft size={18} />
+    </button>
     <Library size={20} class="text-indigo-500" />
     <span class="text-lg font-semibold tracking-tight">Xuewen</span>
   </div>
