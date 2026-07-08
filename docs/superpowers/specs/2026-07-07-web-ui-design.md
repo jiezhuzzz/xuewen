@@ -129,7 +129,7 @@ Handler `async fn pdf(Path(id), State(app), req: Request) -> Response`:
 - **App shell**: full-height flex; left **Sidebar**, right **Viewer**. A thin top
   bar carries the app name, live **Stats** (total · resolved · needs_review), and a
   **theme toggle**.
-- **Sidebar** (collapsible/resizable): a **search box** (debounced, drives
+- **Sidebar** (**collapsible** via a top-bar toggle; drag-to-resize deferred): a **search box** (debounced, drives
   `?q=`), a **status filter** (All / Resolved / Needs review), a **sort** control,
   and the **paper list** — compact rows: title (prominent), authors (muted, `et
   al.` past 3), and a meta line (`year · venue`, a **status pill**, mono cite-key
@@ -159,8 +159,9 @@ Handler `async fn pdf(Path(id), State(app), req: Request) -> Response`:
 - Generous whitespace, clear type hierarchy (bundled variable font, e.g.
   Fontsource Inter — no CDN), an accent color, subtle borders/shadows, rounded
   corners. **Status pill** colors: resolved = green, needs_review = amber.
-  Full **dark + light** parity. Responsive: on narrow widths the sidebar
-  collapses to a toggle. Lucide icons (bundled).
+  Full **dark + light** parity. The sidebar is **collapsible** via a top-bar
+  toggle (giving the PDF full width); automatic collapse on narrow viewports is a
+  future enhancement. Lucide icons (bundled).
 
 ### 5.4 API client & types
 
