@@ -48,7 +48,7 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
-    /// Serve the read-only web UI over HTTP (localhost).
+    /// Serve the web UI over HTTP (loopback by default).
     Serve {
         /// Address to bind.
         #[arg(long, default_value = "127.0.0.1")]
@@ -56,6 +56,9 @@ enum Command {
         /// Port to bind.
         #[arg(long, default_value_t = 8080)]
         port: u16,
+        /// Allow binding a non-loopback address (mutating endpoints have no auth).
+        #[arg(long)]
+        allow_remote: bool,
     },
     /// Soft-delete a paper: hide it from the library (recoverable).
     Delete {
@@ -133,7 +136,24 @@ async fn main() -> Result<()> {
                 summary.processed, summary.reresolved, summary.refiled
             );
         }
-        Command::Serve { host, port } => {
+        Command::Serve {
+            host,
+            port,
+            allow_remote,
+        } => {
+            if !web::is_loopback_host(&host) {
+                if allow_remote {
+                    eprintln!(
+                        "warning: binding {host}: the web UI has mutating endpoints and no auth — \
+                         anyone who can reach this address can import and delete papers"
+                    );
+                } else {
+                    anyhow::bail!(
+                        "refusing to bind non-loopback address {host}: the web UI has no auth; \
+                         pass --allow-remote to override"
+                    );
+                }
+            }
             let ingest = std::sync::Arc::new(web::Ingest {
                 ctx,
                 staging_dir: cfg.inbox_dir.join("_uploads"),
