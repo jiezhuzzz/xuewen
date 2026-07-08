@@ -325,6 +325,14 @@ mod tests {
         (dir, pool)
     }
 
+    #[test]
+    fn escape_like_escapes_backslash_percent_and_underscore() {
+        assert_eq!(escape_like("100%"), r"100\%");
+        assert_eq!(escape_like("a_b"), r"a\_b");
+        assert_eq!(escape_like(r"back\slash"), r"back\\slash");
+        assert_eq!(escape_like("%_\\"), r"\%\_\\");
+    }
+
     #[tokio::test]
     async fn insert_then_fetch_and_dedup() {
         let (_dir, pool) = temp_pool().await;
