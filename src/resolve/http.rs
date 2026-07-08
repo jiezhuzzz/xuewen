@@ -26,6 +26,16 @@ impl RetryPolicy {
         }
     }
 
+    /// Short budget for interactive use (web import): a single quick retry so a
+    /// synchronous upload response never stalls for minutes.
+    pub fn interactive() -> Self {
+        Self {
+            max_attempts: 2,
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(2),
+        }
+    }
+
     /// Near-zero delays so tests exercise the retry paths without real sleeps.
     pub fn fast_for_tests() -> Self {
         Self {

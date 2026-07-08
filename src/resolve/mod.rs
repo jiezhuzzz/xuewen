@@ -54,11 +54,16 @@ impl Resolver {
     /// Build a resolver pointing at the real arXiv and Crossref endpoints, with a
     /// polite retry/back-off policy.
     pub fn new(contact_email: Option<&str>) -> Result<Self> {
+        Self::new_with_policy(contact_email, RetryPolicy::production())
+    }
+
+    /// Build a resolver for the real endpoints with an explicit retry policy.
+    pub fn new_with_policy(contact_email: Option<&str>, retry: RetryPolicy) -> Result<Self> {
         Self::build(
             contact_email,
             "https://export.arxiv.org".to_string(),
             "https://api.crossref.org".to_string(),
-            RetryPolicy::production(),
+            retry,
         )
     }
 

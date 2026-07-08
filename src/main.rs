@@ -7,6 +7,7 @@ use xuewen::db;
 use xuewen::pipeline::{IngestCtx, Libraries, Outcome};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::grobid::Grobid;
+use xuewen::resolve::http::RetryPolicy;
 use xuewen::resolve::Resolver;
 use xuewen::web;
 
@@ -96,7 +97,12 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load(&cli.config)?;
     let pool = db::connect(&cfg.database_url).await?;
-    let resolver = Resolver::new(cfg.contact_email.as_deref())?;
+    // Interactive serving answers uploads synchronously; keep retries short there.
+    let retry = match &cli.command {
+        Command::Serve { .. } => RetryPolicy::interactive(),
+        _ => RetryPolicy::production(),
+    };
+    let resolver = Resolver::new_with_policy(cfg.contact_email.as_deref(), retry)?;
     let grobid = cfg.grobid_url.as_deref().map(Grobid::new).transpose()?;
     let dirs = Libraries {
         library_root: cfg.library_root.clone(),
