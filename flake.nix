@@ -12,6 +12,7 @@
             cargo rustc rustfmt clippy rust-analyzer
             poppler-utils   # provides `pdftotext`
             sqlite
+            nodejs          # frontend build (npm)
             pkg-config
           ];
         };

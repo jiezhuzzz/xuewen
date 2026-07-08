@@ -2,3 +2,4 @@
 **/*.rs.bk
 library.db*
 /frontend/dist/
+/frontend/node_modules/

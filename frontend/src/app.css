@@ -1,0 +1,19 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/* Class-based dark mode (toggled on <html> by the theme state). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter Variable', system-ui, -apple-system, sans-serif;
+}
