@@ -296,16 +296,12 @@ pub(crate) fn move_to(src: &Path, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Move `from` to the exact path `to` (renaming across directories), creating
-/// parent directories, with a copy+remove fallback across filesystems.
-pub(crate) fn move_file(from: &Path, to: &Path) -> Result<()> {
+/// Copy `from` to the exact path `to`, creating parent directories.
+pub(crate) fn copy_to(from: &Path, to: &Path) -> Result<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if std::fs::rename(from, to).is_err() {
-        std::fs::copy(from, to)?;
-        std::fs::remove_file(from)?;
-    }
+    std::fs::copy(from, to)?;
     Ok(())
 }
 

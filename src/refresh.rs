@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::db;
 use crate::models::{Paper, PaperStatus};
 use crate::naming;
-use crate::pipeline::{move_file, resolve_fields, IngestCtx, ResolveInputs};
+use crate::pipeline::{copy_to, resolve_fields, IngestCtx, ResolveInputs};
 
 /// Which papers a refresh pass re-resolves. Every processed paper is re-filed
 /// regardless; this only controls whose metadata is re-fetched.
@@ -107,8 +107,8 @@ async fn refresh_one(ctx: &IngestCtx, paper: &mut Paper, reresolve: bool) -> Res
         }
     }
 
-    // Re-file: recompute the cite-key path from the paper's current metadata,
-    // excluding this paper's own key from the collision set.
+    // Re-file: copy first, persist the row second, remove the old file last —
+    // a failure at any step never leaves the DB pointing at a missing file.
     let cite_key = match naming::cite_key_base(
         &paper.meta.authors.0,
         paper.meta.year,
@@ -121,21 +121,36 @@ async fn refresh_one(ctx: &IngestCtx, paper: &mut Paper, reresolve: bool) -> Res
         None => None,
     };
     let new_rel = naming::library_rel_path(cite_key.as_deref(), &paper.content_hash);
+    let mut refiled_paths: Option<(std::path::PathBuf, std::path::PathBuf)> = None; // (old, new)
     if new_rel != paper.rel_path {
         let to = library_root.join(&new_rel);
-        match move_file(&pdf, &to) {
+        match copy_to(&pdf, &to) {
             Ok(()) => {
+                refiled_paths = Some((pdf.clone(), to));
                 paper.rel_path = new_rel;
                 paper.cite_key = cite_key;
                 outcome.refiled = true;
             }
-            Err(e) => tracing::warn!(
-                "re-file move failed for {}: {e}; leaving in place",
-                paper.id
-            ),
+            Err(e) => {
+                tracing::warn!(
+                    "re-file copy failed for {}: {e}; leaving in place",
+                    paper.id
+                )
+            }
         }
     }
 
-    db::update_paper(&ctx.pool, paper).await?;
+    if let Err(e) = db::update_paper(&ctx.pool, paper).await {
+        // Roll the copy back so filesystem and DB stay consistent.
+        if let Some((_, new_path)) = &refiled_paths {
+            let _ = std::fs::remove_file(new_path);
+        }
+        return Err(e);
+    }
+    if let Some((old_path, _)) = &refiled_paths {
+        if let Err(e) = std::fs::remove_file(old_path) {
+            tracing::warn!("could not remove old file {}: {e}", old_path.display());
+        }
+    }
     Ok(outcome)
 }

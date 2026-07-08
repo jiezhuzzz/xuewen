@@ -459,3 +459,122 @@ async fn refresh_skips_a_trashed_paper() {
     assert!(old.exists());
     assert!(!library.join("he2016deep.pdf").exists());
 }
+
+#[tokio::test]
+async fn refile_copy_failure_keeps_db_and_file_consistent() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    let hash = "copyfailhash";
+    let unsorted = library.join(format!("_unsorted/{hash}.pdf"));
+    std::fs::create_dir_all(unsorted.parent().unwrap()).unwrap();
+    let doi = "10.1145/3292500.3330701";
+    common::write_test_pdf(&unsorted, &["Header", &format!("https://doi.org/{doi}")]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let p = seed_paper(
+        "01890000-0000-7000-8000-0000000000c9",
+        hash,
+        &format!("_unsorted/{hash}.pdf"),
+        PaperStatus::NeedsReview,
+    );
+    db::insert_paper(&pool, &p).await.unwrap();
+
+    // Make the re-file destination impossible: a DIRECTORY occupies the
+    // target path "wang2019kgat.pdf", so the copy must fail.
+    std::fs::create_dir_all(library.join("wang2019kgat.pdf")).unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver: Resolver::with_bases(None, server.uri(), server.uri()).unwrap(),
+        grobid: None,
+    };
+
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
+        .await
+        .unwrap();
+    assert_eq!(summary.reresolved, 1);
+    assert_eq!(summary.refiled, 0); // copy failed → not refiled
+
+    // DB still points at the ORIGINAL path, and that file still exists:
+    // metadata updated, location untouched, nothing orphaned.
+    let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
+    assert_eq!(got.meta.status, PaperStatus::Resolved);
+    assert_eq!(got.rel_path, format!("_unsorted/{hash}.pdf"));
+    assert!(unsorted.exists());
+}
+
+#[tokio::test]
+async fn refile_rolls_back_copy_when_update_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("library");
+    let hash = "rollbackhash";
+    let unsorted = library.join(format!("_unsorted/{hash}.pdf"));
+    std::fs::create_dir_all(unsorted.parent().unwrap()).unwrap();
+    let doi = "10.1145/3292500.3330701";
+    common::write_test_pdf(&unsorted, &["Header", &format!("https://doi.org/{doi}")]);
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // Paper A: needs_review, will re-resolve to the KGAT record (and its DOI).
+    let a = seed_paper(
+        "01890000-0000-7000-8000-0000000000d1",
+        hash,
+        &format!("_unsorted/{hash}.pdf"),
+        PaperStatus::NeedsReview,
+    );
+    db::insert_paper(&pool, &a).await.unwrap();
+
+    // Paper B already owns that DOI (no cite_key, no file on disk → refresh
+    // skips it), so A's post-copy update_paper hits the doi UNIQUE constraint.
+    let mut b = seed_paper(
+        "01890000-0000-7000-8000-0000000000d2",
+        "otherhash",
+        "missing/nowhere.pdf",
+        PaperStatus::Resolved,
+    );
+    b.meta.doi = Some(doi.to_string());
+    db::insert_paper(&pool, &b).await.unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: dir.path().join("_processed"),
+        },
+        resolver: Resolver::with_bases(None, server.uri(), server.uri()).unwrap(),
+        grobid: None,
+    };
+
+    // The per-paper error is logged, not propagated: run() succeeds.
+    let summary = refresh::run(&ctx, RefreshTarget::NeedsReview)
+        .await
+        .unwrap();
+    assert_eq!(summary.refiled, 0);
+
+    // Rollback: the copied file at the would-be new path was removed…
+    assert!(!library.join("wang2019kgat.pdf").exists());
+    // …and A's row is untouched (old path, still needs_review, no DOI).
+    let got = db::get_by_id(&pool, &a.id).await.unwrap().unwrap();
+    assert_eq!(got.rel_path, format!("_unsorted/{hash}.pdf"));
+    assert_eq!(got.meta.status, PaperStatus::NeedsReview);
+    assert_eq!(got.meta.doi, None);
+    assert!(unsorted.exists());
+}
