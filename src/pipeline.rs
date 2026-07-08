@@ -109,6 +109,21 @@ impl IngestCtx {
         let paper = fields.into_paper(content_hash, rel_path, cite_key);
         if let Err(e) = db::insert_paper(&self.pool, &paper).await {
             let _ = std::fs::remove_file(&dest);
+            // Lost a race with a concurrent ingest of the same work? Report the
+            // winner's outcome instead of surfacing a constraint error.
+            if db::is_unique_violation(&e) {
+                if let Some(outcome) = recover_unique_collision(
+                    &self.pool,
+                    &paper.content_hash,
+                    paper.meta.doi.as_deref(),
+                    paper.meta.arxiv_id.as_deref(),
+                )
+                .await?
+                {
+                    move_to(&path, &self.dirs.processed_dir)?;
+                    return Ok(outcome);
+                }
+            }
             return Err(e);
         }
 
@@ -242,6 +257,31 @@ impl PaperMeta {
     }
 }
 
+/// After a UNIQUE violation on insert, find the row that won the race and map
+/// it to the outcome the pre-insert checks would have produced.
+pub(crate) async fn recover_unique_collision(
+    pool: &SqlitePool,
+    content_hash: &str,
+    doi: Option<&str>,
+    arxiv_id: Option<&str>,
+) -> Result<Option<Outcome>> {
+    if let Some(existing) = db::find_by_hash(pool, content_hash).await? {
+        return Ok(Some(if existing.deleted_at.is_some() {
+            Outcome::InTrash(existing.id)
+        } else {
+            Outcome::Duplicate
+        }));
+    }
+    if let Some(existing) = db::find_by_identifier(pool, doi, arxiv_id).await? {
+        return Ok(Some(if existing.deleted_at.is_some() {
+            Outcome::InTrash(existing.id)
+        } else {
+            Outcome::SameWork(existing.id)
+        }));
+    }
+    Ok(None)
+}
+
 /// Move `src` into `dir`, falling back to copy+remove across filesystems.
 pub(crate) fn move_to(src: &Path, dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -267,4 +307,80 @@ pub(crate) fn move_file(from: &Path, to: &Path) -> Result<()> {
         std::fs::remove_file(from)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use crate::models::{Authors, Paper, PaperMeta, PaperStatus};
+
+    fn paper(id: &str, hash: &str, doi: Option<&str>) -> Paper {
+        Paper {
+            id: id.into(),
+            content_hash: hash.into(),
+            rel_path: format!("{hash}.pdf"),
+            cite_key: None,
+            added_at: "2026-07-08T00:00:00Z".into(),
+            deleted_at: None,
+            meta: PaperMeta {
+                title: Some("T".into()),
+                abstract_text: None,
+                authors: Authors::default(),
+                venue: None,
+                year: None,
+                doi: doi.map(str::to_string),
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
+                status: PaperStatus::NeedsReview,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn recover_unique_collision_maps_all_cases() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}", dir.path().join("t.db").display());
+        let pool = db::connect(&url).await.unwrap();
+        let a = paper("01890000-0000-7000-8000-0000000000aa", "h1", Some("10.1/x"));
+        db::insert_paper(&pool, &a).await.unwrap();
+
+        // Hash collision with an active row → Duplicate.
+        assert_eq!(
+            recover_unique_collision(&pool, "h1", None, None)
+                .await
+                .unwrap(),
+            Some(Outcome::Duplicate)
+        );
+        // Identifier collision with an active row → SameWork.
+        assert_eq!(
+            recover_unique_collision(&pool, "h2", Some("10.1/x"), None)
+                .await
+                .unwrap(),
+            Some(Outcome::SameWork(a.id.clone()))
+        );
+        // Trashed row → InTrash for both shapes.
+        db::soft_delete(&pool, &a.id).await.unwrap();
+        assert_eq!(
+            recover_unique_collision(&pool, "h1", None, None)
+                .await
+                .unwrap(),
+            Some(Outcome::InTrash(a.id.clone()))
+        );
+        assert_eq!(
+            recover_unique_collision(&pool, "h2", Some("10.1/x"), None)
+                .await
+                .unwrap(),
+            Some(Outcome::InTrash(a.id.clone()))
+        );
+        // No matching row → None (the violation was something else).
+        assert_eq!(
+            recover_unique_collision(&pool, "h3", Some("10.9/none"), None)
+                .await
+                .unwrap(),
+            None
+        );
+    }
 }

@@ -86,7 +86,8 @@ async fn stabilize(path: &Path, cfg: &WatchConfig) -> bool {
 }
 
 /// Ingest a file, retrying with exponential backoff. Re-ingestion is safe: the
-/// content-hash dedup makes a retry after a partial failure return `Duplicate`.
+/// content-hash/identifier dedup makes a retry after a partial failure report
+/// the existing row (`Duplicate`/`SameWork`/`InTrash`).
 async fn ingest_with_retry(
     ctx: &IngestCtx,
     cfg: &WatchConfig,
