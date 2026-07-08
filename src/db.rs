@@ -233,6 +233,13 @@ pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
     }
 }
 
+/// Escape `\`, `%`, `_` in a user search term for `LIKE … ESCAPE '\'`.
+fn escape_like(term: &str) -> String {
+    term.replace('\\', r"\\")
+        .replace('%', r"\%")
+        .replace('_', r"\_")
+}
+
 /// List papers with optional case-insensitive search (`q` over title+authors),
 /// optional status filter, and a whitelisted sort. Unknown status/sort values
 /// are ignored (never an error).
@@ -245,12 +252,12 @@ pub async fn list_papers(
     let mut qb: QueryBuilder<sqlx::Sqlite> =
         QueryBuilder::new("SELECT * FROM papers WHERE deleted_at IS NULL");
     if let Some(term) = q.map(str::trim).filter(|s| !s.is_empty()) {
-        let like = format!("%{term}%");
+        let like = format!("%{}%", escape_like(term));
         qb.push(" AND (title LIKE ")
             .push_bind(like.clone())
-            .push(" OR authors LIKE ")
+            .push(" ESCAPE '\\' OR authors LIKE ")
             .push_bind(like)
-            .push(")");
+            .push(" ESCAPE '\\')");
     }
     if let Some(st) = status.filter(|s| matches!(*s, "resolved" | "needs_review")) {
         qb.push(" AND status = ").push_bind(st.to_string());
@@ -260,7 +267,8 @@ pub async fn list_papers(
         Some("year_asc") => "year ASC NULLS LAST",
         Some("added_desc") => "added_at DESC",
         Some("title") => "title COLLATE NOCASE ASC",
-        _ => "year DESC",
+        Some("year_desc") => "year DESC",
+        _ => "year DESC", // unknown values fall back to the default
     };
     qb.push(" ORDER BY ").push(order);
     let papers = qb.build_query_as::<Paper>().fetch_all(pool).await?;
@@ -532,6 +540,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bogus.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn search_treats_like_wildcards_literally() {
+        let (_dir, pool) = temp_pool().await;
+        let mut a = sample_paper("01890000-0000-7000-8000-0000000000f1", "wa");
+        a.meta.title = Some("100% Accurate Results".into());
+        let mut b = sample_paper("01890000-0000-7000-8000-0000000000f2", "wb");
+        b.meta.title = Some("1000 Accurate Results".into());
+        insert_paper(&pool, &a).await.unwrap();
+        insert_paper(&pool, &b).await.unwrap();
+
+        // "%" must match only the literal percent title, not act as a wildcard.
+        let hits = list_papers(&pool, Some("100%"), None, None).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, a.id);
     }
 
     #[tokio::test]
