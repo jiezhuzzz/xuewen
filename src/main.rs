@@ -10,6 +10,19 @@ use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
 use xuewen::web;
 
+/// Ask a yes/no question on the terminal; returns true only on an explicit yes.
+fn confirm(prompt: &str) -> anyhow::Result<bool> {
+    use std::io::Write;
+    print!("{prompt} [y/N] ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
 #[derive(Parser)]
 #[command(name = "xuewen", version)]
 struct Cli {
@@ -43,6 +56,26 @@ enum Command {
         /// Port to bind.
         #[arg(long, default_value_t = 8080)]
         port: u16,
+    },
+    /// Soft-delete a paper: hide it from the library (recoverable).
+    Delete {
+        /// Paper id (exact or unique prefix).
+        id: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Permanently remove trashed papers and their PDF files.
+    Purge {
+        /// A trashed paper id (exact or unique prefix) to purge.
+        #[arg(conflicts_with = "all")]
+        id: Option<String>,
+        /// Purge every trashed paper.
+        #[arg(long)]
+        all: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -93,6 +126,54 @@ async fn main() -> Result<()> {
         }
         Command::Serve { host, port } => {
             web::serve(&host, port, pool, cfg.library_root.clone()).await?;
+        }
+        Command::Delete { id, yes } => {
+            let paper = db::find_one(&pool, &id).await?;
+            if paper.deleted_at.is_some() {
+                println!("already deleted: {}", paper.id);
+            } else {
+                let title = paper.title.as_deref().unwrap_or("(untitled)");
+                if yes || confirm(&format!("Delete {title:?}?"))? {
+                    db::soft_delete(&pool, &paper.id).await?;
+                    println!("deleted {}", paper.id);
+                } else {
+                    println!("cancelled");
+                }
+            }
+        }
+        Command::Purge { id, all, yes } => {
+            let targets = match (id, all) {
+                (Some(id), _) => {
+                    let p = db::find_one(&pool, &id).await?;
+                    if p.deleted_at.is_none() {
+                        anyhow::bail!("{} is not in the trash (delete it first)", p.id);
+                    }
+                    vec![p]
+                }
+                (None, true) => db::trashed_papers(&pool).await?,
+                (None, false) => anyhow::bail!("specify an <ID> or --all"),
+            };
+            if targets.is_empty() {
+                println!("trash is empty");
+            } else if yes
+                || confirm(&format!(
+                    "Permanently delete {} paper(s) and their files?",
+                    targets.len()
+                ))?
+            {
+                for p in &targets {
+                    let path = cfg.library_root.join(&p.rel_path);
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => tracing::warn!("could not remove {}: {e}", path.display()),
+                    }
+                    db::delete_row(&pool, &p.id).await?;
+                }
+                println!("purged {} paper(s)", targets.len());
+            } else {
+                println!("cancelled");
+            }
         }
     }
     Ok(())
