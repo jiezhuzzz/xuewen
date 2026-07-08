@@ -1,4 +1,4 @@
-import { getPaper, getStats, listPapers } from './api';
+import { deletePaper, getPaper, getStats, listPapers } from './api';
 import type { Filters, PaperDetail, PaperSummary, Stats } from './types';
 
 export const filters = $state<Filters>({ q: '', status: 'all', sort: 'year_desc' });
@@ -83,6 +83,16 @@ export async function loadDetail(id: string): Promise<PaperDetail> {
   const d = await getPaper(id);
   detailCache.set(id, d);
   return d;
+}
+
+/// Soft-delete a paper on the server, then drop it from the UI: close its tab,
+/// remove it from the list, and refresh the counts.
+export async function removePaper(id: string): Promise<void> {
+  await deletePaper(id);
+  closeTab(id);
+  library.papers = library.papers.filter((p) => p.id !== id);
+  detailCache.delete(id);
+  await loadStats();
 }
 
 function applyTheme(): void {

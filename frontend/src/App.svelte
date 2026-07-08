@@ -27,7 +27,9 @@
         <div class="flex min-h-0 flex-1">
           <PdfViewer />
           {#if viewer.infoOpen && viewer.activeId}
-            <InfoPanel id={viewer.activeId} />
+            {#key viewer.activeId}
+              <InfoPanel id={viewer.activeId} />
+            {/key}
           {/if}
         </div>
       {/if}

@@ -25,3 +25,8 @@ export async function getStats(): Promise<Stats> {
 export function pdfUrl(id: string): string {
   return `/papers/${encodeURIComponent(id)}/pdf`;
 }
+
+export async function deletePaper(id: string): Promise<void> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+}

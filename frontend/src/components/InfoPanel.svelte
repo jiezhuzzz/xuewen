@@ -1,9 +1,24 @@
 <script lang="ts">
-  import { ExternalLink } from 'lucide-svelte';
-  import { loadDetail } from '../lib/state.svelte';
+  import { ExternalLink, Trash2 } from 'lucide-svelte';
+  import { loadDetail, removePaper } from '../lib/state.svelte';
   import StatusPill from './StatusPill.svelte';
 
   let { id }: { id: string } = $props();
+
+  let confirming = $state(false);
+  let deleting = $state(false);
+  let deleteError = $state<string | null>(null);
+  async function doDelete() {
+    deleting = true;
+    deleteError = null;
+    try {
+      await removePaper(id);
+      // On success the tab closes and this panel unmounts.
+    } catch (e) {
+      deleteError = (e as Error).message;
+      deleting = false;
+    }
+  }
 
   type Link = { label: string; href: string };
   function links(d: {
@@ -56,6 +71,42 @@
         <p class="text-sm leading-relaxed text-slate-600 dark:text-slate-300">{d.abstract}</p>
       </div>
     {/if}
+    <div class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-800">
+      {#if confirming}
+        {#if deleting}
+          <span class="text-sm text-slate-500 dark:text-slate-400">Deleting…</span>
+        {:else}
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-slate-600 dark:text-slate-300">Delete this paper?</span>
+            <button
+              type="button"
+              onclick={doDelete}
+              class="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700"
+            >
+              Delete
+            </button>
+            <button
+              type="button"
+              onclick={() => (confirming = false)}
+              class="rounded-lg px-3 py-1 text-xs text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+          {#if deleteError}
+            <p class="mt-2 text-xs text-red-600 dark:text-red-400">Delete failed: {deleteError}</p>
+          {/if}
+        {/if}
+      {:else}
+        <button
+          type="button"
+          onclick={() => (confirming = true)}
+          class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-500/10"
+        >
+          <Trash2 size={14} /> Delete paper
+        </button>
+      {/if}
+    </div>
   {:catch}
     <p class="text-sm text-red-600 dark:text-red-400">Failed to load details.</p>
   {/await}
