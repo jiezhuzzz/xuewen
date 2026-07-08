@@ -245,6 +245,7 @@ impl ResolvedFields {
             source: self.source,
             status: self.status,
             added_at: chrono::Utc::now().to_rfc3339(),
+            deleted_at: None,
         }
     }
 

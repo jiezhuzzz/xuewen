@@ -43,6 +43,7 @@ pub struct Paper {
     pub source: Option<String>,
     pub status: String,
     pub added_at: String,
+    pub deleted_at: Option<String>,
 }
 
 impl Paper {

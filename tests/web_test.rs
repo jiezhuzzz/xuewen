@@ -30,6 +30,7 @@ fn paper(id: &str, title: &str, status: &str) -> Paper {
         source: Some("crossref".into()),
         status: status.into(),
         added_at: "2026-07-07T00:00:00Z".into(),
+        deleted_at: None,
     }
 }
 

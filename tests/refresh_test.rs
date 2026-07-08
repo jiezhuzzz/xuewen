@@ -28,6 +28,7 @@ fn seed_paper(id: &str, hash: &str, rel_path: &str, status: &str) -> Paper {
         source: None,
         status: status.into(),
         added_at: "2026-07-07T00:00:00Z".into(),
+        deleted_at: None,
     }
 }
 

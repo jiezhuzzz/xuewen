@@ -30,8 +30,8 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     sqlx::query(
         "INSERT INTO papers \
          (id, content_hash, rel_path, title, abstract, authors, venue, year, \
-          doi, arxiv_id, dblp_key, cite_key, url, source, status, added_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          doi, arxiv_id, dblp_key, cite_key, url, source, status, added_at, deleted_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(&p.id)
     .bind(&p.content_hash)
@@ -49,6 +49,7 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     .bind(&p.source)
     .bind(&p.status)
     .bind(&p.added_at)
+    .bind(&p.deleted_at)
     .execute(pool)
     .await?;
     Ok(())
@@ -98,7 +99,8 @@ pub async fn update_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     sqlx::query(
         "UPDATE papers SET \
          rel_path = ?, title = ?, abstract = ?, authors = ?, venue = ?, year = ?, \
-         doi = ?, arxiv_id = ?, dblp_key = ?, cite_key = ?, url = ?, source = ?, status = ? \
+         doi = ?, arxiv_id = ?, dblp_key = ?, cite_key = ?, url = ?, source = ?, \
+         status = ?, deleted_at = ? \
          WHERE id = ?",
     )
     .bind(&p.rel_path)
@@ -114,6 +116,7 @@ pub async fn update_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     .bind(&p.url)
     .bind(&p.source)
     .bind(&p.status)
+    .bind(&p.deleted_at)
     .bind(&p.id)
     .execute(pool)
     .await?;
@@ -211,6 +214,7 @@ mod tests {
             source: None,
             status: PaperStatus::NeedsReview.as_str().to_string(),
             added_at: "2026-07-06T00:00:00Z".to_string(),
+            deleted_at: None,
         }
     }
 
@@ -409,5 +413,29 @@ mod tests {
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
         assert_eq!(stats(&pool).await.unwrap(), (2, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn deleted_at_round_trips() {
+        let (_dir, pool) = temp_pool().await;
+        let mut p = sample_paper("01890000-0000-7000-8000-0000000000d0", "hd");
+        insert_paper(&pool, &p).await.unwrap();
+        // Fresh insert is active.
+        assert_eq!(
+            get_by_id(&pool, &p.id).await.unwrap().unwrap().deleted_at,
+            None
+        );
+        // update_paper persists a set deleted_at.
+        p.deleted_at = Some("2026-07-07T12:00:00Z".into());
+        update_paper(&pool, &p).await.unwrap();
+        assert_eq!(
+            get_by_id(&pool, &p.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .as_deref(),
+            Some("2026-07-07T12:00:00Z")
+        );
     }
 }
