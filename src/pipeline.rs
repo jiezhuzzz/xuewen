@@ -148,7 +148,7 @@ pub struct ResolvedFields {
     pub dblp_key: Option<String>,
     pub url: Option<String>,
     pub source: Option<String>,
-    pub status: String,
+    pub status: PaperStatus,
 }
 
 /// Decide the stored fields. A confident resolution yields `resolved` (with a
@@ -181,7 +181,7 @@ pub(crate) fn resolve_fields(
                 dblp_key: md.dblp_key,
                 url: md.url,
                 source: Some(md.source),
-                status: PaperStatus::Resolved.as_str().to_string(),
+                status: PaperStatus::Resolved,
             }
         }
         Resolution::Unresolved => match extracted {
@@ -196,7 +196,7 @@ pub(crate) fn resolve_fields(
                 dblp_key: None,
                 url: None,
                 source: Some(g.source),
-                status: PaperStatus::NeedsReview.as_str().to_string(),
+                status: PaperStatus::NeedsReview,
             },
             None => ResolvedFields {
                 title: provisional_title,
@@ -209,7 +209,7 @@ pub(crate) fn resolve_fields(
                 dblp_key: None,
                 url: None,
                 source: None,
-                status: PaperStatus::NeedsReview.as_str().to_string(),
+                status: PaperStatus::NeedsReview,
             },
         },
     }

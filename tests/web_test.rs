@@ -3,7 +3,7 @@ mod common;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::TestServer;
 use xuewen::db;
-use xuewen::models::Paper;
+use xuewen::models::{Paper, PaperStatus};
 use xuewen::pipeline::Libraries;
 use xuewen::resolve::Resolver;
 use xuewen::web::{build_router, build_router_with_ingest, Ingest};
@@ -15,7 +15,7 @@ async fn temp_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
     (dir, pool)
 }
 
-fn paper(id: &str, title: &str, status: &str) -> Paper {
+fn paper(id: &str, title: &str, status: PaperStatus) -> Paper {
     Paper {
         id: id.into(),
         content_hash: id.into(),
@@ -31,7 +31,7 @@ fn paper(id: &str, title: &str, status: &str) -> Paper {
         cite_key: Some(id.into()),
         url: None,
         source: Some("crossref".into()),
-        status: status.into(),
+        status,
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
     }
@@ -42,13 +42,17 @@ async fn lists_and_details_papers() {
     let (dir, pool) = temp_pool().await;
     db::insert_paper(
         &pool,
-        &paper("aaaa1111", "Deep Residual Learning", "resolved"),
+        &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved),
     )
     .await
     .unwrap();
     db::insert_paper(
         &pool,
-        &paper("bbbb2222", "Attention Is All You Need", "needs_review"),
+        &paper(
+            "bbbb2222",
+            "Attention Is All You Need",
+            PaperStatus::NeedsReview,
+        ),
     )
     .await
     .unwrap();
@@ -96,13 +100,13 @@ async fn streams_pdf_with_range_and_guards_paths() {
     std::fs::create_dir_all(&library).unwrap();
 
     // A real paper whose PDF exists inside the library.
-    let mut ok = paper("cccc3333", "A Paper", "resolved");
+    let mut ok = paper("cccc3333", "A Paper", PaperStatus::Resolved);
     ok.rel_path = "cccc3333.pdf".into();
     common::write_test_pdf(&library.join("cccc3333.pdf"), &["Hello PDF"]);
     db::insert_paper(&pool, &ok).await.unwrap();
 
     // A rogue record whose rel_path escapes the library.
-    let mut escape = paper("dddd4444", "Escape", "resolved");
+    let mut escape = paper("dddd4444", "Escape", PaperStatus::Resolved);
     escape.rel_path = "../outside.pdf".into();
     std::fs::write(dir.path().join("outside.pdf"), b"secret").unwrap();
     db::insert_paper(&pool, &escape).await.unwrap();
@@ -143,12 +147,15 @@ async fn streams_pdf_with_range_and_guards_paths() {
 #[tokio::test]
 async fn deletes_a_paper_softly() {
     let (dir, pool) = temp_pool().await;
-    db::insert_paper(&pool, &paper("aaaa1111", "First", "resolved"))
+    db::insert_paper(&pool, &paper("aaaa1111", "First", PaperStatus::Resolved))
         .await
         .unwrap();
-    db::insert_paper(&pool, &paper("bbbb2222", "Second", "needs_review"))
-        .await
-        .unwrap();
+    db::insert_paper(
+        &pool,
+        &paper("bbbb2222", "Second", PaperStatus::NeedsReview),
+    )
+    .await
+    .unwrap();
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
 
     // Before: both listed.

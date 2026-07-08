@@ -47,7 +47,7 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     .bind(&p.cite_key)
     .bind(&p.url)
     .bind(&p.source)
-    .bind(&p.status)
+    .bind(p.status)
     .bind(&p.added_at)
     .bind(&p.deleted_at)
     .execute(pool)
@@ -115,7 +115,7 @@ pub async fn update_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     .bind(&p.cite_key)
     .bind(&p.url)
     .bind(&p.source)
-    .bind(&p.status)
+    .bind(p.status)
     .bind(&p.deleted_at)
     .bind(&p.id)
     .execute(pool)
@@ -255,7 +255,7 @@ mod tests {
             cite_key: None,
             url: None,
             source: None,
-            status: PaperStatus::NeedsReview.as_str().to_string(),
+            status: PaperStatus::NeedsReview,
             added_at: "2026-07-06T00:00:00Z".to_string(),
             deleted_at: None,
         }
@@ -283,7 +283,7 @@ mod tests {
         let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
         assert_eq!(got.content_hash, "abc");
         assert_eq!(got.title.as_deref(), Some("A Title"));
-        assert_eq!(got.status, "needs_review");
+        assert_eq!(got.status, PaperStatus::NeedsReview);
     }
 
     #[tokio::test]
@@ -330,7 +330,7 @@ mod tests {
         p.cite_key = Some("he2016deep".into());
         p.url = Some("https://example.org/x".into());
         p.source = Some("crossref".into());
-        p.status = PaperStatus::Resolved.as_str().to_string();
+        p.status = PaperStatus::Resolved;
         update_paper(&pool, &p).await.unwrap();
 
         let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
         assert_eq!(got.url.as_deref(), Some("https://example.org/x"));
         assert_eq!(got.source.as_deref(), Some("crossref"));
-        assert_eq!(got.status, "resolved");
+        assert_eq!(got.status, PaperStatus::Resolved);
         assert_eq!(got.content_hash, "h1"); // immutable columns untouched
     }
 
@@ -389,12 +389,12 @@ mod tests {
         a.title = Some("Deep Residual Learning".into());
         a.authors = Some(r#"["Kaiming He"]"#.into());
         a.year = Some(2016);
-        a.status = PaperStatus::Resolved.as_str().to_string();
+        a.status = PaperStatus::Resolved;
         let mut b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
         b.title = Some("Attention Is All You Need".into());
         b.authors = Some(r#"["Ashish Vaswani"]"#.into());
         b.year = Some(2017);
-        b.status = PaperStatus::NeedsReview.as_str().to_string();
+        b.status = PaperStatus::NeedsReview;
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
 
@@ -451,7 +451,7 @@ mod tests {
         let (_dir, pool) = temp_pool().await;
         assert_eq!(stats(&pool).await.unwrap(), (0, 0, 0));
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
-        a.status = PaperStatus::Resolved.as_str().to_string();
+        a.status = PaperStatus::Resolved;
         let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb"); // needs_review
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
@@ -486,7 +486,7 @@ mod tests {
     async fn soft_delete_hides_and_purge_removes() {
         let (_dir, pool) = temp_pool().await;
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
-        a.status = PaperStatus::Resolved.as_str().to_string();
+        a.status = PaperStatus::Resolved;
         let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();

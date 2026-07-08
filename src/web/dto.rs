@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::models::Paper;
+use crate::models::{Paper, PaperStatus};
 
 /// A paper for the list view (no abstract, to keep the payload light).
 #[derive(Serialize)]
@@ -16,7 +16,7 @@ pub struct PaperSummary {
     pub cite_key: Option<String>,
     pub url: Option<String>,
     pub source: Option<String>,
-    pub status: String,
+    pub status: PaperStatus,
     pub added_at: String,
 }
 
@@ -34,7 +34,7 @@ impl From<&Paper> for PaperSummary {
             cite_key: p.cite_key.clone(),
             url: p.url.clone(),
             source: p.source.clone(),
-            status: p.status.clone(),
+            status: p.status,
             added_at: p.added_at.clone(),
         }
     }

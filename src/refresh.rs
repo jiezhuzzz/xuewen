@@ -53,7 +53,7 @@ pub async fn run(
     let mut summary = RefreshSummary::default();
     for mut paper in papers {
         summary.processed += 1;
-        let reresolve = reresolve_all || paper.status == PaperStatus::NeedsReview.as_str();
+        let reresolve = reresolve_all || paper.status == PaperStatus::NeedsReview;
         match refresh_one(pool, library_root, resolver, grobid, &mut paper, reresolve).await {
             Ok(outcome) => {
                 summary.reresolved += outcome.reresolved as usize;
@@ -104,8 +104,8 @@ async fn refresh_one(
                 // Never downgrade an already-resolved record: if this re-resolution
                 // came back unconfident (needs_review) but the paper is already
                 // resolved, keep the existing metadata rather than wiping it.
-                let would_downgrade = fields.status == PaperStatus::NeedsReview.as_str()
-                    && paper.status == PaperStatus::Resolved.as_str();
+                let would_downgrade = fields.status == PaperStatus::NeedsReview
+                    && paper.status == PaperStatus::Resolved;
                 if would_downgrade {
                     tracing::warn!(
                         "re-resolve of {} came back unresolved; keeping existing resolved metadata",

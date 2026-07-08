@@ -3,14 +3,14 @@ mod common;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
-use xuewen::models::Paper;
+use xuewen::models::{Paper, PaperStatus};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::Resolver;
 
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
 
 /// A minimal stored paper for seeding; callers set the fields they care about.
-fn seed_paper(id: &str, hash: &str, rel_path: &str, status: &str) -> Paper {
+fn seed_paper(id: &str, hash: &str, rel_path: &str, status: PaperStatus) -> Paper {
     Paper {
         id: id.into(),
         content_hash: hash.into(),
@@ -26,7 +26,7 @@ fn seed_paper(id: &str, hash: &str, rel_path: &str, status: &str) -> Paper {
         cite_key: None,
         url: None,
         source: None,
-        status: status.into(),
+        status,
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
     }
@@ -53,7 +53,7 @@ async fn needs_review_reresolves_and_refiles() {
         "01890000-0000-7000-8000-0000000000a1",
         hash,
         &format!("_unsorted/{hash}.pdf"),
-        "needs_review",
+        PaperStatus::NeedsReview,
     );
     db::insert_paper(&pool, &p).await.unwrap();
 
@@ -72,7 +72,7 @@ async fn needs_review_reresolves_and_refiles() {
     assert_eq!(summary.refiled, 1);
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
-    assert_eq!(got.status, "resolved");
+    assert_eq!(got.status, PaperStatus::Resolved);
     assert_eq!(got.cite_key.as_deref(), Some("wang2019kgat"));
     assert_eq!(got.rel_path, "wang2019kgat.pdf");
     assert!(library.join("wang2019kgat.pdf").exists());
@@ -95,7 +95,7 @@ async fn resolved_paper_refiles_without_reresolving() {
         "01890000-0000-7000-8000-0000000000b2",
         hash,
         &format!("{hash}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
     p.title = Some("Deep Residual Learning for Image Recognition".into());
     p.authors = Some(r#"["Kaiming He"]"#.into());
@@ -119,7 +119,7 @@ async fn resolved_paper_refiles_without_reresolving() {
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
     // Metadata unchanged; only the location moved to the cite-key path.
-    assert_eq!(got.status, "resolved");
+    assert_eq!(got.status, PaperStatus::Resolved);
     assert_eq!(
         got.title.as_deref(),
         Some("Deep Residual Learning for Image Recognition")
@@ -148,7 +148,7 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
         "01890000-0000-7000-8000-0000000000f6",
         hash,
         "he2016deep.pdf",
-        "resolved",
+        PaperStatus::Resolved,
     );
     p.title = Some("Deep Residual Learning for Image Recognition".into());
     p.authors = Some(r#"["Kaiming He"]"#.into());
@@ -168,7 +168,7 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
     // Metadata preserved; still resolved; still at its cite-key path.
-    assert_eq!(got.status, "resolved");
+    assert_eq!(got.status, PaperStatus::Resolved);
     assert_eq!(
         got.title.as_deref(),
         Some("Deep Residual Learning for Image Recognition")
@@ -202,14 +202,14 @@ async fn refresh_by_id_prefix_targets_one() {
         "01890000-0000-7000-8000-0000000000a1",
         h1,
         &format!("{h1}.pdf"),
-        "needs_review",
+        PaperStatus::NeedsReview,
     );
     db::insert_paper(&pool, &p1).await.unwrap();
     let mut p2 = seed_paper(
         "01890000-0000-7000-8000-0000000000b2",
         h2,
         &format!("{h2}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
     p2.title = Some("Some Resolved Paper".into());
     db::insert_paper(&pool, &p2).await.unwrap();
@@ -236,7 +236,7 @@ async fn refresh_by_id_prefix_targets_one() {
 
     let got1 = db::get_by_id(&pool, &p1.id).await.unwrap().unwrap();
     assert_eq!(got1.rel_path, "wang2019kgat.pdf");
-    assert_eq!(got1.status, "resolved");
+    assert_eq!(got1.status, PaperStatus::Resolved);
 
     // P2 completely untouched.
     let got2 = db::get_by_id(&pool, &p2.id).await.unwrap().unwrap();
@@ -262,7 +262,7 @@ async fn all_reresolves_resolved_paper() {
         "01890000-0000-7000-8000-0000000000d4",
         hash,
         "old2000stale.pdf",
-        "resolved",
+        PaperStatus::Resolved,
     );
     p.title = Some("Old Stale Title".into());
     p.authors = Some(r#"["Old Author"]"#.into());
@@ -319,7 +319,7 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         "01890000-0000-7000-8000-00000000aa01",
         h1,
         &format!("{h1}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
     p1.title = Some("Deep Residual Learning for Image Recognition".into());
     p1.authors = Some(r#"["Kaiming He"]"#.into());
@@ -331,7 +331,7 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         "01890000-0000-7000-8000-00000000bb02",
         h2,
         &format!("{h2}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
     p2.title = Some("Deep Residual Learning for Image Recognition".into());
     p2.authors = Some(r#"["Kaiming He"]"#.into());
@@ -378,7 +378,7 @@ async fn refresh_skips_a_trashed_paper() {
         "01890000-0000-7000-8000-0000000000e7",
         hash,
         &format!("{hash}.pdf"),
-        "resolved",
+        PaperStatus::Resolved,
     );
     p.title = Some("Deep Residual Learning for Image Recognition".into());
     p.authors = Some(r#"["Kaiming He"]"#.into());

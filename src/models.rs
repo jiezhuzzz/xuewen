@@ -7,7 +7,9 @@ pub enum Identifier {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
+#[sqlx(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum PaperStatus {
     Resolved,
     NeedsReview,
@@ -41,7 +43,7 @@ pub struct Paper {
     pub cite_key: Option<String>,
     pub url: Option<String>,
     pub source: Option<String>,
-    pub status: String,
+    pub status: PaperStatus,
     pub added_at: String,
     pub deleted_at: Option<String>,
 }
