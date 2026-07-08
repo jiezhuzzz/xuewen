@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 
-use crate::pipeline::{move_to, IngestCtx};
+use crate::pipeline::{move_to_async, IngestCtx};
 
 /// Tunables for the watch loop. `Default` is for production; tests use small values.
 #[derive(Debug, Clone)]
@@ -123,7 +123,7 @@ async fn process_one(ctx: &IngestCtx, failed_dir: &Path, cfg: &WatchConfig, path
                 "giving up on {}: {e}; quarantining to _failed",
                 path.display()
             );
-            if let Err(mv) = move_to(path, failed_dir) {
+            if let Err(mv) = move_to_async(path, failed_dir).await {
                 tracing::error!("could not quarantine {}: {mv}", path.display());
             }
         }

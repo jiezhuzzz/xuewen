@@ -2,11 +2,12 @@ use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-/// SHA-256 of a file's bytes, lowercase hex.
+/// SHA-256 of a file's bytes (streamed), lowercase hex.
 pub fn sha256_file(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)?;
-    let digest = Sha256::digest(&bytes);
-    Ok(hex::encode(digest))
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(hex::encode(hasher.finalize()))
 }
 
 #[cfg(test)]

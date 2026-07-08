@@ -53,7 +53,7 @@ impl IngestCtx {
 
         // 2. Dedup by content (active → Duplicate, trashed → InTrash).
         if let Some(existing) = db::find_by_hash(&self.pool, &content_hash).await? {
-            move_to(&path, &self.dirs.processed_dir)?;
+            move_to_async(&path, &self.dirs.processed_dir).await?;
             return Ok(if existing.deleted_at.is_some() {
                 Outcome::InTrash(existing.id)
             } else {
@@ -80,7 +80,7 @@ impl IngestCtx {
         )
         .await?
         {
-            move_to(&path, &self.dirs.processed_dir)?;
+            move_to_async(&path, &self.dirs.processed_dir).await?;
             return Ok(if existing.deleted_at.is_some() {
                 Outcome::InTrash(existing.id)
             } else {
@@ -100,18 +100,18 @@ impl IngestCtx {
 
         // 5. File the PDF into the managed library.
         let dest = self.dirs.library_root.join(&rel_path);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(&path, &dest)?;
+        copy_to_async(&path, &dest).await?;
 
         // 6. Build and store the record.
         let paper = fields.into_paper(content_hash, rel_path, cite_key);
         if let Err(e) = db::insert_paper(&self.pool, &paper).await {
-            let _ = std::fs::remove_file(&dest);
+            let _ = tokio::fs::remove_file(&dest).await;
             // Lost a race with a concurrent ingest of the same work? Report the
             // winner's outcome instead of surfacing a constraint error.
             if db::is_unique_violation(&e) {
+                tracing::warn!(
+                    "insert hit a UNIQUE constraint (concurrent ingest of the same work?); re-checking"
+                );
                 if let Some(outcome) = recover_unique_collision(
                     &self.pool,
                     &paper.content_hash,
@@ -120,7 +120,7 @@ impl IngestCtx {
                 )
                 .await?
                 {
-                    move_to(&path, &self.dirs.processed_dir)?;
+                    move_to_async(&path, &self.dirs.processed_dir).await?;
                     return Ok(outcome);
                 }
             }
@@ -128,7 +128,7 @@ impl IngestCtx {
         }
 
         // 7. Move the original out of the inbox.
-        move_to(&path, &self.dirs.processed_dir)?;
+        move_to_async(&path, &self.dirs.processed_dir).await?;
         Ok(Outcome::Ingested(paper.id))
     }
 
@@ -303,6 +303,18 @@ pub(crate) fn copy_to(from: &Path, to: &Path) -> Result<()> {
     }
     std::fs::copy(from, to)?;
     Ok(())
+}
+
+/// `move_to` off the async runtime.
+pub(crate) async fn move_to_async(src: &Path, dir: &Path) -> Result<()> {
+    let (src, dir) = (src.to_path_buf(), dir.to_path_buf());
+    tokio::task::spawn_blocking(move || move_to(&src, &dir)).await?
+}
+
+/// `copy_to` off the async runtime.
+pub(crate) async fn copy_to_async(from: &Path, to: &Path) -> Result<()> {
+    let (from, to) = (from.to_path_buf(), to.to_path_buf());
+    tokio::task::spawn_blocking(move || copy_to(&from, &to)).await?
 }
 
 #[cfg(test)]
