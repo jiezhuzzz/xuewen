@@ -1,4 +1,4 @@
-import { deletePaper, getPaper, getStats, listPapers } from './api';
+import { deletePaper, getPaper, getStats, importPaper, listPapers } from './api';
 import type { Filters, PaperDetail, PaperSummary, Stats } from './types';
 
 export const filters = $state<Filters>({ q: '', status: 'all', sort: 'year_desc' });
@@ -23,9 +23,21 @@ export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: b
 
 export const theme = $state<{ mode: 'light' | 'dark' }>({ mode: 'light' });
 
-export const ui = $state<{ sidebarOpen: boolean }>({ sidebarOpen: true });
+export const ui = $state<{ sidebarOpen: boolean; importOpen: boolean }>({
+  sidebarOpen: true,
+  importOpen: false,
+});
 export function toggleSidebar(): void {
   ui.sidebarOpen = !ui.sidebarOpen;
+}
+export function openImport(): void {
+  importState.items = [];
+  importState.cancelled = false;
+  ui.importOpen = true;
+}
+export function closeImport(): void {
+  importState.cancelled = true;
+  ui.importOpen = false;
 }
 
 const detailCache = new Map<string, PaperDetail>();
@@ -108,4 +120,60 @@ export function toggleTheme(): void {
   theme.mode = theme.mode === 'dark' ? 'light' : 'dark';
   localStorage.setItem('xuewen-theme', theme.mode);
   applyTheme();
+}
+
+export interface ImportItem {
+  name: string;
+  status: 'queued' | 'importing' | 'ingested' | 'duplicate' | 'failed';
+  message?: string;
+}
+
+export const importState = $state<{ items: ImportItem[]; cancelled: boolean }>({
+  items: [],
+  cancelled: false,
+});
+
+// Files waiting to upload, paired with their row index in importState.items.
+const pending: { file: File; index: number }[] = [];
+let draining: Promise<void> | null = null;
+
+/// Queue files for import and (re)start the sequential drain. Resolves when the
+/// current batch finishes.
+export function enqueueFiles(files: File[]): Promise<void> {
+  for (const file of files) {
+    const index = importState.items.push({ name: file.name, status: 'queued' }) - 1;
+    pending.push({ file, index });
+  }
+  if (!draining) {
+    draining = drainQueue().finally(() => {
+      draining = null;
+    });
+  }
+  return draining;
+}
+
+async function drainQueue(): Promise<void> {
+  while (pending.length > 0) {
+    if (importState.cancelled) {
+      pending.length = 0;
+      break;
+    }
+    const { file, index } = pending.shift()!;
+    importState.items[index].status = 'importing';
+    try {
+      const res = await importPaper(file);
+      if (res.outcome === 'duplicate') {
+        importState.items[index].status = 'duplicate';
+      } else {
+        importState.items[index].status = 'ingested';
+        importState.items[index].message = res.title ?? '(untitled)';
+      }
+    } catch (e) {
+      importState.items[index].status = 'failed';
+      importState.items[index].message = (e as Error).message;
+    }
+  }
+  // Reflect the newly ingested papers in the sidebar list and counts.
+  await loadPapers();
+  await loadStats();
 }
