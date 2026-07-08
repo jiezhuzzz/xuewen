@@ -14,7 +14,8 @@ use sqlx::SqlitePool;
 use crate::pipeline::IngestCtx;
 
 /// Everything the web import handler needs to run the ingest pipeline. Held
-/// behind an `Arc` in `AppState` because `Resolver`/`Grobid` are not `Clone`.
+/// behind an `Arc` in `AppState` because `IngestCtx` is not `Clone` (its
+/// `Resolver`/`Grobid` are not).
 pub struct Ingest {
     pub ctx: IngestCtx,
     /// Where uploaded bytes are written before ingest (`inbox_dir/_uploads`).

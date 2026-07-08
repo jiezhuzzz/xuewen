@@ -334,3 +334,115 @@ async fn import_returns_503_when_not_configured() {
         .await
         .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
 }
+
+#[tokio::test]
+async fn import_reports_in_trash_for_deleted_paper() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".to_string(),
+        "http://127.0.0.1:1".to_string(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".to_string());
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(
+        pool.clone(),
+        library.clone(),
+        ingest,
+    ))
+    .unwrap();
+
+    let pdf_path = dir.path().join("paper.pdf");
+    common::write_test_pdf(&pdf_path, &["A Paper With No Identifier"]);
+    let pdf_bytes = std::fs::read(&pdf_path).unwrap();
+
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes(pdf_bytes.clone()).file_name("paper.pdf"),
+    );
+    let body: serde_json::Value = server.post("/api/papers").multipart(form).await.json();
+    assert_eq!(body["outcome"], "ingested");
+    let id = body["id"].as_str().unwrap().to_string();
+
+    db::soft_delete(&pool, &id).await.unwrap();
+
+    // Re-upload the same bytes → in_trash with the trashed paper's id.
+    let form2 =
+        MultipartForm::new().add_part("file", Part::bytes(pdf_bytes).file_name("paper.pdf"));
+    let body2: serde_json::Value = server.post("/api/papers").multipart(form2).await.json();
+    assert_eq!(body2["outcome"], "in_trash");
+    assert_eq!(body2["id"], serde_json::json!(id));
+}
+
+#[tokio::test]
+async fn import_reports_same_work_for_known_doi() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // Seed an active paper that already owns this DOI.
+    let mut existing = paper(
+        "01890000-0000-7000-8000-0000000000aa",
+        "Seed",
+        PaperStatus::Resolved,
+    );
+    existing.meta.doi = Some("10.1000/xyz123".into());
+    db::insert_paper(&pool, &existing).await.unwrap();
+
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".to_string(),
+        "http://127.0.0.1:1".to_string(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".to_string());
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
+
+    // Upload a different file whose first page carries the same DOI. The
+    // resolver is offline, but the extracted identifier still lands in the
+    // decided fields, so the identifier dedup fires.
+    let pdf_path = dir.path().join("other.pdf");
+    common::write_test_pdf(
+        &pdf_path,
+        &["A Different Upload", "https://doi.org/10.1000/xyz123"],
+    );
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes(std::fs::read(&pdf_path).unwrap()).file_name("other.pdf"),
+    );
+    let body: serde_json::Value = server.post("/api/papers").multipart(form).await.json();
+    assert_eq!(body["outcome"], "same_work");
+    assert_eq!(body["id"], serde_json::json!(existing.id));
+}

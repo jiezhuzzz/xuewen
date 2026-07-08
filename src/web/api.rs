@@ -123,7 +123,7 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
         return match ingest.ctx.ingest_file(&staged).await {
             Ok(Outcome::Ingested(id)) => {
                 // Look up the fresh row so the UI can show title + resolved/needs_review.
-                let (title, status) = match db::get_by_id(&app.pool, &id).await {
+                let (title, status) = match db::get_by_id(&ingest.ctx.pool, &id).await {
                     Ok(Some(p)) => (serde_json::json!(p.meta.title), p.meta.status),
                     _ => (
                         serde_json::Value::Null,
@@ -141,8 +141,6 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             Ok(Outcome::Duplicate) => {
                 Json(serde_json::json!({"outcome": "duplicate"})).into_response()
             }
-            // TODO(Task 10): surface richer same-work/in-trash responses (e.g. the
-            // existing paper's title) once the frontend is updated to handle them.
             Ok(Outcome::SameWork(id)) => {
                 Json(serde_json::json!({"outcome": "same_work", "id": id})).into_response()
             }
