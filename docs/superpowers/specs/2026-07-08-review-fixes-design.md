@@ -207,8 +207,9 @@ auth. Classification lives in a small pure function with unit tests.
 `RetryPolicy::interactive()` — 2 attempts, 500 ms base delay, 2 s max. A new
 `Resolver::new_with_policy(contact_email, policy)` constructor; `main` uses it
 for the `Serve` command and the existing polite production policy everywhere
-else. Worst-case synchronous import latency drops from minutes to roughly one
-timeout per source.
+else. Worst-case synchronous import latency drops substantially (2 attempts
+per source instead of 4 with long back-off), though GROBID's own 60s timeout
+and the DBLP→Crossref fallback still apply.
 
 ## 5. Phase 3 — Minor cleanups (one commit)
 
