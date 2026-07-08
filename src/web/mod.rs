@@ -16,12 +16,15 @@ pub struct AppState {
     pub library_root: PathBuf,
 }
 
-/// Assemble the read-only web router (pure — used directly by tests).
+/// Assemble the web router (pure — used directly by tests).
 pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
     let state = AppState { pool, library_root };
     Router::new()
         .route("/api/papers", get(api::list_papers))
-        .route("/api/papers/{id}", get(api::get_paper))
+        .route(
+            "/api/papers/{id}",
+            get(api::get_paper).delete(api::delete_paper),
+        )
         .route("/api/stats", get(api::stats))
         .route("/papers/{id}/pdf", get(api::pdf))
         .fallback(assets::static_handler)

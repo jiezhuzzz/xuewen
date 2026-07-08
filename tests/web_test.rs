@@ -136,3 +136,47 @@ async fn streams_pdf_with_range_and_guards_paths() {
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn deletes_a_paper_softly() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "First", "resolved"))
+        .await
+        .unwrap();
+    db::insert_paper(&pool, &paper("bbbb2222", "Second", "needs_review"))
+        .await
+        .unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // Before: both listed.
+    assert_eq!(
+        server
+            .get("/api/papers")
+            .await
+            .json::<Vec<serde_json::Value>>()
+            .len(),
+        2
+    );
+
+    // DELETE one → 200, and it drops out of the active list + stats.
+    server
+        .delete("/api/papers/aaaa1111")
+        .await
+        .assert_status_ok();
+    let list = server
+        .get("/api/papers")
+        .await
+        .json::<Vec<serde_json::Value>>();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"], "bbbb2222");
+    assert_eq!(
+        server.get("/api/stats").await.json::<serde_json::Value>()["total"],
+        1
+    );
+
+    // DELETE an unknown id → 404.
+    server
+        .delete("/api/papers/nope")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}

@@ -48,6 +48,25 @@ pub async fn get_paper(State(app): State<AppState>, Path(id): Path<String>) -> R
     }
 }
 
+/// Soft-delete a paper (web mutation): flag it deleted; the file is untouched.
+/// Purge (permanent removal) is CLI-only. Idempotent on an already-trashed paper.
+pub async fn delete_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    match db::get_by_id(&app.pool, &id).await {
+        Ok(Some(_)) => match db::soft_delete(&app.pool, &id).await {
+            Ok(_) => Json(serde_json::json!({ "deleted": true })).into_response(),
+            Err(e) => {
+                tracing::error!("delete_paper: {e}");
+                internal_error()
+            }
+        },
+        Ok(None) => not_found(),
+        Err(e) => {
+            tracing::error!("delete_paper lookup: {e}");
+            internal_error()
+        }
+    }
+}
+
 pub async fn stats(State(app): State<AppState>) -> Response {
     match db::stats(&app.pool).await {
         Ok((total, resolved, needs_review)) => Json(Stats {
