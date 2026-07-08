@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { enqueueFiles, importState, openImport } from '../lib/state.svelte';
+import { closeImport, enqueueFiles, importState, openImport } from '../lib/state.svelte';
 
 function pdf(name: string): File {
   return new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], name, {
@@ -60,5 +60,50 @@ describe('enqueueFiles', () => {
 
     expect(importState.items[0].status).toBe('failed');
     expect(importState.items[0].message).toBe('not a PDF');
+  });
+
+  it('drops a stale upload result from a superseded session', async () => {
+    // Control exactly when slow.pdf's POST resolves.
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>((r) => (releaseSlow = r));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const u = String(url);
+        const json = (o: unknown, status = 200) =>
+          new Response(JSON.stringify(o), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          });
+        if (u === '/api/papers' && init?.method === 'POST') {
+          const f = (init.body as FormData).get('file') as File;
+          if (f.name === 'slow.pdf') {
+            await slowGate;
+            return json({ outcome: 'ingested', id: 's', title: 'STALE', status: 'resolved' });
+          }
+          return json({ outcome: 'duplicate' });
+        }
+        if (u.startsWith('/api/papers')) return json([]);
+        return json({ total: 0, resolved: 0, needs_review: 0 });
+      }),
+    );
+
+    // Session A: start slow.pdf (stays in flight), then close.
+    openImport();
+    const batchA = enqueueFiles([pdf('slow.pdf')]);
+    closeImport();
+
+    // Session B: reset, enqueue a fresh file (shares the still-running drain loop).
+    openImport();
+    const batchB = enqueueFiles([pdf('fresh.pdf')]);
+
+    // Let the stale slow.pdf resolve; the drain loop must drop it and process fresh.pdf.
+    releaseSlow();
+    await batchB;
+    await batchA;
+
+    expect(importState.items.length).toBe(1);
+    expect(importState.items[0].status).toBe('duplicate');
+    expect(importState.items[0].message).toBeUndefined(); // no 'STALE' leak
   });
 });
