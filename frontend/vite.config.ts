@@ -17,4 +17,5 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
   },
+  resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
 });
