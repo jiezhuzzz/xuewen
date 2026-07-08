@@ -36,18 +36,18 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     .bind(&p.id)
     .bind(&p.content_hash)
     .bind(&p.rel_path)
-    .bind(&p.title)
-    .bind(&p.abstract_text)
-    .bind(&p.authors)
-    .bind(&p.venue)
-    .bind(p.year)
-    .bind(&p.doi)
-    .bind(&p.arxiv_id)
-    .bind(&p.dblp_key)
+    .bind(&p.meta.title)
+    .bind(&p.meta.abstract_text)
+    .bind(&p.meta.authors)
+    .bind(&p.meta.venue)
+    .bind(p.meta.year)
+    .bind(&p.meta.doi)
+    .bind(&p.meta.arxiv_id)
+    .bind(&p.meta.dblp_key)
     .bind(&p.cite_key)
-    .bind(&p.url)
-    .bind(&p.source)
-    .bind(p.status)
+    .bind(&p.meta.url)
+    .bind(&p.meta.source)
+    .bind(p.meta.status)
     .bind(&p.added_at)
     .bind(&p.deleted_at)
     .execute(pool)
@@ -104,18 +104,18 @@ pub async fn update_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
          WHERE id = ?",
     )
     .bind(&p.rel_path)
-    .bind(&p.title)
-    .bind(&p.abstract_text)
-    .bind(&p.authors)
-    .bind(&p.venue)
-    .bind(p.year)
-    .bind(&p.doi)
-    .bind(&p.arxiv_id)
-    .bind(&p.dblp_key)
+    .bind(&p.meta.title)
+    .bind(&p.meta.abstract_text)
+    .bind(&p.meta.authors)
+    .bind(&p.meta.venue)
+    .bind(p.meta.year)
+    .bind(&p.meta.doi)
+    .bind(&p.meta.arxiv_id)
+    .bind(&p.meta.dblp_key)
     .bind(&p.cite_key)
-    .bind(&p.url)
-    .bind(&p.source)
-    .bind(p.status)
+    .bind(&p.meta.url)
+    .bind(&p.meta.source)
+    .bind(p.meta.status)
     .bind(&p.deleted_at)
     .bind(&p.id)
     .execute(pool)
@@ -237,27 +237,29 @@ pub async fn stats(pool: &SqlitePool) -> Result<(i64, i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Authors, PaperStatus};
+    use crate::models::{Authors, PaperMeta, PaperStatus};
 
     fn sample_paper(id: &str, hash: &str) -> Paper {
         Paper {
             id: id.to_string(),
             content_hash: hash.to_string(),
             rel_path: format!("{hash}.pdf"),
-            title: Some("A Title".into()),
-            abstract_text: None,
-            authors: Authors::default(),
-            venue: None,
-            year: None,
-            doi: None,
-            arxiv_id: None,
-            dblp_key: None,
             cite_key: None,
-            url: None,
-            source: None,
-            status: PaperStatus::NeedsReview,
             added_at: "2026-07-06T00:00:00Z".to_string(),
             deleted_at: None,
+            meta: PaperMeta {
+                title: Some("A Title".into()),
+                abstract_text: None,
+                authors: Authors::default(),
+                venue: None,
+                year: None,
+                doi: None,
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
+                status: PaperStatus::NeedsReview,
+            },
         }
     }
 
@@ -282,8 +284,8 @@ mod tests {
 
         let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
         assert_eq!(got.content_hash, "abc");
-        assert_eq!(got.title.as_deref(), Some("A Title"));
-        assert_eq!(got.status, PaperStatus::NeedsReview);
+        assert_eq!(got.meta.title.as_deref(), Some("A Title"));
+        assert_eq!(got.meta.status, PaperStatus::NeedsReview);
     }
 
     #[tokio::test]
@@ -318,35 +320,35 @@ mod tests {
         insert_paper(&pool, &p).await.unwrap();
 
         // Mutate every updatable column to catch a dropped SET clause.
-        p.title = Some("New Title".into());
-        p.abstract_text = Some("New abstract".into());
-        p.authors = Authors(vec!["Ada Lovelace".into()]);
-        p.venue = Some("KDD".into());
-        p.year = Some(2019);
-        p.doi = Some("10.1/new".into());
-        p.arxiv_id = Some("2001.00001".into());
-        p.dblp_key = Some("conf/kdd/X".into());
+        p.meta.title = Some("New Title".into());
+        p.meta.abstract_text = Some("New abstract".into());
+        p.meta.authors = Authors(vec!["Ada Lovelace".into()]);
+        p.meta.venue = Some("KDD".into());
+        p.meta.year = Some(2019);
+        p.meta.doi = Some("10.1/new".into());
+        p.meta.arxiv_id = Some("2001.00001".into());
+        p.meta.dblp_key = Some("conf/kdd/X".into());
         p.rel_path = "he2016deep.pdf".into();
         p.cite_key = Some("he2016deep".into());
-        p.url = Some("https://example.org/x".into());
-        p.source = Some("crossref".into());
-        p.status = PaperStatus::Resolved;
+        p.meta.url = Some("https://example.org/x".into());
+        p.meta.source = Some("crossref".into());
+        p.meta.status = PaperStatus::Resolved;
         update_paper(&pool, &p).await.unwrap();
 
         let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
-        assert_eq!(got.title.as_deref(), Some("New Title"));
-        assert_eq!(got.abstract_text.as_deref(), Some("New abstract"));
-        assert_eq!(got.authors, Authors(vec!["Ada Lovelace".into()]));
-        assert_eq!(got.venue.as_deref(), Some("KDD"));
-        assert_eq!(got.year, Some(2019));
-        assert_eq!(got.doi.as_deref(), Some("10.1/new"));
-        assert_eq!(got.arxiv_id.as_deref(), Some("2001.00001"));
-        assert_eq!(got.dblp_key.as_deref(), Some("conf/kdd/X"));
+        assert_eq!(got.meta.title.as_deref(), Some("New Title"));
+        assert_eq!(got.meta.abstract_text.as_deref(), Some("New abstract"));
+        assert_eq!(got.meta.authors, Authors(vec!["Ada Lovelace".into()]));
+        assert_eq!(got.meta.venue.as_deref(), Some("KDD"));
+        assert_eq!(got.meta.year, Some(2019));
+        assert_eq!(got.meta.doi.as_deref(), Some("10.1/new"));
+        assert_eq!(got.meta.arxiv_id.as_deref(), Some("2001.00001"));
+        assert_eq!(got.meta.dblp_key.as_deref(), Some("conf/kdd/X"));
         assert_eq!(got.rel_path, "he2016deep.pdf");
         assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
-        assert_eq!(got.url.as_deref(), Some("https://example.org/x"));
-        assert_eq!(got.source.as_deref(), Some("crossref"));
-        assert_eq!(got.status, PaperStatus::Resolved);
+        assert_eq!(got.meta.url.as_deref(), Some("https://example.org/x"));
+        assert_eq!(got.meta.source.as_deref(), Some("crossref"));
+        assert_eq!(got.meta.status, PaperStatus::Resolved);
         assert_eq!(got.content_hash, "h1"); // immutable columns untouched
     }
 
@@ -388,15 +390,22 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+            .meta
             .authors
             .0
             .is_empty());
         // Non-empty round-trips.
         let mut b = sample_paper("01890000-0000-7000-8000-0000000000e6", "hf");
-        b.authors = Authors(vec!["Kaiming He".into(), "Xiangyu Zhang".into()]);
+        b.meta.authors = Authors(vec!["Kaiming He".into(), "Xiangyu Zhang".into()]);
         insert_paper(&pool, &b).await.unwrap();
         assert_eq!(
-            get_by_id(&pool, &b.id).await.unwrap().unwrap().authors.0,
+            get_by_id(&pool, &b.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .meta
+                .authors
+                .0,
             vec!["Kaiming He", "Xiangyu Zhang"]
         );
         // Garbage in the column decodes to empty (legacy tolerance).
@@ -409,6 +418,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+            .meta
             .authors
             .0
             .is_empty());
@@ -418,22 +428,22 @@ mod tests {
     async fn list_papers_filters_and_sorts() {
         let (_dir, pool) = temp_pool().await;
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
-        a.title = Some("Deep Residual Learning".into());
-        a.authors = Authors(vec!["Kaiming He".into()]);
-        a.year = Some(2016);
-        a.status = PaperStatus::Resolved;
+        a.meta.title = Some("Deep Residual Learning".into());
+        a.meta.authors = Authors(vec!["Kaiming He".into()]);
+        a.meta.year = Some(2016);
+        a.meta.status = PaperStatus::Resolved;
         let mut b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
-        b.title = Some("Attention Is All You Need".into());
-        b.authors = Authors(vec!["Ashish Vaswani".into()]);
-        b.year = Some(2017);
-        b.status = PaperStatus::NeedsReview;
+        b.meta.title = Some("Attention Is All You Need".into());
+        b.meta.authors = Authors(vec!["Ashish Vaswani".into()]);
+        b.meta.year = Some(2017);
+        b.meta.status = PaperStatus::NeedsReview;
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
 
         // No filters → both, default sort year DESC (2017 before 2016).
         let all = list_papers(&pool, None, None, None).await.unwrap();
         assert_eq!(all.len(), 2);
-        assert_eq!(all[0].year, Some(2017));
+        assert_eq!(all[0].meta.year, Some(2017));
 
         // q matches title (case-insensitive) or authors.
         let hits = list_papers(&pool, Some("residual"), None, None)
@@ -469,7 +479,7 @@ mod tests {
         let asc = list_papers(&pool, None, None, Some("year_asc"))
             .await
             .unwrap();
-        assert_eq!(asc[0].year, Some(2016));
+        assert_eq!(asc[0].meta.year, Some(2016));
 
         // An unknown status is ignored (not an error) → both rows.
         let bogus = list_papers(&pool, None, Some("nonsense"), None)
@@ -483,7 +493,7 @@ mod tests {
         let (_dir, pool) = temp_pool().await;
         assert_eq!(stats(&pool).await.unwrap(), (0, 0, 0));
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
-        a.status = PaperStatus::Resolved;
+        a.meta.status = PaperStatus::Resolved;
         let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb"); // needs_review
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
@@ -518,7 +528,7 @@ mod tests {
     async fn soft_delete_hides_and_purge_removes() {
         let (_dir, pool) = temp_pool().await;
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
-        a.status = PaperStatus::Resolved;
+        a.meta.status = PaperStatus::Resolved;
         let b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();

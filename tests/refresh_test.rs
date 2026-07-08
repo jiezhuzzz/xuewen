@@ -3,7 +3,7 @@ mod common;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
-use xuewen::models::{Authors, Paper, PaperStatus};
+use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::Resolver;
 
@@ -15,20 +15,22 @@ fn seed_paper(id: &str, hash: &str, rel_path: &str, status: PaperStatus) -> Pape
         id: id.into(),
         content_hash: hash.into(),
         rel_path: rel_path.into(),
-        title: None,
-        abstract_text: None,
-        authors: Authors::default(),
-        venue: None,
-        year: None,
-        doi: None,
-        arxiv_id: None,
-        dblp_key: None,
         cite_key: None,
-        url: None,
-        source: None,
-        status,
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
+        meta: PaperMeta {
+            title: None,
+            abstract_text: None,
+            authors: Authors::default(),
+            venue: None,
+            year: None,
+            doi: None,
+            arxiv_id: None,
+            dblp_key: None,
+            url: None,
+            source: None,
+            status,
+        },
     }
 }
 
@@ -72,7 +74,7 @@ async fn needs_review_reresolves_and_refiles() {
     assert_eq!(summary.refiled, 1);
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
-    assert_eq!(got.status, PaperStatus::Resolved);
+    assert_eq!(got.meta.status, PaperStatus::Resolved);
     assert_eq!(got.cite_key.as_deref(), Some("wang2019kgat"));
     assert_eq!(got.rel_path, "wang2019kgat.pdf");
     assert!(library.join("wang2019kgat.pdf").exists());
@@ -97,10 +99,10 @@ async fn resolved_paper_refiles_without_reresolving() {
         &format!("{hash}.pdf"),
         PaperStatus::Resolved,
     );
-    p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Authors(vec!["Kaiming He".into()]);
-    p.year = Some(2016);
-    p.source = Some("crossref".into());
+    p.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p.meta.year = Some(2016);
+    p.meta.source = Some("crossref".into());
     db::insert_paper(&pool, &p).await.unwrap();
 
     // Unreachable resolver: a resolved paper must NOT be re-resolved, so no HTTP happens.
@@ -119,12 +121,12 @@ async fn resolved_paper_refiles_without_reresolving() {
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
     // Metadata unchanged; only the location moved to the cite-key path.
-    assert_eq!(got.status, PaperStatus::Resolved);
+    assert_eq!(got.meta.status, PaperStatus::Resolved);
     assert_eq!(
-        got.title.as_deref(),
+        got.meta.title.as_deref(),
         Some("Deep Residual Learning for Image Recognition")
     );
-    assert_eq!(got.year, Some(2016));
+    assert_eq!(got.meta.year, Some(2016));
     assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
     assert_eq!(got.rel_path, "he2016deep.pdf");
     assert!(library.join("he2016deep.pdf").exists());
@@ -150,11 +152,11 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
         "he2016deep.pdf",
         PaperStatus::Resolved,
     );
-    p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Authors(vec!["Kaiming He".into()]);
-    p.year = Some(2016);
+    p.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p.meta.year = Some(2016);
     p.cite_key = Some("he2016deep".into());
-    p.source = Some("crossref".into());
+    p.meta.source = Some("crossref".into());
     db::insert_paper(&pool, &p).await.unwrap();
 
     // Reachable mock with no mounts → every lookup 404 → Unresolved.
@@ -168,13 +170,13 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
 
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
     // Metadata preserved; still resolved; still at its cite-key path.
-    assert_eq!(got.status, PaperStatus::Resolved);
+    assert_eq!(got.meta.status, PaperStatus::Resolved);
     assert_eq!(
-        got.title.as_deref(),
+        got.meta.title.as_deref(),
         Some("Deep Residual Learning for Image Recognition")
     );
-    assert_eq!(got.authors, Authors(vec!["Kaiming He".into()]));
-    assert_eq!(got.year, Some(2016));
+    assert_eq!(got.meta.authors, Authors(vec!["Kaiming He".into()]));
+    assert_eq!(got.meta.year, Some(2016));
     assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
     assert_eq!(got.rel_path, "he2016deep.pdf");
     assert!(f.exists());
@@ -211,7 +213,7 @@ async fn refresh_by_id_prefix_targets_one() {
         &format!("{h2}.pdf"),
         PaperStatus::Resolved,
     );
-    p2.title = Some("Some Resolved Paper".into());
+    p2.meta.title = Some("Some Resolved Paper".into());
     db::insert_paper(&pool, &p2).await.unwrap();
 
     let server = MockServer::start().await;
@@ -236,7 +238,7 @@ async fn refresh_by_id_prefix_targets_one() {
 
     let got1 = db::get_by_id(&pool, &p1.id).await.unwrap().unwrap();
     assert_eq!(got1.rel_path, "wang2019kgat.pdf");
-    assert_eq!(got1.status, PaperStatus::Resolved);
+    assert_eq!(got1.meta.status, PaperStatus::Resolved);
 
     // P2 completely untouched.
     let got2 = db::get_by_id(&pool, &p2.id).await.unwrap().unwrap();
@@ -264,9 +266,9 @@ async fn all_reresolves_resolved_paper() {
         "old2000stale.pdf",
         PaperStatus::Resolved,
     );
-    p.title = Some("Old Stale Title".into());
-    p.authors = Authors(vec!["Old Author".into()]);
-    p.year = Some(2000);
+    p.meta.title = Some("Old Stale Title".into());
+    p.meta.authors = Authors(vec!["Old Author".into()]);
+    p.meta.year = Some(2000);
     p.cite_key = Some("old2000stale".into());
     db::insert_paper(&pool, &p).await.unwrap();
 
@@ -286,10 +288,10 @@ async fn all_reresolves_resolved_paper() {
     let got = db::get_by_id(&pool, &p.id).await.unwrap().unwrap();
     // Stale metadata replaced by the freshly-resolved record, and re-filed.
     assert_eq!(
-        got.title.as_deref(),
+        got.meta.title.as_deref(),
         Some("KGAT: Knowledge Graph Attention Network for Recommendation")
     );
-    assert_eq!(got.year, Some(2019));
+    assert_eq!(got.meta.year, Some(2019));
     assert_eq!(got.rel_path, "wang2019kgat.pdf");
     assert!(library.join("wang2019kgat.pdf").exists());
     assert!(!f.exists());
@@ -321,9 +323,9 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         &format!("{h1}.pdf"),
         PaperStatus::Resolved,
     );
-    p1.title = Some("Deep Residual Learning for Image Recognition".into());
-    p1.authors = Authors(vec!["Kaiming He".into()]);
-    p1.year = Some(2016);
+    p1.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p1.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p1.meta.year = Some(2016);
     p1.added_at = "2026-07-07T00:00:00Z".into();
     db::insert_paper(&pool, &p1).await.unwrap();
 
@@ -333,9 +335,9 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         &format!("{h2}.pdf"),
         PaperStatus::Resolved,
     );
-    p2.title = Some("Deep Residual Learning for Image Recognition".into());
-    p2.authors = Authors(vec!["Kaiming He".into()]);
-    p2.year = Some(2016);
+    p2.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p2.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p2.meta.year = Some(2016);
     p2.added_at = "2026-07-07T00:00:01Z".into(); // ordered after p1
     db::insert_paper(&pool, &p2).await.unwrap();
 
@@ -380,9 +382,9 @@ async fn refresh_skips_a_trashed_paper() {
         &format!("{hash}.pdf"),
         PaperStatus::Resolved,
     );
-    p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Authors(vec!["Kaiming He".into()]);
-    p.year = Some(2016);
+    p.meta.title = Some("Deep Residual Learning for Image Recognition".into());
+    p.meta.authors = Authors(vec!["Kaiming He".into()]);
+    p.meta.year = Some(2016);
     db::insert_paper(&pool, &p).await.unwrap();
     db::soft_delete(&pool, &p.id).await.unwrap();
 

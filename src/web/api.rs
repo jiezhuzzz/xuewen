@@ -132,7 +132,7 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             Ok(Outcome::Ingested(id)) => {
                 // Look up the fresh row so the UI can show title + resolved/needs_review.
                 let (title, status) = match db::get_by_id(&app.pool, &id).await {
-                    Ok(Some(p)) => (serde_json::json!(p.title), p.status),
+                    Ok(Some(p)) => (serde_json::json!(p.meta.title), p.meta.status),
                     _ => (
                         serde_json::Value::Null,
                         crate::models::PaperStatus::NeedsReview,

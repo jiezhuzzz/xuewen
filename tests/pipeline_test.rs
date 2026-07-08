@@ -3,7 +3,7 @@ mod common;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
-use xuewen::models::{Authors, PaperStatus};
+use xuewen::models::{Authors, PaperMeta, PaperStatus};
 use xuewen::pipeline::{ingest_file, Libraries, Outcome};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
@@ -48,9 +48,12 @@ async fn ingests_pdf_and_dedups() {
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.title.as_deref(), Some("Attention Is All You Need"));
-    assert_eq!(paper.doi.as_deref(), Some("10.1145/3292500.3330701"));
-    assert_eq!(paper.status, PaperStatus::NeedsReview);
+    assert_eq!(
+        paper.meta.title.as_deref(),
+        Some("Attention Is All You Need")
+    );
+    assert_eq!(paper.meta.doi.as_deref(), Some("10.1145/3292500.3330701"));
+    assert_eq!(paper.meta.status, PaperStatus::NeedsReview);
 
     // File was copied into the library and the original moved to _processed.
     assert!(library
@@ -157,15 +160,15 @@ async fn ingest_with_doi_resolves_via_crossref() {
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.status, PaperStatus::Resolved);
-    assert_eq!(paper.source.as_deref(), Some("crossref"));
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("crossref"));
     assert_eq!(
-        paper.title.as_deref(),
+        paper.meta.title.as_deref(),
         Some("KGAT: Knowledge Graph Attention Network for Recommendation")
     );
-    assert_eq!(paper.doi.as_deref(), Some(doi));
-    assert_eq!(paper.year, Some(2019));
-    assert!(paper.authors.0.iter().any(|a| a == "Xiang Wang"));
+    assert_eq!(paper.meta.doi.as_deref(), Some(doi));
+    assert_eq!(paper.meta.year, Some(2019));
+    assert!(paper.meta.authors.0.iter().any(|a| a == "Xiang Wang"));
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgat"));
     assert!(library.join("wang2019kgat.pdf").exists());
 }
@@ -209,11 +212,14 @@ async fn ingest_with_arxiv_resolves_via_api() {
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.status, PaperStatus::Resolved);
-    assert_eq!(paper.source.as_deref(), Some("arxiv"));
-    assert_eq!(paper.title.as_deref(), Some("Attention Is All You Need"));
-    assert_eq!(paper.arxiv_id.as_deref(), Some(arxiv_id));
-    assert_eq!(paper.year, Some(2017));
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("arxiv"));
+    assert_eq!(
+        paper.meta.title.as_deref(),
+        Some("Attention Is All You Need")
+    );
+    assert_eq!(paper.meta.arxiv_id.as_deref(), Some(arxiv_id));
+    assert_eq!(paper.meta.year, Some(2017));
     assert_eq!(paper.cite_key.as_deref(), Some("vaswani2017attention"));
     assert!(library.join("vaswani2017attention.pdf").exists());
 }
@@ -262,12 +268,12 @@ async fn ingest_without_identifier_resolves_via_dblp() {
     };
 
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.status, PaperStatus::Resolved);
-    assert_eq!(paper.source.as_deref(), Some("dblp"));
-    assert_eq!(paper.dblp_key.as_deref(), Some("conf/kdd/WangHCLC19"));
-    assert_eq!(paper.venue.as_deref(), Some("KDD"));
-    assert_eq!(paper.year, Some(2019));
-    assert!(paper.doi.as_deref().is_some());
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("dblp"));
+    assert_eq!(paper.meta.dblp_key.as_deref(), Some("conf/kdd/WangHCLC19"));
+    assert_eq!(paper.meta.venue.as_deref(), Some("KDD"));
+    assert_eq!(paper.meta.year, Some(2019));
+    assert!(paper.meta.doi.as_deref().is_some());
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgat"));
     assert!(library.join("wang2019kgat.pdf").exists());
 }
@@ -319,10 +325,11 @@ async fn grobid_title_drives_dblp_resolution() {
     };
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
     // DBLP matched (its title fuzzily matches the GROBID title) -> resolved via dblp.
-    assert_eq!(paper.status, PaperStatus::Resolved);
-    assert_eq!(paper.source.as_deref(), Some("dblp"));
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("dblp"));
     // DBLP has no abstract; the GROBID abstract is backfilled.
     assert!(paper
+        .meta
         .abstract_text
         .as_deref()
         .unwrap()
@@ -369,13 +376,13 @@ async fn grobid_enriches_needs_review_when_unmatched() {
         Outcome::Duplicate => panic!("expected Ingested"),
     };
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
-    assert_eq!(paper.status, PaperStatus::NeedsReview);
-    assert_eq!(paper.source.as_deref(), Some("grobid"));
+    assert_eq!(paper.meta.status, PaperStatus::NeedsReview);
+    assert_eq!(paper.meta.source.as_deref(), Some("grobid"));
     assert_eq!(
-        paper.title.as_deref(),
+        paper.meta.title.as_deref(),
         Some("BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding")
     );
-    assert!(paper.authors.0.iter().any(|a| a == "Jacob Devlin"));
+    assert!(paper.meta.authors.0.iter().any(|a| a == "Jacob Devlin"));
 }
 
 #[tokio::test]
@@ -406,20 +413,22 @@ async fn colliding_cite_key_gets_letter_suffix() {
         id: "01890000-0000-7000-8000-0000000000ff".to_string(),
         content_hash: "seedhash".to_string(),
         rel_path: "wang2019kgat.pdf".to_string(),
-        title: Some("Seed".to_string()),
-        abstract_text: None,
-        authors: Authors::default(),
-        venue: None,
-        year: Some(2019),
-        doi: None,
-        arxiv_id: None,
-        dblp_key: None,
         cite_key: Some("wang2019kgat".to_string()),
-        url: None,
-        source: Some("crossref".to_string()),
-        status: PaperStatus::Resolved,
         added_at: "2026-07-07T00:00:00Z".to_string(),
         deleted_at: None,
+        meta: PaperMeta {
+            title: Some("Seed".to_string()),
+            abstract_text: None,
+            authors: Authors::default(),
+            venue: None,
+            year: Some(2019),
+            doi: None,
+            arxiv_id: None,
+            dblp_key: None,
+            url: None,
+            source: Some("crossref".to_string()),
+            status: PaperStatus::Resolved,
+        },
     };
     db::insert_paper(&pool, &seed).await.unwrap();
 

@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
             if paper.deleted_at.is_some() {
                 println!("already deleted: {}", paper.id);
             } else {
-                let title = paper.title.as_deref().unwrap_or("(untitled)");
+                let title = paper.meta.title.as_deref().unwrap_or("(untitled)");
                 if yes || confirm(&format!("Delete {title:?}?"))? {
                     db::soft_delete(&pool, &paper.id).await?;
                     println!("deleted {}", paper.id);

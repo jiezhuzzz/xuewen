@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::models::{Authors, Identifier, Paper, PaperStatus};
+use crate::models::{Authors, Identifier, Paper, PaperMeta, PaperStatus};
 use crate::naming;
 use crate::resolve::grobid::Grobid;
 use crate::resolve::{Resolution, ResolvedMetadata, Resolver};
@@ -63,7 +63,7 @@ pub async fn ingest_file(
     // 4. Decide the stored fields, then the cite-key filename.
     let fields = resolve_fields(provisional_title, extracted, &ident, resolution);
     let cite_key =
-        match naming::cite_key_base(&fields.authors, fields.year, fields.title.as_deref()) {
+        match naming::cite_key_base(&fields.authors.0, fields.year, fields.title.as_deref()) {
             Some(base) => {
                 let taken = db::cite_keys_with_base(pool, &base, None).await?;
                 Some(naming::disambiguate(&base, &taken))
@@ -135,22 +135,6 @@ pub(crate) async fn resolve_pdf(
     })
 }
 
-/// The metadata a paper should store, decided from the resolution outcome and any
-/// GROBID extraction. Shared by ingest (and, later, the `refresh` command).
-pub struct ResolvedFields {
-    pub title: Option<String>,
-    pub abstract_text: Option<String>,
-    pub authors: Vec<String>,
-    pub venue: Option<String>,
-    pub year: Option<i64>,
-    pub doi: Option<String>,
-    pub arxiv_id: Option<String>,
-    pub dblp_key: Option<String>,
-    pub url: Option<String>,
-    pub source: Option<String>,
-    pub status: PaperStatus,
-}
-
 /// Decide the stored fields. A confident resolution yields `resolved` (with a
 /// GROBID abstract backfilled if the source lacked one); otherwise `needs_review`,
 /// enriched with GROBID's title/abstract/authors when present.
@@ -159,7 +143,7 @@ pub(crate) fn resolve_fields(
     extracted: Option<ResolvedMetadata>,
     ident: &Identifier,
     resolution: Resolution,
-) -> ResolvedFields {
+) -> PaperMeta {
     let (ext_doi, ext_arxiv) = match ident {
         Identifier::Doi(d) => (Some(d.clone()), None),
         Identifier::Arxiv(a) => (None, Some(a.clone())),
@@ -170,10 +154,10 @@ pub(crate) fn resolve_fields(
             let abstract_text = md
                 .abstract_text
                 .or_else(|| extracted.and_then(|g| g.abstract_text));
-            ResolvedFields {
+            PaperMeta {
                 title: md.title.or(provisional_title),
                 abstract_text,
-                authors: md.authors,
+                authors: Authors(md.authors),
                 venue: md.venue,
                 year: md.year,
                 doi: md.doi.or(ext_doi),
@@ -185,10 +169,10 @@ pub(crate) fn resolve_fields(
             }
         }
         Resolution::Unresolved => match extracted {
-            Some(g) => ResolvedFields {
+            Some(g) => PaperMeta {
                 title: g.title.or(provisional_title),
                 abstract_text: g.abstract_text,
-                authors: g.authors,
+                authors: Authors(g.authors),
                 venue: None,
                 year: None,
                 doi: ext_doi,
@@ -198,10 +182,10 @@ pub(crate) fn resolve_fields(
                 source: Some(g.source),
                 status: PaperStatus::NeedsReview,
             },
-            None => ResolvedFields {
+            None => PaperMeta {
                 title: provisional_title,
                 abstract_text: None,
-                authors: Vec::new(),
+                authors: Authors::default(),
                 venue: None,
                 year: None,
                 doi: ext_doi,
@@ -215,7 +199,7 @@ pub(crate) fn resolve_fields(
     }
 }
 
-impl ResolvedFields {
+impl PaperMeta {
     /// Assemble a full `Paper` with a fresh id/timestamp and the given location.
     pub(crate) fn into_paper(
         self,
@@ -227,37 +211,11 @@ impl ResolvedFields {
             id: Uuid::now_v7().to_string(),
             content_hash,
             rel_path,
-            title: self.title,
-            abstract_text: self.abstract_text,
-            authors: Authors(self.authors),
-            venue: self.venue,
-            year: self.year,
-            doi: self.doi,
-            arxiv_id: self.arxiv_id,
-            dblp_key: self.dblp_key,
             cite_key,
-            url: self.url,
-            source: self.source,
-            status: self.status,
             added_at: chrono::Utc::now().to_rfc3339(),
             deleted_at: None,
+            meta: self,
         }
-    }
-
-    /// Overwrite an existing paper's metadata columns from a fresh resolution,
-    /// leaving id/content_hash/rel_path/cite_key/added_at for the caller to manage.
-    pub(crate) fn apply_to(self, paper: &mut Paper) {
-        paper.authors = Authors(self.authors);
-        paper.title = self.title;
-        paper.abstract_text = self.abstract_text;
-        paper.venue = self.venue;
-        paper.year = self.year;
-        paper.doi = self.doi;
-        paper.arxiv_id = self.arxiv_id;
-        paper.dblp_key = self.dblp_key;
-        paper.url = self.url;
-        paper.source = self.source;
-        paper.status = self.status;
     }
 }
 

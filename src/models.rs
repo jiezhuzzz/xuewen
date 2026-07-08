@@ -64,12 +64,10 @@ impl PaperStatus {
     }
 }
 
-/// A stored bibliographic record. Column names match `migrations/0001_init.sql`.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct Paper {
-    pub id: String,
-    pub content_hash: String,
-    pub rel_path: String,
+/// The metadata block shared by resolution output and the stored record.
+/// Column names match the `papers` table; flattened into `Paper` for sqlx/serde.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct PaperMeta {
     pub title: Option<String>,
     #[sqlx(rename = "abstract")]
     #[serde(rename = "abstract")]
@@ -80,12 +78,23 @@ pub struct Paper {
     pub doi: Option<String>,
     pub arxiv_id: Option<String>,
     pub dblp_key: Option<String>,
-    pub cite_key: Option<String>,
     pub url: Option<String>,
     pub source: Option<String>,
     pub status: PaperStatus,
+}
+
+/// A stored bibliographic record. Column names match `migrations/0001_init.sql`.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct Paper {
+    pub id: String,
+    pub content_hash: String,
+    pub rel_path: String,
+    pub cite_key: Option<String>,
     pub added_at: String,
     pub deleted_at: Option<String>,
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub meta: PaperMeta,
 }
 
 #[cfg(test)]

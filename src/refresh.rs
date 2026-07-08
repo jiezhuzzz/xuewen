@@ -53,7 +53,7 @@ pub async fn run(
     let mut summary = RefreshSummary::default();
     for mut paper in papers {
         summary.processed += 1;
-        let reresolve = reresolve_all || paper.status == PaperStatus::NeedsReview;
+        let reresolve = reresolve_all || paper.meta.status == PaperStatus::NeedsReview;
         match refresh_one(pool, library_root, resolver, grobid, &mut paper, reresolve).await {
             Ok(outcome) => {
                 summary.reresolved += outcome.reresolved as usize;
@@ -105,14 +105,14 @@ async fn refresh_one(
                 // came back unconfident (needs_review) but the paper is already
                 // resolved, keep the existing metadata rather than wiping it.
                 let would_downgrade = fields.status == PaperStatus::NeedsReview
-                    && paper.status == PaperStatus::Resolved;
+                    && paper.meta.status == PaperStatus::Resolved;
                 if would_downgrade {
                     tracing::warn!(
                         "re-resolve of {} came back unresolved; keeping existing resolved metadata",
                         paper.id
                     );
                 } else {
-                    fields.apply_to(paper);
+                    paper.meta = fields;
                     outcome.reresolved = true;
                 }
             }
@@ -125,8 +125,11 @@ async fn refresh_one(
 
     // Re-file: recompute the cite-key path from the paper's current metadata,
     // excluding this paper's own key from the collision set.
-    let cite_key = match naming::cite_key_base(&paper.authors.0, paper.year, paper.title.as_deref())
-    {
+    let cite_key = match naming::cite_key_base(
+        &paper.meta.authors.0,
+        paper.meta.year,
+        paper.meta.title.as_deref(),
+    ) {
         Some(base) => {
             let taken = db::cite_keys_with_base(pool, &base, Some(&paper.id)).await?;
             Some(naming::disambiguate(&base, &taken))
