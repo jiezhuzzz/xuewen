@@ -67,6 +67,10 @@ pub fn parse_tei(xml: &str) -> Result<Option<ResolvedMetadata>> {
 }
 
 /// A GROBID service client.
+///
+/// Deliberately plain `reqwest` with no retry policy: GROBID is a local,
+/// user-run service — if it's down, degrading to the no-GROBID path
+/// immediately beats stalling ingest with retries.
 pub struct Grobid {
     http: reqwest::Client,
     base: String,
