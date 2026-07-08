@@ -198,6 +198,7 @@ pub async fn pdf(State(app): State<AppState>, Path(id): Path<String>, req: Reque
             }
         })
         .await
+        .inspect_err(|e| tracing::error!("canonicalize check panicked: {e}"))
         .unwrap_or(false)
     };
     if !under_root {
