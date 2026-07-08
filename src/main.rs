@@ -8,6 +8,7 @@ use xuewen::pipeline::{ingest_file, Libraries, Outcome};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
+use xuewen::web;
 
 #[derive(Parser)]
 #[command(name = "xuewen", version)]
@@ -33,6 +34,15 @@ enum Command {
         /// Re-resolve every paper, not just needs_review records.
         #[arg(long)]
         all: bool,
+    },
+    /// Serve the read-only web UI over HTTP (localhost).
+    Serve {
+        /// Address to bind.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to bind.
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
     },
 }
 
@@ -80,6 +90,9 @@ async fn main() -> Result<()> {
                 "refresh: {} processed, {} re-resolved, {} re-filed",
                 summary.processed, summary.reresolved, summary.refiled
             );
+        }
+        Command::Serve { host, port } => {
+            web::serve(&host, port, pool, cfg.library_root.clone()).await?;
         }
     }
     Ok(())
