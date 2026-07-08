@@ -61,8 +61,8 @@
           ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-500/10'
           : 'border-slate-300 dark:border-slate-700'}"
       >
-        <Upload size={24} class="text-slate-400" />
-        <span class="text-slate-600 dark:text-slate-300">Drag PDFs here, or click to browse</span>
+        <Upload size={24} class="pointer-events-none text-slate-400" />
+        <span class="pointer-events-none text-slate-600 dark:text-slate-300">Drag PDFs here, or click to browse</span>
       </button>
       <input
         bind:this={input}
@@ -89,7 +89,10 @@
                 <span class="h-3.5 w-3.5 shrink-0 rounded-full border border-slate-300 dark:border-slate-600"></span>
               {/if}
               <span class="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">{item.name}</span>
-              <span class="shrink-0 text-xs text-slate-500 dark:text-slate-400">
+              <span
+                class="max-w-[45%] shrink-0 truncate text-right text-xs text-slate-500 dark:text-slate-400"
+                title={item.message}
+              >
                 {#if item.status === 'ingested'}{item.message}
                 {:else if item.status === 'duplicate'}duplicate
                 {:else if item.status === 'failed'}{item.message}
