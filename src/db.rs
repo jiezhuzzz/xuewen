@@ -237,7 +237,7 @@ pub async fn stats(pool: &SqlitePool) -> Result<(i64, i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::PaperStatus;
+    use crate::models::{Authors, PaperStatus};
 
     fn sample_paper(id: &str, hash: &str) -> Paper {
         Paper {
@@ -246,7 +246,7 @@ mod tests {
             rel_path: format!("{hash}.pdf"),
             title: Some("A Title".into()),
             abstract_text: None,
-            authors: None,
+            authors: Authors::default(),
             venue: None,
             year: None,
             doi: None,
@@ -320,7 +320,7 @@ mod tests {
         // Mutate every updatable column to catch a dropped SET clause.
         p.title = Some("New Title".into());
         p.abstract_text = Some("New abstract".into());
-        p.authors = Some(r#"["Ada Lovelace"]"#.into());
+        p.authors = Authors(vec!["Ada Lovelace".into()]);
         p.venue = Some("KDD".into());
         p.year = Some(2019);
         p.doi = Some("10.1/new".into());
@@ -336,7 +336,7 @@ mod tests {
         let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
         assert_eq!(got.title.as_deref(), Some("New Title"));
         assert_eq!(got.abstract_text.as_deref(), Some("New abstract"));
-        assert_eq!(got.authors.as_deref(), Some(r#"["Ada Lovelace"]"#));
+        assert_eq!(got.authors, Authors(vec!["Ada Lovelace".into()]));
         assert_eq!(got.venue.as_deref(), Some("KDD"));
         assert_eq!(got.year, Some(2019));
         assert_eq!(got.doi.as_deref(), Some("10.1/new"));
@@ -372,14 +372,46 @@ mod tests {
         assert_eq!(both.len(), 2);
     }
 
-    #[test]
-    fn authors_vec_parses_and_defaults() {
-        let mut p = sample_paper("01890000-0000-7000-8000-0000000000e5", "he");
-        assert!(p.authors_vec().is_empty()); // None → empty
-        p.authors = Some(r#"["Kaiming He","Xiangyu Zhang"]"#.into());
-        assert_eq!(p.authors_vec(), vec!["Kaiming He", "Xiangyu Zhang"]);
-        p.authors = Some("not json".into());
-        assert!(p.authors_vec().is_empty()); // invalid → empty
+    #[tokio::test]
+    async fn authors_roundtrip_null_json_and_garbage() {
+        let (_dir, pool) = temp_pool().await;
+        // Empty -> stored NULL -> decodes empty.
+        let a = sample_paper("01890000-0000-7000-8000-0000000000e5", "he");
+        insert_paper(&pool, &a).await.unwrap();
+        let raw: (Option<String>,) = sqlx::query_as("SELECT authors FROM papers WHERE id = ?")
+            .bind(&a.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(raw.0, None, "empty authors must be stored as SQL NULL");
+        assert!(get_by_id(&pool, &a.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .authors
+            .0
+            .is_empty());
+        // Non-empty round-trips.
+        let mut b = sample_paper("01890000-0000-7000-8000-0000000000e6", "hf");
+        b.authors = Authors(vec!["Kaiming He".into(), "Xiangyu Zhang".into()]);
+        insert_paper(&pool, &b).await.unwrap();
+        assert_eq!(
+            get_by_id(&pool, &b.id).await.unwrap().unwrap().authors.0,
+            vec!["Kaiming He", "Xiangyu Zhang"]
+        );
+        // Garbage in the column decodes to empty (legacy tolerance).
+        sqlx::query("UPDATE papers SET authors = 'not json' WHERE id = ?")
+            .bind(&b.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(get_by_id(&pool, &b.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .authors
+            .0
+            .is_empty());
     }
 
     #[tokio::test]
@@ -387,12 +419,12 @@ mod tests {
         let (_dir, pool) = temp_pool().await;
         let mut a = sample_paper("01890000-0000-7000-8000-0000000000a1", "ha");
         a.title = Some("Deep Residual Learning".into());
-        a.authors = Some(r#"["Kaiming He"]"#.into());
+        a.authors = Authors(vec!["Kaiming He".into()]);
         a.year = Some(2016);
         a.status = PaperStatus::Resolved;
         let mut b = sample_paper("01890000-0000-7000-8000-0000000000b2", "hb");
         b.title = Some("Attention Is All You Need".into());
-        b.authors = Some(r#"["Ashish Vaswani"]"#.into());
+        b.authors = Authors(vec!["Ashish Vaswani".into()]);
         b.year = Some(2017);
         b.status = PaperStatus::NeedsReview;
         insert_paper(&pool, &a).await.unwrap();

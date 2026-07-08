@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::models::{Identifier, Paper, PaperStatus};
+use crate::models::{Authors, Identifier, Paper, PaperStatus};
 use crate::naming;
 use crate::resolve::grobid::Grobid;
 use crate::resolve::{Resolution, ResolvedMetadata, Resolver};
@@ -223,18 +223,13 @@ impl ResolvedFields {
         rel_path: String,
         cite_key: Option<String>,
     ) -> Paper {
-        let authors = if self.authors.is_empty() {
-            None
-        } else {
-            serde_json::to_string(&self.authors).ok()
-        };
         Paper {
             id: Uuid::now_v7().to_string(),
             content_hash,
             rel_path,
             title: self.title,
             abstract_text: self.abstract_text,
-            authors,
+            authors: Authors(self.authors),
             venue: self.venue,
             year: self.year,
             doi: self.doi,
@@ -252,11 +247,7 @@ impl ResolvedFields {
     /// Overwrite an existing paper's metadata columns from a fresh resolution,
     /// leaving id/content_hash/rel_path/cite_key/added_at for the caller to manage.
     pub(crate) fn apply_to(self, paper: &mut Paper) {
-        paper.authors = if self.authors.is_empty() {
-            None
-        } else {
-            serde_json::to_string(&self.authors).ok()
-        };
+        paper.authors = Authors(self.authors);
         paper.title = self.title;
         paper.abstract_text = self.abstract_text;
         paper.venue = self.venue;

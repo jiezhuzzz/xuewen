@@ -3,7 +3,7 @@ mod common;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::TestServer;
 use xuewen::db;
-use xuewen::models::{Paper, PaperStatus};
+use xuewen::models::{Authors, Paper, PaperStatus};
 use xuewen::pipeline::Libraries;
 use xuewen::resolve::Resolver;
 use xuewen::web::{build_router, build_router_with_ingest, Ingest};
@@ -22,7 +22,7 @@ fn paper(id: &str, title: &str, status: PaperStatus) -> Paper {
         rel_path: format!("{id}.pdf"),
         title: Some(title.into()),
         abstract_text: Some("An abstract.".into()),
-        authors: Some(r#"["Ada Lovelace"]"#.into()),
+        authors: Authors(vec!["Ada Lovelace".into()]),
         venue: Some("KDD".into()),
         year: Some(2020),
         doi: None,

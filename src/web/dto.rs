@@ -25,7 +25,7 @@ impl From<&Paper> for PaperSummary {
         Self {
             id: p.id.clone(),
             title: p.title.clone(),
-            authors: p.authors_vec(),
+            authors: p.authors.0.clone(),
             venue: p.venue.clone(),
             year: p.year,
             doi: p.doi.clone(),

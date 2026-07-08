@@ -3,7 +3,7 @@ mod common;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
-use xuewen::models::{Paper, PaperStatus};
+use xuewen::models::{Authors, Paper, PaperStatus};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::Resolver;
 
@@ -17,7 +17,7 @@ fn seed_paper(id: &str, hash: &str, rel_path: &str, status: PaperStatus) -> Pape
         rel_path: rel_path.into(),
         title: None,
         abstract_text: None,
-        authors: None,
+        authors: Authors::default(),
         venue: None,
         year: None,
         doi: None,
@@ -98,7 +98,7 @@ async fn resolved_paper_refiles_without_reresolving() {
         PaperStatus::Resolved,
     );
     p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Some(r#"["Kaiming He"]"#.into());
+    p.authors = Authors(vec!["Kaiming He".into()]);
     p.year = Some(2016);
     p.source = Some("crossref".into());
     db::insert_paper(&pool, &p).await.unwrap();
@@ -151,7 +151,7 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
         PaperStatus::Resolved,
     );
     p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Some(r#"["Kaiming He"]"#.into());
+    p.authors = Authors(vec!["Kaiming He".into()]);
     p.year = Some(2016);
     p.cite_key = Some("he2016deep".into());
     p.source = Some("crossref".into());
@@ -173,7 +173,7 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
         got.title.as_deref(),
         Some("Deep Residual Learning for Image Recognition")
     );
-    assert_eq!(got.authors.as_deref(), Some(r#"["Kaiming He"]"#));
+    assert_eq!(got.authors, Authors(vec!["Kaiming He".into()]));
     assert_eq!(got.year, Some(2016));
     assert_eq!(got.cite_key.as_deref(), Some("he2016deep"));
     assert_eq!(got.rel_path, "he2016deep.pdf");
@@ -265,7 +265,7 @@ async fn all_reresolves_resolved_paper() {
         PaperStatus::Resolved,
     );
     p.title = Some("Old Stale Title".into());
-    p.authors = Some(r#"["Old Author"]"#.into());
+    p.authors = Authors(vec!["Old Author".into()]);
     p.year = Some(2000);
     p.cite_key = Some("old2000stale".into());
     db::insert_paper(&pool, &p).await.unwrap();
@@ -322,7 +322,7 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         PaperStatus::Resolved,
     );
     p1.title = Some("Deep Residual Learning for Image Recognition".into());
-    p1.authors = Some(r#"["Kaiming He"]"#.into());
+    p1.authors = Authors(vec!["Kaiming He".into()]);
     p1.year = Some(2016);
     p1.added_at = "2026-07-07T00:00:00Z".into();
     db::insert_paper(&pool, &p1).await.unwrap();
@@ -334,7 +334,7 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
         PaperStatus::Resolved,
     );
     p2.title = Some("Deep Residual Learning for Image Recognition".into());
-    p2.authors = Some(r#"["Kaiming He"]"#.into());
+    p2.authors = Authors(vec!["Kaiming He".into()]);
     p2.year = Some(2016);
     p2.added_at = "2026-07-07T00:00:01Z".into(); // ordered after p1
     db::insert_paper(&pool, &p2).await.unwrap();
@@ -381,7 +381,7 @@ async fn refresh_skips_a_trashed_paper() {
         PaperStatus::Resolved,
     );
     p.title = Some("Deep Residual Learning for Image Recognition".into());
-    p.authors = Some(r#"["Kaiming He"]"#.into());
+    p.authors = Authors(vec!["Kaiming He".into()]);
     p.year = Some(2016);
     db::insert_paper(&pool, &p).await.unwrap();
     db::soft_delete(&pool, &p.id).await.unwrap();

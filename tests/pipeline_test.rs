@@ -3,7 +3,7 @@ mod common;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
-use xuewen::models::PaperStatus;
+use xuewen::models::{Authors, PaperStatus};
 use xuewen::pipeline::{ingest_file, Libraries, Outcome};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
@@ -165,7 +165,7 @@ async fn ingest_with_doi_resolves_via_crossref() {
     );
     assert_eq!(paper.doi.as_deref(), Some(doi));
     assert_eq!(paper.year, Some(2019));
-    assert!(paper.authors.as_deref().unwrap().contains("Xiang Wang"));
+    assert!(paper.authors.0.iter().any(|a| a == "Xiang Wang"));
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgat"));
     assert!(library.join("wang2019kgat.pdf").exists());
 }
@@ -375,7 +375,7 @@ async fn grobid_enriches_needs_review_when_unmatched() {
         paper.title.as_deref(),
         Some("BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding")
     );
-    assert!(paper.authors.as_deref().unwrap().contains("Jacob Devlin"));
+    assert!(paper.authors.0.iter().any(|a| a == "Jacob Devlin"));
 }
 
 #[tokio::test]
@@ -408,7 +408,7 @@ async fn colliding_cite_key_gets_letter_suffix() {
         rel_path: "wang2019kgat.pdf".to_string(),
         title: Some("Seed".to_string()),
         abstract_text: None,
-        authors: None,
+        authors: Authors::default(),
         venue: None,
         year: Some(2019),
         doi: None,
