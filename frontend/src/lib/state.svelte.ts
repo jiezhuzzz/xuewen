@@ -128,6 +128,7 @@ export interface ImportItem {
   name: string;
   status: 'queued' | 'importing' | 'ingested' | 'duplicate' | 'failed';
   message?: string;
+  needsReview?: boolean;
 }
 
 export const importState = $state<{ items: ImportItem[]; cancelled: boolean }>({
@@ -171,6 +172,7 @@ async function drainQueue(): Promise<void> {
       } else {
         importState.items[job.index].status = 'ingested';
         importState.items[job.index].message = res.title ?? '(untitled)';
+        importState.items[job.index].needsReview = res.status === 'needs_review';
       }
     } catch (e) {
       if (job.session !== importSession) continue;

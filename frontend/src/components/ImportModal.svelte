@@ -89,16 +89,24 @@
                 <span class="h-3.5 w-3.5 shrink-0 rounded-full border border-slate-300 dark:border-slate-600"></span>
               {/if}
               <span class="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">{item.name}</span>
-              <span
-                class="max-w-[45%] shrink-0 truncate text-right text-xs text-slate-500 dark:text-slate-400"
-                title={item.message}
-              >
-                {#if item.status === 'ingested'}{item.message}
-                {:else if item.status === 'duplicate'}duplicate
-                {:else if item.status === 'failed'}{item.message}
-                {:else if item.status === 'importing'}importing…
-                {:else}queued{/if}
-              </span>
+              {#if item.status === 'ingested'}
+                <span class="flex max-w-[55%] shrink-0 items-center justify-end gap-1.5 text-xs">
+                  {#if item.needsReview}
+                    <span class="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">needs review</span>
+                  {/if}
+                  <span class="truncate text-slate-500 dark:text-slate-400" title={item.message}>{item.message}</span>
+                </span>
+              {:else}
+                <span
+                  class="max-w-[45%] shrink-0 truncate text-right text-xs text-slate-500 dark:text-slate-400"
+                  title={item.message}
+                >
+                  {#if item.status === 'duplicate'}duplicate
+                  {:else if item.status === 'failed'}{item.message}
+                  {:else if item.status === 'importing'}importing…
+                  {:else}queued{/if}
+                </span>
+              {/if}
             </li>
           {/each}
         </ul>

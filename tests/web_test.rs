@@ -261,3 +261,61 @@ async fn imports_a_pdf_dedups_and_rejects_non_pdf() {
         .await
         .assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn import_sanitizes_traversal_filenames() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".to_string(),
+        "http://127.0.0.1:1".to_string(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".to_string());
+    let ingest = std::sync::Arc::new(Ingest {
+        resolver,
+        grobid: None,
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: inbox.join("_processed"),
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
+
+    let pdf_path = dir.path().join("p.pdf");
+    common::write_test_pdf(&pdf_path, &["Traversal Test Paper"]);
+    let bytes = std::fs::read(&pdf_path).unwrap();
+
+    // A filename containing path separators must be reduced to its basename:
+    // the upload still succeeds and nothing is written outside the staging dir.
+    let form =
+        MultipartForm::new().add_part("file", Part::bytes(bytes).file_name("nested/evil.pdf"));
+    let resp = server.post("/api/papers").multipart(form).await;
+    resp.assert_status_ok();
+    assert_eq!(resp.json::<serde_json::Value>()["outcome"], "ingested");
+    // No traversal artifacts landed outside the _uploads staging dir.
+    assert!(!inbox.join("evil.pdf").exists());
+    assert!(!inbox.join("nested").exists());
+}
+
+#[tokio::test]
+async fn import_returns_503_when_not_configured() {
+    let (dir, pool) = temp_pool().await;
+    // The read-only router (no ingest bundle) must refuse uploads.
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes(b"%PDF-1.4\n".to_vec()).file_name("x.pdf"),
+    );
+    server
+        .post("/api/papers")
+        .multipart(form)
+        .await
+        .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+}
