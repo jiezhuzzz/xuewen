@@ -1,0 +1,27 @@
+import type { Filters, PaperDetail, PaperSummary, Stats } from './types';
+
+export async function listPapers(f: Filters): Promise<PaperSummary[]> {
+  const params = new URLSearchParams();
+  if (f.q.trim()) params.set('q', f.q.trim());
+  if (f.status !== 'all') params.set('status', f.status);
+  params.set('sort', f.sort);
+  const res = await fetch(`/api/papers?${params.toString()}`);
+  if (!res.ok) throw new Error(`list failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getPaper(id: string): Promise<PaperDetail> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`detail failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getStats(): Promise<Stats> {
+  const res = await fetch('/api/stats');
+  if (!res.ok) throw new Error(`stats failed: ${res.status}`);
+  return res.json();
+}
+
+export function pdfUrl(id: string): string {
+  return `/papers/${encodeURIComponent(id)}/pdf`;
+}
