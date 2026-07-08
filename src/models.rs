@@ -55,15 +55,6 @@ pub enum PaperStatus {
     NeedsReview,
 }
 
-impl PaperStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PaperStatus::Resolved => "resolved",
-            PaperStatus::NeedsReview => "needs_review",
-        }
-    }
-}
-
 /// The metadata block shared by resolution output and the stored record.
 /// Column names match the `papers` table; flattened into `Paper` for sqlx/serde.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
@@ -83,7 +74,7 @@ pub struct PaperMeta {
     pub status: PaperStatus,
 }
 
-/// A stored bibliographic record. Column names match `migrations/0001_init.sql`.
+/// A stored bibliographic record. Column names match the papers table.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Paper {
     pub id: String,
@@ -103,8 +94,14 @@ mod tests {
 
     #[test]
     fn status_strings_match_schema() {
-        assert_eq!(PaperStatus::Resolved.as_str(), "resolved");
-        assert_eq!(PaperStatus::NeedsReview.as_str(), "needs_review");
+        assert_eq!(
+            serde_json::to_string(&PaperStatus::Resolved).unwrap(),
+            "\"resolved\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PaperStatus::NeedsReview).unwrap(),
+            "\"needs_review\""
+        );
     }
 
     #[test]
