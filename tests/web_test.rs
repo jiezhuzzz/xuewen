@@ -953,6 +953,61 @@ async fn projects_crud_membership_and_filter() {
 }
 
 #[tokio::test]
+async fn patch_project_merge_rules() {
+    let (dir, pool) = temp_pool().await;
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // Seed two projects: one to edit, one to collide names with.
+    let a: serde_json::Value = server
+        .post("/api/projects")
+        .json(&serde_json::json!({"name": "Survey", "note": "draft"}))
+        .await
+        .json();
+    let a_id = a["id"].as_str().unwrap().to_string();
+    server
+        .post("/api/projects")
+        .json(&serde_json::json!({"name": "Other"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+
+    // (a) Rename → 200, name changed, note preserved (note omitted).
+    let resp = server
+        .patch(&format!("/api/projects/{a_id}"))
+        .json(&serde_json::json!({"name": "Survey v2"}))
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["name"], "Survey v2");
+    // (c) Omitting note preserves the existing note.
+    assert_eq!(body["note"], "draft");
+
+    // (b) {"note":""} clears the note to null.
+    let resp = server
+        .patch(&format!("/api/projects/{a_id}"))
+        .json(&serde_json::json!({"note": ""}))
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["note"], serde_json::Value::Null);
+    // Name unchanged when name omitted.
+    assert_eq!(body["name"], "Survey v2");
+
+    // (d) Rename onto another project's name → 409.
+    server
+        .patch(&format!("/api/projects/{a_id}"))
+        .json(&serde_json::json!({"name": "other"}))
+        .await
+        .assert_status(axum::http::StatusCode::CONFLICT);
+
+    // (e) PATCH an unknown id → 404.
+    server
+        .patch("/api/projects/does-not-exist")
+        .json(&serde_json::json!({"name": "whatever"}))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn import_url_needs_ingest_context() {
     let (dir, pool) = temp_pool().await;
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();

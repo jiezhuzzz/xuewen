@@ -253,10 +253,15 @@ pub async fn create_project(pool: &SqlitePool, name: &str, note: Option<&str>) -
 }
 
 pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<ProjectSummary>> {
+    // Count only active members: a trashed paper's membership row lingers (until
+    // FK cascade on purge), but the `?project=` filter runs under
+    // `deleted_at IS NULL`, so the count must match what filtering shows.
     let rows = sqlx::query_as::<_, ProjectSummary>(
         "SELECT p.id, p.name, p.note, p.created_at, \
-         COUNT(pp.paper_id) AS paper_count \
-         FROM projects p LEFT JOIN paper_projects pp ON pp.project_id = p.id \
+         COUNT(pa.id) AS paper_count \
+         FROM projects p \
+         LEFT JOIN paper_projects pp ON pp.project_id = p.id \
+         LEFT JOIN papers pa ON pa.id = pp.paper_id AND pa.deleted_at IS NULL \
          GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
     )
     .fetch_all(pool)
@@ -974,6 +979,24 @@ mod tests {
         );
 
         // Count reflects membership.
+        assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 1);
+
+        // Soft-deleting a member drops the count (it matches the ?project= filter,
+        // which hides trashed papers) while the membership row itself survives.
+        soft_delete(&pool, "01890000-0000-7000-8000-0000000000a1")
+            .await
+            .unwrap();
+        assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 0);
+        assert_eq!(
+            project_ids_for_paper(&pool, "01890000-0000-7000-8000-0000000000a1")
+                .await
+                .unwrap(),
+            vec![proj.id.clone()]
+        );
+        // Restoring it brings the count back.
+        restore(&pool, "01890000-0000-7000-8000-0000000000a1")
+            .await
+            .unwrap();
         assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 1);
 
         // Filter returns only members.

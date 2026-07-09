@@ -470,7 +470,11 @@ async fn main() -> Result<()> {
                 }
             }
             ProjectCmd::New { name, note } => {
-                let p = db::create_project(&pool, name.trim(), note.as_deref()).await?;
+                let name = name.trim();
+                if name.is_empty() {
+                    anyhow::bail!("project name cannot be empty");
+                }
+                let p = db::create_project(&pool, name, note.as_deref()).await?;
                 println!("created project {} ({})", p.name, p.id);
             }
             ProjectCmd::Rm { project } => {
