@@ -276,14 +276,6 @@ pub async fn identify_paper(
             return internal_error();
         }
     };
-    if paper.deleted_at.is_some() {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "paper is in the trash"})),
-        )
-            .into_response();
-    }
-
     let md = if let Some(c) = body.candidate {
         Some(c.into_metadata())
     } else if let Some(doi) = &body.doi {
@@ -315,6 +307,11 @@ pub async fn identify_paper(
         Ok(IdentifyOutcome::SameWork(other)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": format!("same work as {other}"), "id": other})),
+        )
+            .into_response(),
+        Ok(IdentifyOutcome::Trashed) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "paper is in the trash"})),
         )
             .into_response(),
         Err(e) => {

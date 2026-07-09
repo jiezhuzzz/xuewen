@@ -234,6 +234,9 @@ impl IngestCtx {
         paper: &mut Paper,
         md: ResolvedMetadata,
     ) -> Result<IdentifyOutcome> {
+        if paper.deleted_at.is_some() {
+            return Ok(IdentifyOutcome::Trashed);
+        }
         if let Some(existing) =
             db::find_by_identifier(&self.pool, md.doi.as_deref(), md.arxiv_id.as_deref()).await?
         {
@@ -270,6 +273,8 @@ pub enum IdentifyOutcome {
     Applied,
     /// The chosen identifier already belongs to this other paper; no changes.
     SameWork(String),
+    /// The paper is in the trash; restore it first. No changes.
+    Trashed,
 }
 
 /// Decide the stored fields. A confident resolution yields `resolved` (with a
@@ -560,11 +565,21 @@ mod tests {
         assert!(library.join("guler2019antifuzz.pdf").exists());
 
         // Idempotent: re-applying the same match succeeds and changes nothing.
-        let out = ctx.apply_match(&mut a, md).await.unwrap();
+        let out = ctx.apply_match(&mut a, md.clone()).await.unwrap();
         assert_eq!(out, IdentifyOutcome::Applied);
         let again = db::get_by_id(&pool, &a.id).await.unwrap().unwrap();
         assert_eq!(again.cite_key.as_deref(), Some("guler2019antifuzz"));
         assert_eq!(again.rel_path, "guler2019antifuzz.pdf");
         assert!(library.join("guler2019antifuzz.pdf").exists());
+
+        // Trashed: a soft-deleted paper is guarded inside apply_match itself,
+        // not just at the CLI/web call sites.
+        db::soft_delete(&pool, &a.id).await.unwrap();
+        a.deleted_at = Some("x".into());
+        let out = ctx.apply_match(&mut a, md).await.unwrap();
+        assert_eq!(out, IdentifyOutcome::Trashed);
+        let still_trashed = db::get_by_id(&pool, &a.id).await.unwrap().unwrap();
+        assert_eq!(still_trashed.cite_key.as_deref(), Some("guler2019antifuzz"));
+        assert_eq!(still_trashed.rel_path, "guler2019antifuzz.pdf");
     }
 }

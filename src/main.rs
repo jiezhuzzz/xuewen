@@ -181,6 +181,8 @@ async fn main() -> Result<()> {
             yes,
         } => {
             let mut paper = db::find_one(&pool, &id).await?;
+            // Early UX check; the enforced guard lives in apply_match. This lets us
+            // bail before the interactive search/confirm flow rather than after.
             if paper.deleted_at.is_some() {
                 anyhow::bail!(
                     "{} is in the trash — run: xuewen restore {}",
@@ -242,6 +244,13 @@ async fn main() -> Result<()> {
                     ),
                     IdentifyOutcome::SameWork(other) => {
                         anyhow::bail!("that identifier already belongs to {other}")
+                    }
+                    IdentifyOutcome::Trashed => {
+                        anyhow::bail!(
+                            "{} is in the trash — run: xuewen restore {}",
+                            paper.id,
+                            paper.id
+                        )
                     }
                 }
             } else {
