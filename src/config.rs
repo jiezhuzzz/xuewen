@@ -13,6 +13,8 @@ pub struct Config {
     pub contact_email: Option<String>,
     #[serde(default)]
     pub proxy: Option<ProxyConfig>,
+    #[serde(default)]
+    pub search: SearchConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -20,6 +22,57 @@ pub struct ProxyConfig {
     /// EZproxy login prefix; a target URL is percent-encoded and appended.
     /// e.g. "https://proxy.uchicago.edu/login?url="
     pub login_url: String,
+}
+
+/// Search settings. Always present: defaults apply when `[search]` is absent.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SearchConfig {
+    /// Tantivy index directory (derived data; safe to delete).
+    pub index_dir: PathBuf,
+    pub qdrant_url: String,
+    pub qdrant_collection: String,
+    /// Absent ⇒ semantic search is unavailable (keyword still works).
+    pub embedding: Option<EmbeddingConfig>,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            index_dir: PathBuf::from("./search-index"),
+            qdrant_url: "http://localhost:6333".to_string(),
+            qdrant_collection: "xuewen".to_string(),
+            embedding: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingConfig {
+    #[serde(default = "default_embed_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_embed_model")]
+    pub model: String,
+    #[serde(default = "default_embed_dims")]
+    pub dims: usize,
+    /// Inline key; when absent the key is read from `api_key_env`.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default = "default_api_key_env")]
+    pub api_key_env: String,
+}
+
+fn default_embed_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+fn default_embed_model() -> String {
+    "text-embedding-3-small".to_string()
+}
+fn default_embed_dims() -> usize {
+    1536
+}
+fn default_api_key_env() -> String {
+    "OPENAI_API_KEY".to_string()
 }
 
 impl Config {
@@ -30,7 +83,8 @@ impl Config {
             toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
         let home = std::env::var_os("HOME").map(PathBuf::from);
         cfg.inbox_dir = expand_tilde(cfg.inbox_dir, home.clone());
-        cfg.library_root = expand_tilde(cfg.library_root, home);
+        cfg.library_root = expand_tilde(cfg.library_root, home.clone());
+        cfg.search.index_dir = expand_tilde(cfg.search.index_dir, home);
         Ok(cfg)
     }
 }
@@ -127,5 +181,53 @@ database_url = "sqlite:/data/library.db"
         )
         .unwrap();
         assert!(Config::load(f.path()).unwrap().proxy.is_none());
+    }
+
+    #[test]
+    fn search_defaults_when_section_absent() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"
+inbox_dir = "/data/inbox"
+library_root = "/data/library"
+database_url = "sqlite:/data/library.db"
+"#
+        )
+        .unwrap();
+        let cfg = Config::load(f.path()).unwrap();
+        assert_eq!(cfg.search.index_dir, PathBuf::from("./search-index"));
+        assert_eq!(cfg.search.qdrant_url, "http://localhost:6333");
+        assert_eq!(cfg.search.qdrant_collection, "xuewen");
+        assert!(cfg.search.embedding.is_none());
+    }
+
+    #[test]
+    fn loads_search_section_with_embedding_defaults() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"
+inbox_dir = "/data/inbox"
+library_root = "/data/library"
+database_url = "sqlite:/data/library.db"
+
+[search]
+index_dir = "~/idx"
+
+[search.embedding]
+api_key = "sk-test"
+"#
+        )
+        .unwrap();
+        let cfg = Config::load(f.path()).unwrap();
+        // tilde expanded like inbox_dir/library_root
+        assert!(!cfg.search.index_dir.starts_with("~"));
+        let e = cfg.search.embedding.unwrap();
+        assert_eq!(e.base_url, "https://api.openai.com/v1");
+        assert_eq!(e.model, "text-embedding-3-small");
+        assert_eq!(e.dims, 1536);
+        assert_eq!(e.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(e.api_key_env, "OPENAI_API_KEY");
     }
 }

@@ -13,3 +13,17 @@ database_url  = "sqlite:./library.db"
 # access" panel or `xuewen proxy-cookie --set '<cookie>'`.
 # [proxy]
 # login_url = "https://proxy.uchicago.edu/login?url="
+
+# Search (optional section; these are the defaults).
+# Keyword full-text search always works. Semantic search additionally needs
+# a running Qdrant server and the [search.embedding] subsection with an API key.
+#[search]
+#index_dir         = "./search-index"       # Tantivy index (derived; safe to delete)
+#qdrant_url        = "http://localhost:6333"
+#qdrant_collection = "xuewen"
+
+#[search.embedding]
+#base_url    = "https://api.openai.com/v1"  # any OpenAI-compatible endpoint
+#model       = "text-embedding-3-small"
+#dims        = 1536
+#api_key_env = "OPENAI_API_KEY"             # or: api_key = "sk-..."
