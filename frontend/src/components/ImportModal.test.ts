@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeImport, enqueueFiles, importState, openImport } from '../lib/state.svelte';
+import {
+  closeImport,
+  enqueueFiles,
+  enqueueUrl,
+  importState,
+  openImport,
+} from '../lib/state.svelte';
 
 function pdf(name: string): File {
   return new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], name, {
@@ -116,5 +122,55 @@ describe('enqueueFiles', () => {
 
     expect(importState.items.map((i) => i.status)).toEqual(['same-work', 'in-trash']);
     expect(importState.items[1].message).toBe('x2');
+  });
+});
+
+describe('enqueueUrl', () => {
+  beforeEach(() => {
+    openImport();
+    vi.restoreAllMocks();
+  });
+
+  it('imports a URL and records ingested', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const u = String(url);
+        const json = (o: unknown, status = 200) =>
+          new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } });
+        if (u === '/api/import' && init?.method === 'POST') {
+          return json({ outcome: 'ingested', id: '1', title: 'Fetched Paper', status: 'resolved' });
+        }
+        if (u.startsWith('/api/papers')) return json([]);
+        return json({ total: 0, resolved: 0, needs_review: 0 });
+      }),
+    );
+
+    await enqueueUrl('https://arxiv.org/abs/1706.03762');
+
+    expect(importState.items).toHaveLength(1);
+    expect(importState.items[0].status).toBe('ingested');
+    expect(importState.items[0].message).toBe('Fetched Paper');
+  });
+
+  it('marks an unfetched result distinctly', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const u = String(url);
+        const json = (o: unknown, status = 200) =>
+          new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } });
+        if (u === '/api/import' && init?.method === 'POST') {
+          return json({ outcome: 'unfetched', title: 'Paywalled Paper', doi: '10.1145/x' });
+        }
+        if (u.startsWith('/api/papers')) return json([]);
+        return json({ total: 0, resolved: 0, needs_review: 0 });
+      }),
+    );
+
+    await enqueueUrl('10.1145/x');
+
+    expect(importState.items[0].status).toBe('unfetched');
+    expect(importState.items[0].message).toBe('Paywalled Paper');
   });
 });

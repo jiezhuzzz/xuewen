@@ -5,6 +5,7 @@ import type {
   ImportResult,
   PaperDetail,
   PaperSummary,
+  Settings,
   Stats,
 } from './types';
 
@@ -54,6 +55,45 @@ export async function importPaper(file: File): Promise<ImportResult> {
     throw new Error(msg);
   }
   return res.json();
+}
+
+export async function importUrl(input: string): Promise<ImportResult> {
+  const res = await fetch('/api/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ input }),
+  });
+  if (!res.ok) {
+    let msg = `import failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j && typeof j.error === 'string') msg = j.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+export async function getSettings(): Promise<Settings> {
+  const res = await fetch('/api/settings');
+  if (!res.ok) throw new Error(`settings failed: ${res.status}`);
+  return res.json();
+}
+
+export async function setProxyCookie(cookie: string): Promise<void> {
+  const res = await fetch('/api/settings/proxy-cookie', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ cookie }),
+  });
+  if (!res.ok) throw new Error(`save cookie failed: ${res.status}`);
+}
+
+export async function clearProxyCookie(): Promise<void> {
+  const res = await fetch('/api/settings/proxy-cookie', { method: 'DELETE' });
+  if (!res.ok) throw new Error(`clear cookie failed: ${res.status}`);
 }
 
 export async function identifySearch(q: string): Promise<Candidate[]> {

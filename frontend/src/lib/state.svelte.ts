@@ -5,6 +5,7 @@ import {
   identifyPaper,
   identifySearch,
   importPaper,
+  importUrl,
   listPapers,
 } from './api';
 import type { Candidate, Filters, IdentifyBody, PaperDetail, PaperSummary, Stats } from './types';
@@ -134,7 +135,15 @@ export function toggleTheme(): void {
 
 export interface ImportItem {
   name: string;
-  status: 'queued' | 'importing' | 'ingested' | 'duplicate' | 'same-work' | 'in-trash' | 'failed';
+  status:
+    | 'queued'
+    | 'importing'
+    | 'ingested'
+    | 'duplicate'
+    | 'same-work'
+    | 'in-trash'
+    | 'unfetched'
+    | 'failed';
   message?: string;
   needsReview?: boolean;
 }
@@ -144,9 +153,11 @@ export const importState = $state<{ items: ImportItem[]; cancelled: boolean }>({
   cancelled: false,
 });
 
-// Files waiting to upload, paired with their row index in importState.items
-// and the import session they belong to.
-const pending: { file: File; index: number; session: number }[] = [];
+// Work waiting to be imported (an uploaded file or a URL/identifier string),
+// paired with its row index in importState.items and the import session it
+// belongs to.
+type Job = { kind: 'file'; file: File } | { kind: 'url'; input: string };
+const pending: { job: Job; index: number; session: number }[] = [];
 let draining: Promise<void> | null = null;
 let importSession = 0;
 
@@ -156,8 +167,21 @@ export function enqueueFiles(files: File[]): Promise<void> {
   const session = importSession;
   for (const file of files) {
     const index = importState.items.push({ name: file.name, status: 'queued' }) - 1;
-    pending.push({ file, index, session });
+    pending.push({ job: { kind: 'file', file }, index, session });
   }
+  return startDrain();
+}
+
+/// Queue a URL/identifier for import and (re)start the sequential drain.
+/// Resolves when the current batch finishes.
+export function enqueueUrl(input: string): Promise<void> {
+  const session = importSession;
+  const index = importState.items.push({ name: input, status: 'queued' }) - 1;
+  pending.push({ job: { kind: 'url', input }, index, session });
+  return startDrain();
+}
+
+function startDrain(): Promise<void> {
   if (!draining) {
     draining = drainQueue().finally(() => {
       draining = null;
@@ -168,29 +192,33 @@ export function enqueueFiles(files: File[]): Promise<void> {
 
 async function drainQueue(): Promise<void> {
   while (pending.length > 0) {
-    const job = pending.shift()!;
+    const item = pending.shift()!;
     // Skip work that was cancelled or belongs to a superseded import session.
-    if (importState.cancelled || job.session !== importSession) continue;
-    importState.items[job.index].status = 'importing';
+    if (importState.cancelled || item.session !== importSession) continue;
+    importState.items[item.index].status = 'importing';
     try {
-      const res = await importPaper(job.file);
-      if (job.session !== importSession) continue; // a new session started mid-upload
+      const res =
+        item.job.kind === 'file' ? await importPaper(item.job.file) : await importUrl(item.job.input);
+      if (item.session !== importSession) continue; // a new session started mid-fetch
       if (res.outcome === 'duplicate') {
-        importState.items[job.index].status = 'duplicate';
+        importState.items[item.index].status = 'duplicate';
       } else if (res.outcome === 'same_work') {
-        importState.items[job.index].status = 'same-work';
+        importState.items[item.index].status = 'same-work';
       } else if (res.outcome === 'in_trash') {
-        importState.items[job.index].status = 'in-trash';
-        importState.items[job.index].message = res.id;
+        importState.items[item.index].status = 'in-trash';
+        importState.items[item.index].message = res.id;
+      } else if (res.outcome === 'unfetched') {
+        importState.items[item.index].status = 'unfetched';
+        importState.items[item.index].message = res.title ?? '(untitled)';
       } else {
-        importState.items[job.index].status = 'ingested';
-        importState.items[job.index].message = res.title ?? '(untitled)';
-        importState.items[job.index].needsReview = res.status === 'needs_review';
+        importState.items[item.index].status = 'ingested';
+        importState.items[item.index].message = res.title ?? '(untitled)';
+        importState.items[item.index].needsReview = res.status === 'needs_review';
       }
     } catch (e) {
-      if (job.session !== importSession) continue;
-      importState.items[job.index].status = 'failed';
-      importState.items[job.index].message = (e as Error).message;
+      if (item.session !== importSession) continue;
+      importState.items[item.index].status = 'failed';
+      importState.items[item.index].message = (e as Error).message;
     }
   }
   // Reflect the newly ingested papers in the sidebar list and counts.
