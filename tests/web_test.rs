@@ -11,6 +11,8 @@ use xuewen::resolve::Resolver;
 use xuewen::web::{build_router, build_router_with_ingest, Ingest};
 
 const DBLP_FIXTURE: &str = include_str!("fixtures/dblp_kgat.json");
+const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
+const ARXIV_FIXTURE: &str = include_str!("fixtures/arxiv_attention.xml");
 
 async fn temp_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
     let dir = tempfile::tempdir().unwrap();
@@ -516,4 +518,253 @@ async fn identify_search_needs_ingest_context() {
         .add_query_param("q", "anything")
         .await
         .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn identify_applies_doi_candidate_and_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // Crossref mock for the direct-DOI path.
+    let doi = "10.1145/3292500.3330701";
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&mock)
+        .await;
+    let resolver = Resolver::with_bases(None, mock.uri(), mock.uri())
+        .unwrap()
+        .with_dblp_base(mock.uri());
+
+    // Seed a needs_review paper whose PDF exists in the library.
+    let mut p = paper(
+        "01890000-0000-7000-8000-0000000000a1",
+        "Provisional",
+        PaperStatus::NeedsReview,
+    );
+    std::fs::create_dir_all(library.join("_unsorted")).unwrap();
+    p.rel_path = format!("_unsorted/{}.pdf", p.content_hash);
+    std::fs::write(library.join(&p.rel_path), b"%PDF-1.4 fake").unwrap();
+    db::insert_paper(&pool, &p).await.unwrap();
+
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(
+        pool.clone(),
+        library.clone(),
+        ingest,
+    ))
+    .unwrap();
+
+    // Direct DOI identify: 200, resolved, re-filed to the cite-key path.
+    let resp = server
+        .post(&format!("/api/papers/{}/identify", p.id))
+        .json(&serde_json::json!({ "doi": doi }))
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["status"], "resolved");
+    assert_eq!(
+        body["title"],
+        "KGAT: Knowledge Graph Attention Network for Recommendation"
+    );
+    assert_eq!(body["cite_key"], "wang2019kgat");
+    assert!(library.join("wang2019kgat.pdf").exists());
+
+    // Unknown paper id -> 404.
+    server
+        .post("/api/papers/01890000-0000-7000-8000-00000000dead/identify")
+        .json(&serde_json::json!({ "doi": doi }))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // A second paper trying to claim the SAME DOI -> 409 naming the winner.
+    let mut q = paper(
+        "01890000-0000-7000-8000-0000000000b2",
+        "Other",
+        PaperStatus::NeedsReview,
+    );
+    q.content_hash = "otherhash".into();
+    q.rel_path = "_unsorted/otherhash.pdf".into();
+    std::fs::write(library.join(&q.rel_path), b"%PDF-1.4 other").unwrap();
+    db::insert_paper(&pool, &q).await.unwrap();
+    let resp = server
+        .post(&format!("/api/papers/{}/identify", q.id))
+        .json(&serde_json::json!({ "doi": doi }))
+        .await;
+    resp.assert_status(axum::http::StatusCode::CONFLICT);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["id"], serde_json::json!(p.id));
+
+    // Trashed paper -> 409.
+    db::soft_delete(&pool, &q.id).await.unwrap();
+    server
+        .post(&format!("/api/papers/{}/identify", q.id))
+        .json(&serde_json::json!({ "candidate": {
+            "title": "T", "abstract": null, "authors": [], "venue": null,
+            "year": null, "doi": null, "arxiv_id": null, "dblp_key": null,
+            "url": null, "source": "dblp"
+        }}))
+        .await
+        .assert_status(axum::http::StatusCode::CONFLICT);
+
+    // Bad body (two selectors) -> 400.
+    db::restore(&pool, &q.id).await.unwrap();
+    server
+        .post(&format!("/api/papers/{}/identify", q.id))
+        .json(&serde_json::json!({ "doi": "10.1/x", "arxiv_id": "2001.00001" }))
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+
+    // Unresolvable DOI (mock has no route for it -> 404 upstream) -> 404.
+    server
+        .post(&format!("/api/papers/{}/identify", q.id))
+        .json(&serde_json::json!({ "doi": "10.9999/nope" }))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn identify_applies_candidate_without_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".to_string(),
+        "http://127.0.0.1:1".to_string(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".to_string());
+
+    let mut p = paper(
+        "01890000-0000-7000-8000-00000000c001",
+        "Prov",
+        PaperStatus::NeedsReview,
+    );
+    std::fs::create_dir_all(library.join("_unsorted")).unwrap();
+    p.rel_path = format!("_unsorted/{}.pdf", p.content_hash);
+    std::fs::write(library.join(&p.rel_path), b"%PDF-1.4 fake").unwrap();
+    db::insert_paper(&pool, &p).await.unwrap();
+
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
+
+    let resp = server
+        .post(&format!("/api/papers/{}/identify", p.id))
+        .json(&serde_json::json!({ "candidate": {
+            "title": "AntiFuzz: Impeding Fuzzing Audits of Binary Executables",
+            "abstract": null,
+            "authors": ["Emre Güler", "Cornelius Aschermann", "Ali Abbasi", "Thorsten Holz"],
+            "venue": "USENIX Security Symposium",
+            "year": 2019,
+            "doi": null, "arxiv_id": null,
+            "dblp_key": "conf/uss/GulerAAH19",
+            "url": "https://www.usenix.org/conference/usenixsecurity19/presentation/guler",
+            "source": "dblp"
+        }}))
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["status"], "resolved");
+    assert_eq!(body["cite_key"], "guler2019antifuzz");
+    assert_eq!(body["source"], "dblp");
+    assert!(library.join("guler2019antifuzz.pdf").exists());
+}
+
+#[tokio::test]
+async fn identify_needs_ingest_context() {
+    let (dir, pool) = temp_pool().await;
+    // The read-only router (no ingest bundle) must refuse identify writes.
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+    server
+        .post("/api/papers/whatever/identify")
+        .json(&serde_json::json!({ "doi": "10.1/x" }))
+        .await
+        .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn identify_applies_arxiv_id_via_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // arXiv mock for the direct-id path.
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path("/api/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ARXIV_FIXTURE))
+        .mount(&mock)
+        .await;
+    let resolver = Resolver::with_bases(None, mock.uri(), mock.uri())
+        .unwrap()
+        .with_dblp_base(mock.uri());
+
+    let mut p = paper(
+        "01890000-0000-7000-8000-00000000d001",
+        "Prov",
+        PaperStatus::NeedsReview,
+    );
+    std::fs::create_dir_all(library.join("_unsorted")).unwrap();
+    p.rel_path = format!("_unsorted/{}.pdf", p.content_hash);
+    std::fs::write(library.join(&p.rel_path), b"%PDF-1.4 fake").unwrap();
+    db::insert_paper(&pool, &p).await.unwrap();
+
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
+
+    let resp = server
+        .post(&format!("/api/papers/{}/identify", p.id))
+        .json(&serde_json::json!({ "arxiv_id": "1706.03762" }))
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["status"], "resolved");
+    assert_eq!(body["title"], "Attention Is All You Need");
+    assert_eq!(body["cite_key"], "vaswani2017attention");
+    assert!(library.join("vaswani2017attention.pdf").exists());
 }

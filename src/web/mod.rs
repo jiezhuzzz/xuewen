@@ -67,6 +67,10 @@ fn router_with(state: AppState) -> Router {
         )
         .route("/api/stats", get(api::stats))
         .route("/api/identify/search", get(api::identify_search))
+        .route(
+            "/api/papers/{id}/identify",
+            axum::routing::post(api::identify_paper),
+        )
         .route("/papers/{id}/pdf", get(api::pdf))
         .fallback(assets::static_handler)
         .with_state(state)

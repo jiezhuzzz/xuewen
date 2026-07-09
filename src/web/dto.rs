@@ -103,8 +103,6 @@ impl From<&ResolvedMetadata> for Candidate {
 
 impl Candidate {
     /// Back to resolver metadata for the apply path.
-    // Wired up by POST /api/papers/{id}/identify (Task 4); unused until then.
-    #[allow(dead_code)]
     pub fn into_metadata(self) -> ResolvedMetadata {
         ResolvedMetadata {
             title: self.title,

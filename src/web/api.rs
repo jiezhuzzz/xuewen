@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::dto::{Candidate, PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
-use crate::pipeline::Outcome;
+use crate::pipeline::{IdentifyOutcome, Outcome};
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -236,6 +236,109 @@ pub async fn identify_search(
     let cands = ingest.ctx.resolver.search_candidates(q).await;
     let out: Vec<Candidate> = cands.iter().map(Candidate::from).collect();
     Json(out).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct IdentifyBody {
+    pub doi: Option<String>,
+    pub arxiv_id: Option<String>,
+    pub candidate: Option<Candidate>,
+}
+
+/// Apply a user-confirmed match: fetch authoritative metadata for a DOI or
+/// arXiv id (or take a picked search candidate as-is), overwrite the paper's
+/// metadata, and re-file. The user's confirmation replaces the confidence gate.
+pub async fn identify_paper(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<IdentifyBody>,
+) -> Response {
+    let Some(ingest) = &app.ingest else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "identify not configured"})),
+        )
+            .into_response();
+    };
+    let selectors =
+        body.doi.is_some() as u8 + body.arxiv_id.is_some() as u8 + body.candidate.is_some() as u8;
+    if selectors != 1 {
+        return bad_request("provide exactly one of doi, arxiv_id, candidate");
+    }
+
+    // Read through the ctx pool: same handle the apply path writes with
+    // (matches the pool-locality convention set in import_paper).
+    let mut paper = match db::get_by_id(&ingest.ctx.pool, &id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::error!("identify lookup: {e}");
+            return internal_error();
+        }
+    };
+    if paper.deleted_at.is_some() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "paper is in the trash"})),
+        )
+            .into_response();
+    }
+
+    let md = if let Some(c) = body.candidate {
+        Some(c.into_metadata())
+    } else if let Some(doi) = &body.doi {
+        ingest
+            .ctx
+            .resolver
+            .resolve(&crate::models::Identifier::Doi(doi.clone()), None)
+            .await
+    } else if let Some(axv) = &body.arxiv_id {
+        ingest
+            .ctx
+            .resolver
+            .resolve(&crate::models::Identifier::Arxiv(axv.clone()), None)
+            .await
+    } else {
+        unreachable!("selector count checked above")
+    };
+    let Some(md) = md else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "identifier not found"})),
+        )
+            .into_response();
+    };
+
+    let (md_doi, md_arxiv) = (md.doi.clone(), md.arxiv_id.clone());
+    match ingest.ctx.apply_match(&mut paper, md).await {
+        Ok(IdentifyOutcome::Applied) => Json(PaperDetail::from(&paper)).into_response(),
+        Ok(IdentifyOutcome::SameWork(other)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": format!("same work as {other}"), "id": other})),
+        )
+            .into_response(),
+        Err(e) => {
+            // Lost a race: something claimed this identifier between the guard and
+            // the update. Report it as the conflict it is, mirroring ingest.
+            if db::is_unique_violation(&e) {
+                if let Ok(Some(existing)) =
+                    db::find_by_identifier(&ingest.ctx.pool, md_doi.as_deref(), md_arxiv.as_deref())
+                        .await
+                {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({
+                            "error": format!("same work as {}", existing.id),
+                            "id": existing.id,
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+            tracing::error!("identify apply: {e}");
+            internal_error()
+        }
+    }
 }
 
 pub(super) fn not_found() -> Response {
