@@ -1,6 +1,12 @@
 <script lang="ts">
-  import { Check, CircleAlert, Copy, Loader, Upload, X } from 'lucide-svelte';
-  import { closeImport, enqueueFiles, importState } from '../lib/state.svelte';
+  import { Check, CircleAlert, Copy, FileWarning, Link, Loader, Upload, X } from 'lucide-svelte';
+  import {
+    clearProxyCookie,
+    getSettings,
+    setProxyCookie,
+  } from '../lib/api';
+  import { closeImport, enqueueFiles, enqueueUrl, importState } from '../lib/state.svelte';
+  import type { Settings } from '../lib/types';
 
   let dragging = $state(false);
   let input: HTMLInputElement;
@@ -19,11 +25,55 @@
     pick(e.dataTransfer?.files ?? null);
   }
 
+  let urlInput = $state('');
+  function submitUrl() {
+    const v = urlInput.trim();
+    if (!v) return;
+    urlInput = '';
+    void enqueueUrl(v);
+  }
+
+  let settings = $state<Settings | null>(null);
+  let cookieInput = $state('');
+  let savingCookie = $state(false);
+  async function loadSettings() {
+    try {
+      settings = await getSettings();
+    } catch {
+      settings = null;
+    }
+  }
+  async function saveCookie() {
+    const v = cookieInput.trim();
+    if (!v) return;
+    savingCookie = true;
+    try {
+      await setProxyCookie(v);
+      cookieInput = '';
+      await loadSettings();
+    } finally {
+      savingCookie = false;
+    }
+  }
+  async function removeCookie() {
+    await clearProxyCookie();
+    await loadSettings();
+  }
+  // Load once when the modal mounts.
+  $effect(() => {
+    void loadSettings();
+  });
+
   const summary = $derived.by(() => {
     const c = { ingested: 0, skipped: 0, failed: 0 };
     for (const i of importState.items) {
       if (i.status === 'ingested') c.ingested++;
-      else if (i.status === 'duplicate' || i.status === 'same-work' || i.status === 'in-trash')
+      else if (
+        i.status === 'duplicate' ||
+        i.status === 'same-work' ||
+        i.status === 'in-trash' ||
+        i.status === 'unfetched'
+      )
         c.skipped++;
       else if (i.status === 'failed') c.failed++;
     }
@@ -51,6 +101,30 @@
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto p-4">
+      <form
+        class="mb-3 flex gap-2"
+        onsubmit={(e) => {
+          e.preventDefault();
+          submitUrl();
+        }}
+      >
+        <div class="flex flex-1 items-center gap-2 rounded-lg border border-slate-300 px-2 dark:border-slate-700">
+          <Link size={16} class="shrink-0 text-slate-400" />
+          <input
+            bind:value={urlInput}
+            type="text"
+            placeholder="Paste a link, DOI, or arXiv id"
+            class="w-full bg-transparent py-2 text-sm outline-none"
+          />
+        </div>
+        <button
+          type="submit"
+          class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          disabled={!urlInput.trim()}
+        >
+          Add
+        </button>
+      </form>
       <button
         type="button"
         onclick={() => input.click()}
@@ -88,6 +162,8 @@
                 <Copy size={14} class="shrink-0 text-slate-400" />
               {:else if item.status === 'failed'}
                 <CircleAlert size={14} class="shrink-0 text-red-500" />
+              {:else if item.status === 'unfetched'}
+                <FileWarning size={14} class="shrink-0 text-amber-500" />
               {:else}
                 <span class="h-3.5 w-3.5 shrink-0 rounded-full border border-slate-300 dark:border-slate-600"></span>
               {/if}
@@ -107,6 +183,7 @@
                   {#if item.status === 'duplicate'}duplicate
                   {:else if item.status === 'same-work'}already in library
                   {:else if item.status === 'in-trash'}in trash — run: xuewen restore {item.message}
+                  {:else if item.status === 'unfetched'}no PDF — download & drop in inbox
                   {:else if item.status === 'failed'}{item.message}
                   {:else if item.status === 'importing'}importing…
                   {:else}queued{/if}
@@ -116,6 +193,43 @@
           {/each}
         </ul>
       {/if}
+
+      <details class="mt-4 rounded-lg border border-slate-200 text-sm dark:border-slate-800">
+        <summary class="cursor-pointer px-3 py-2 text-slate-600 dark:text-slate-300">
+          Institutional access (EZproxy cookie)
+          {#if settings?.proxy_cookie_set}
+            <span class="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">set</span>
+          {:else}
+            <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">not set</span>
+          {/if}
+        </summary>
+        <div class="space-y-2 border-t border-slate-200 p-3 dark:border-slate-800">
+          <p class="text-xs text-slate-500 dark:text-slate-400">
+            Paste the <code>Cookie:</code> header for <code>proxy.uchicago.edu</code> (from a browser
+            cookie extension or DevTools) to fetch paywalled ACM/IEEE PDFs. It expires — refresh it here.
+          </p>
+          <div class="flex gap-2">
+            <input
+              bind:value={cookieInput}
+              type="password"
+              placeholder="ezproxy=…; …"
+              class="w-full rounded-lg border border-slate-300 bg-transparent px-2 py-1.5 text-sm outline-none dark:border-slate-700"
+            />
+            <button
+              type="button"
+              onclick={saveCookie}
+              disabled={!cookieInput.trim() || savingCookie}
+              class="rounded-lg bg-slate-700 px-3 py-1.5 text-sm text-white hover:bg-slate-600 disabled:opacity-50"
+            >Save</button>
+          </div>
+          {#if settings?.proxy_cookie_set}
+            <div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>Updated {settings.proxy_cookie_updated_at ?? '—'}</span>
+              <button type="button" onclick={removeCookie} class="text-red-500 hover:underline">Clear</button>
+            </div>
+          {/if}
+        </div>
+      </details>
     </div>
 
     {#if importState.items.length}
