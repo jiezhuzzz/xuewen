@@ -3,6 +3,7 @@ import {
   createProject,
   deletePaper,
   deleteProject,
+  exportPaper,
   getPaper,
   getStats,
   identifyPaper,
@@ -15,6 +16,7 @@ import {
   updateProject,
 } from './api';
 import type {
+  BibFormat,
   Candidate,
   Filters,
   IdentifyBody,
@@ -27,6 +29,14 @@ import type {
 export const filters = $state<Filters>({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
 
 export const projects = $state<{ items: Project[] }>({ items: [] });
+
+export const bibFormat = $state<{ value: BibFormat }>({ value: 'bibtex' });
+
+/// Fetch a paper's citation in the current format and copy it to the clipboard.
+export async function copyCitation(id: string): Promise<void> {
+  const text = await exportPaper(id, bibFormat.value);
+  await navigator.clipboard.writeText(text);
+}
 
 export const library = $state<{
   papers: PaperSummary[];

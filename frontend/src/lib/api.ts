@@ -1,4 +1,5 @@
 import type {
+  BibFormat,
   Candidate,
   Filters,
   IdentifyBody,
@@ -182,4 +183,19 @@ export async function removePaperFromProject(paperId: string, projectId: string)
     { method: 'DELETE' },
   );
   if (!res.ok) throw new Error(`remove from project failed: ${res.status}`);
+}
+
+export async function exportPaper(id: string, fmt: BibFormat): Promise<string> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(id)}/export?format=${fmt}`);
+  if (!res.ok) throw new Error(`export failed: ${res.status}`);
+  return res.text();
+}
+
+export function exportUrl(f: Filters, fmt: BibFormat): string {
+  const params = new URLSearchParams();
+  if (f.q.trim()) params.set('q', f.q.trim());
+  if (f.status !== 'all') params.set('status', f.status);
+  if (f.project && f.project !== 'all') params.set('project', f.project);
+  params.set('format', fmt);
+  return `/api/papers/export?${params.toString()}`;
 }

@@ -34,6 +34,7 @@ export interface Stats {
 
 export type StatusFilter = 'all' | 'resolved' | 'needs_review';
 export type Sort = 'year_desc' | 'year_asc' | 'added_desc' | 'title';
+export type BibFormat = 'bibtex' | 'biblatex';
 
 export interface Filters {
   q: string;
