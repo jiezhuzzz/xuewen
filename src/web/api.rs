@@ -12,7 +12,7 @@ use super::dto::{Candidate, PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
 use crate::import::{self, ImportError};
-use crate::models::{Identifier, Project};
+use crate::models::Identifier;
 use crate::pipeline::{IdentifyOutcome, Outcome};
 
 #[derive(Deserialize)]
