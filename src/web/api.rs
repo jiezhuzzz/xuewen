@@ -296,7 +296,9 @@ pub async fn identify_paper(
     let Some(md) = md else {
         return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "identifier not found"})),
+            Json(serde_json::json!({
+                "error": "identifier not found — not registered with Crossref/arXiv; try a title search"
+            })),
         )
             .into_response();
     };

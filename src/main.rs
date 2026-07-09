@@ -194,12 +194,14 @@ async fn main() -> Result<()> {
                 ctx.resolver
                     .resolve(&Identifier::Doi(doi.clone()), None)
                     .await
-                    .ok_or_else(|| anyhow::anyhow!("no Crossref record for doi {doi}"))?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("no Crossref record for doi {doi} — try --title")
+                    })?
             } else if let Some(axv) = arxiv {
                 ctx.resolver
                     .resolve(&Identifier::Arxiv(axv.clone()), None)
                     .await
-                    .ok_or_else(|| anyhow::anyhow!("no arXiv record for {axv}"))?
+                    .ok_or_else(|| anyhow::anyhow!("no arXiv record for {axv} — try --title"))?
             } else if let Some(query) = title {
                 let cands = ctx.resolver.search_candidates(&query).await;
                 if cands.is_empty() {
