@@ -11,6 +11,7 @@ use uuid::Uuid;
 use super::dto::{Candidate, PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
+use crate::export;
 use crate::import::{self, ImportError};
 use crate::models::Identifier;
 use crate::pipeline::{IdentifyOutcome, Outcome};
@@ -612,6 +613,80 @@ pub async fn remove_paper_from_project(
         Ok(false) => not_found(),
         Err(e) => {
             tracing::error!("remove membership: {e}");
+            internal_error()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FormatParam {
+    pub format: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ExportParams {
+    pub format: Option<String>,
+    pub q: Option<String>,
+    pub status: Option<String>,
+    pub sort: Option<String>,
+    pub project: Option<String>,
+}
+
+fn parse_format(s: Option<&str>) -> export::BibFormat {
+    match s {
+        Some(v) if v.eq_ignore_ascii_case("biblatex") => export::BibFormat::Biblatex,
+        _ => export::BibFormat::Bibtex,
+    }
+}
+
+/// One paper's `.bib` entry as plain text (inline, so the frontend can copy it
+/// or force a download via `<a download>`).
+pub async fn export_paper(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Query(p): Query<FormatParam>,
+) -> Response {
+    match db::get_by_id(&app.pool, &id).await {
+        Ok(Some(paper)) => {
+            let body = export::format_entry(&paper, parse_format(p.format.as_deref()));
+            ([(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
+        }
+        Ok(None) => not_found(),
+        Err(e) => {
+            tracing::error!("export_paper: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// The current filtered set as a downloadable `.bib` file. Same filter semantics
+/// as `GET /api/papers`.
+pub async fn export_papers(State(app): State<AppState>, Query(p): Query<ExportParams>) -> Response {
+    match db::list_papers(
+        &app.pool,
+        p.q.as_deref(),
+        p.status.as_deref(),
+        p.sort.as_deref(),
+        p.project.as_deref(),
+    )
+    .await
+    {
+        Ok(papers) => {
+            let body = export::format_entries(&papers, parse_format(p.format.as_deref()));
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/x-bibtex"),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"xuewen.bib\"",
+                    ),
+                ],
+                body,
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("export_papers: {e}");
             internal_error()
         }
     }

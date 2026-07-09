@@ -80,10 +80,12 @@ fn router_with(state: AppState) -> Router {
                 .post(api::import_paper)
                 .layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
+        .route("/api/papers/export", get(api::export_papers))
         .route(
             "/api/papers/{id}",
             get(api::get_paper).delete(api::delete_paper),
         )
+        .route("/api/papers/{id}/export", get(api::export_paper))
         .route("/api/stats", get(api::stats))
         .route("/api/identify/search", get(api::identify_search))
         .route(

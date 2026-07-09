@@ -1017,3 +1017,47 @@ async fn import_url_needs_ingest_context() {
         .await
         .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
 }
+
+#[tokio::test]
+async fn exports_bibtex_and_biblatex() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    db::insert_paper(&pool, &paper("bbbb2222", "Attention Is All You Need", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    let proj = db::create_project(&pool, "Survey", None).await.unwrap();
+    db::add_paper_to_project(&pool, "aaaa1111", &proj.id).await.unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // Individual (default bibtex). The `paper` helper sets venue=KDD, no dblp_key -> @article.
+    let resp = server.get("/api/papers/aaaa1111/export").await;
+    resp.assert_status_ok();
+    let text = resp.text();
+    assert!(text.contains("@article{aaaa1111,"), "got: {text}");
+    assert!(text.contains("journal = {KDD},"));
+
+    // BibLaTeX switches the field names.
+    let bl = server.get("/api/papers/aaaa1111/export?format=biblatex").await.text();
+    assert!(bl.contains("journaltitle = {KDD},"), "got: {bl}");
+    assert!(bl.contains("date = {2020},"));
+
+    // Unknown id -> 404.
+    server
+        .get("/api/papers/nope/export")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // Batch: whole library has both entries.
+    let all = server.get("/api/papers/export").await;
+    all.assert_status_ok();
+    let all_text = all.text();
+    assert!(all_text.contains("@article{aaaa1111,"));
+    assert!(all_text.contains("@article{bbbb2222,"));
+
+    // Batch filtered by project -> only that project's paper.
+    let scoped = server.get(&format!("/api/papers/export?project={}", proj.id)).await.text();
+    assert!(scoped.contains("aaaa1111"));
+    assert!(!scoped.contains("bbbb2222"));
+}
