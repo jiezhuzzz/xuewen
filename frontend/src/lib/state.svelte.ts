@@ -276,6 +276,16 @@ const DOI_RE = /10\.\d{4,9}\/\S+/;
 const ARXIV_RE = /^\d{4}\.\d{4,5}(v\d+)?$/;
 const ARXIV_URL_RE = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5}(?:v\d+)?)/i;
 
+/// Warning for pseudo-DOIs that can never resolve. ACM Digital Library uses
+/// the reserved 10.5555 prefix for papers it hosts WITHOUT a registered DOI
+/// (typically USENIX/NDSS) — Crossref and doi.org have never heard of them.
+export function pseudoDoiHint(direct: IdentifyBody | null): string | null {
+  if (direct && 'doi' in direct && direct.doi.startsWith('10.5555/')) {
+    return '10.5555/… is an ACM DL internal id, not a registered DOI — it will not resolve; try a title search instead.';
+  }
+  return null;
+}
+
 /// Classify what the user pasted: a DOI (even inside a doi.org URL), an arXiv
 /// id (bare or inside an arxiv.org URL), or a title query.
 export function classifyIdentifyInput(

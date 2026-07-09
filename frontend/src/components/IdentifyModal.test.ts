@@ -7,6 +7,7 @@ import {
   dropsIdentifier,
   identifyState,
   openIdentify,
+  pseudoDoiHint,
   runIdentifySearch,
 } from '../lib/state.svelte';
 
@@ -213,5 +214,14 @@ describe('identify', () => {
     openIdentify('paper-1', { doi: '10.1/x', arxiv_id: null });
     identifyState.selected = { ...CAND, doi: '10.1/x' };
     expect(dropsIdentifier(identifyState)).toBe(false);
+  });
+
+  it('warns when staging an ACM 10.5555 pseudo-DOI', () => {
+    // ACM DL uses 10.5555/… for papers with NO registered DOI (e.g. USENIX);
+    // it never resolves via Crossref/doi.org.
+    expect(pseudoDoiHint({ doi: '10.5555/3361338.3361472' })).toMatch(/title search/);
+    expect(pseudoDoiHint({ doi: '10.1145/3292500.3330701' })).toBeNull();
+    expect(pseudoDoiHint({ arxiv_id: '1706.03762' })).toBeNull();
+    expect(pseudoDoiHint(null)).toBeNull();
   });
 });
