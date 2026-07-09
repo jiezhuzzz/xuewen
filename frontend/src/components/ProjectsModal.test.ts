@@ -27,7 +27,8 @@ describe('ProjectsModal', () => {
   it('renders existing projects with counts', () => {
     stubFetch(() => []);
     render(ProjectsModal);
-    expect(screen.getByText('Survey')).toBeInTheDocument();
+    // The name is an editable input seeded with the project name.
+    expect(screen.getByDisplayValue('Survey')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
   });
 
@@ -43,5 +44,39 @@ describe('ProjectsModal', () => {
     await userEvent.type(screen.getByPlaceholderText('New project name…'), 'New');
     await userEvent.click(screen.getByRole('button', { name: 'Add' }));
     expect(calls.some((c) => c.url === '/api/projects' && c.method === 'POST')).toBe(true);
+  });
+
+  it('renames a project via PATCH on blur when the name changed', async () => {
+    const calls: Array<{ url: string; method?: string; body?: string }> = [];
+    stubFetch((url, init) => {
+      calls.push({ url, method: init?.method, body: init?.body as string | undefined });
+      if (init?.method === 'PATCH') return { id: 'p1', name: 'Renamed', note: null, paper_count: 3 };
+      return [{ id: 'p1', name: 'Renamed', note: null, paper_count: 3 }];
+    });
+    render(ProjectsModal);
+    const nameInput = screen.getByLabelText('Rename Survey') as HTMLInputElement;
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Renamed');
+    // Tab away to blur the focused input, triggering the rename-on-blur.
+    await userEvent.tab();
+    const patch = calls.find((c) => c.method === 'PATCH');
+    expect(patch).toBeTruthy();
+    expect(patch?.url).toBe('/api/projects/p1');
+    expect(patch?.body).toContain('Renamed');
+  });
+
+  it('confirms before deleting a project', async () => {
+    const calls: Array<{ url: string; method?: string }> = [];
+    stubFetch((url, init) => {
+      calls.push({ url, method: init?.method });
+      return [{ id: 'p1', name: 'Survey', note: null, paper_count: 3 }];
+    });
+    render(ProjectsModal);
+    // First click reveals the inline confirm; no DELETE yet.
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Survey' }));
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    // Second click on the confirm button issues the DELETE.
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(calls.some((c) => c.url === '/api/projects/p1' && c.method === 'DELETE')).toBe(true);
   });
 });

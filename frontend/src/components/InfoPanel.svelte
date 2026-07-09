@@ -5,6 +5,7 @@
     detailRefresh,
     loadDetail,
     openIdentify,
+    openProjects,
     projects,
     removeFromProject,
     removePaper,
@@ -35,6 +36,11 @@
     const projectId = sel.value;
     sel.value = '';
     if (!projectId) return;
+    // The sentinel option opens the Projects modal instead of adding.
+    if (projectId === '__new__') {
+      openProjects();
+      return;
+    }
     membershipError = null;
     try {
       await addToProject(id, projectId);
@@ -121,18 +127,17 @@
             {/each}
           </div>
         {/if}
-        {#if projects.items.some((p) => !d.project_ids.includes(p.id))}
-          <select
-            aria-label="Add to project"
-            onchange={onAddProject}
-            class="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800"
-          >
-            <option value="">Add to project…</option>
-            {#each projects.items.filter((p) => !d.project_ids.includes(p.id)) as p (p.id)}
-              <option value={p.id}>{p.name}</option>
-            {/each}
-          </select>
-        {/if}
+        <select
+          aria-label="Add to project"
+          onchange={onAddProject}
+          class="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800"
+        >
+          <option value="">Add to project…</option>
+          {#each projects.items.filter((p) => !d.project_ids.includes(p.id)) as p (p.id)}
+            <option value={p.id}>{p.name}</option>
+          {/each}
+          <option value="__new__">New project…</option>
+        </select>
         {#if membershipError}
           <p class="mt-1 text-xs text-red-600 dark:text-red-400">{membershipError}</p>
         {/if}

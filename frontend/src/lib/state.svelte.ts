@@ -140,6 +140,7 @@ export async function addToProject(paperId: string, projectId: string): Promise<
   detailCache.delete(paperId);
   detailRefresh.n += 1;
   await loadProjects();
+  if (filters.project === projectId) await loadPapers();
 }
 
 export async function removeFromProject(paperId: string, projectId: string): Promise<void> {
