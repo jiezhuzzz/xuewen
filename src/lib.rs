@@ -10,6 +10,7 @@ pub mod naming;
 pub mod pdf;
 pub mod pipeline;
 pub mod refresh;
+pub mod search;
 pub mod resolve;
 pub mod watcher;
 pub mod web;
