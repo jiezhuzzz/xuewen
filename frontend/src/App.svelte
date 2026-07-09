@@ -5,14 +5,16 @@
   import ImportModal from './components/ImportModal.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
   import PdfViewer from './components/PdfViewer.svelte';
+  import ProjectsModal from './components/ProjectsModal.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import TabBar from './components/TabBar.svelte';
   import TopBar from './components/TopBar.svelte';
-  import { identifyState, initTheme, loadPapers, loadStats, ui, viewer } from './lib/state.svelte';
+  import { identifyState, initTheme, loadPapers, loadProjects, loadStats, ui, viewer } from './lib/state.svelte';
 
   onMount(() => {
     initTheme();
     loadStats();
+    loadProjects();
     loadPapers();
   });
 </script>
@@ -40,3 +42,4 @@
 </div>
 {#if ui.importOpen}<ImportModal />{/if}
 {#if identifyState.open}<IdentifyModal />{/if}
+{#if ui.projectsOpen}<ProjectsModal />{/if}
