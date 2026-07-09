@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { ExternalLink, Trash2, Wand2, X } from 'lucide-svelte';
+  import { Check, Copy, Download, ExternalLink, Trash2, Wand2, X } from 'lucide-svelte';
   import {
     addToProject,
+    bibFormat,
+    copyCitation,
     detailRefresh,
     loadDetail,
     openIdentify,
@@ -13,6 +15,17 @@
   import StatusPill from './StatusPill.svelte';
 
   let { id }: { id: string } = $props();
+
+  let copied = $state(false);
+  async function doCopy() {
+    try {
+      await copyCitation(id);
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch {
+      /* clipboard blocked (insecure context) — the Download link still works */
+    }
+  }
 
   let confirming = $state(false);
   let deleting = $state(false);
@@ -148,6 +161,33 @@
           <p class="text-sm leading-relaxed text-slate-600 dark:text-slate-300">{d.abstract}</p>
         </div>
       {/if}
+      <div class="mt-4">
+        <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Cite</h3>
+        <div class="flex items-center gap-2">
+          <select
+            bind:value={bibFormat.value}
+            aria-label="Citation format"
+            class="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800"
+          >
+            <option value="bibtex">BibTeX</option>
+            <option value="biblatex">BibLaTeX</option>
+          </select>
+          <button
+            type="button"
+            onclick={doCopy}
+            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-400 dark:hover:bg-indigo-500/10"
+          >
+            {#if copied}<Check size={12} /> Copied{:else}<Copy size={12} /> Copy{/if}
+          </button>
+          <a
+            href={`/api/papers/${encodeURIComponent(id)}/export?format=${bibFormat.value}`}
+            download={`${d.cite_key ?? id}.bib`}
+            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-400 dark:hover:bg-indigo-500/10"
+          >
+            <Download size={12} /> Download
+          </a>
+        </div>
+      </div>
       <div class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-800">
         <button
           type="button"

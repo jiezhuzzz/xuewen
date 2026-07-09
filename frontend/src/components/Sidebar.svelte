@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { FolderOpen, Search, Settings2 } from 'lucide-svelte';
+  import { Download, FolderOpen, Search, Settings2 } from 'lucide-svelte';
   import {
+    bibFormat,
     filters,
     library,
     loadPapers,
@@ -9,6 +10,7 @@
     setProjectFilter,
     setSearch,
   } from '../lib/state.svelte';
+  import { exportUrl } from '../lib/api';
   import type { Sort, StatusFilter } from '../lib/types';
   import PaperRow from './PaperRow.svelte';
 
@@ -83,6 +85,13 @@
         <Settings2 size={16} />
       </button>
     </div>
+    <a
+      href={exportUrl(filters, bibFormat.value)}
+      download="xuewen.bib"
+      class="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+    >
+      <Download size={14} /> Export .bib
+    </a>
   </div>
 
   <div class="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto dark:divide-slate-800/60">
