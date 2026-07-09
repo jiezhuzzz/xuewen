@@ -48,6 +48,17 @@ struct Cli {
 enum Command {
     /// Ingest a single PDF file.
     Ingest { path: PathBuf },
+    /// Import a paper from a URL, DOI, or arXiv id.
+    Import { input: String },
+    /// Manage the stored EZproxy session cookie used for paywalled imports.
+    ProxyCookie {
+        /// Store this cookie value (a `name=value; name2=value2` header string).
+        #[arg(long, conflicts_with = "clear")]
+        set: Option<String>,
+        /// Remove the stored cookie.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Watch the inbox directory and auto-ingest new PDFs (runs until stopped).
     Watch,
     /// Re-resolve failed records and re-file every paper to its cite-key path.
@@ -157,6 +168,69 @@ async fn main() -> Result<()> {
             }
             Outcome::InTrash(id) => println!("in trash — run: xuewen restore {id}"),
         },
+        Command::Import { input } => {
+            let fetcher =
+                xuewen::import::Fetcher::new(cfg.proxy.as_ref().map(|p| p.login_url.clone()))?;
+            let cookie = db::get_setting(&pool, "proxy_cookie").await?;
+            match xuewen::import::import_source(&fetcher, &ctx.resolver, &input, cookie.as_deref())
+                .await
+            {
+                Ok(fetched) => {
+                    let staged = cfg
+                        .inbox_dir
+                        .join("_uploads")
+                        .join(format!("{}-import.pdf", uuid::Uuid::now_v7()));
+                    tokio::fs::create_dir_all(staged.parent().unwrap()).await?;
+                    tokio::fs::write(&staged, &fetched.bytes).await?;
+                    match ctx.ingest_file_with_hint(&staged, fetched.hint).await {
+                        Ok(Outcome::Ingested(id)) => println!("ingested {id}"),
+                        Ok(Outcome::Duplicate) => println!("duplicate, skipped"),
+                        Ok(Outcome::SameWork(id)) => println!("already in library ({id})"),
+                        Ok(Outcome::InTrash(id)) => {
+                            println!("in trash — run: xuewen restore {id}")
+                        }
+                        Err(e) => {
+                            let _ = tokio::fs::remove_file(&staged).await;
+                            return Err(e);
+                        }
+                    }
+                }
+                Err(xuewen::import::ImportError::Unsupported) => {
+                    anyhow::bail!("could not recognize {input:?} as a URL, DOI, or arXiv id")
+                }
+                Err(xuewen::import::ImportError::CookieExpired) => anyhow::bail!(
+                    "proxy session expired — refresh it: xuewen proxy-cookie --set '<cookie>'"
+                ),
+                Err(xuewen::import::ImportError::Unfetched { metadata }) => {
+                    let title = metadata
+                        .as_ref()
+                        .and_then(|m| m.title.as_deref())
+                        .unwrap_or("(unknown title)");
+                    anyhow::bail!(
+                        "could not fetch a PDF for {title:?} — paywalled with no open-access \
+                         copy, or the cookie is missing/expired. Download it in your browser \
+                         and drop it in the inbox."
+                    )
+                }
+                Err(xuewen::import::ImportError::Network(e)) => {
+                    return Err(e.context("fetch failed"))
+                }
+            }
+        }
+        Command::ProxyCookie { set, clear } => {
+            if clear {
+                db::delete_setting(&pool, "proxy_cookie").await?;
+                println!("proxy cookie cleared");
+            } else if let Some(cookie) = set {
+                db::set_setting(&pool, "proxy_cookie", cookie.trim()).await?;
+                println!("proxy cookie stored");
+            } else {
+                match db::setting_updated_at(&pool, "proxy_cookie").await? {
+                    Some(ts) => println!("proxy cookie set (updated {ts})"),
+                    None => println!("no proxy cookie set"),
+                }
+            }
+        }
         Command::Watch => {
             xuewen::watcher::run(&ctx, &cfg.inbox_dir).await?;
         }
