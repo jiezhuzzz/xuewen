@@ -132,6 +132,45 @@ enum Command {
         #[command(subcommand)]
         cmd: ProjectCmd,
     },
+    /// Export papers as BibTeX or BibLaTeX.
+    Export {
+        /// Paper id (exact or unique prefix) for a single entry.
+        #[arg(conflicts_with_all = ["all", "project"])]
+        id: Option<String>,
+        /// Export the whole (non-trashed) library.
+        #[arg(long, conflicts_with = "project")]
+        all: bool,
+        /// Export all papers in this project (name or id).
+        #[arg(long)]
+        project: Option<String>,
+        /// Filter batch exports by a search term (title/author).
+        #[arg(long)]
+        query: Option<String>,
+        /// Filter batch exports by status (resolved|needs_review).
+        #[arg(long)]
+        status: Option<String>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = BibFormatArg::Bibtex)]
+        format: BibFormatArg,
+        /// Write to this file instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum BibFormatArg {
+    Bibtex,
+    Biblatex,
+}
+
+impl From<BibFormatArg> for xuewen::export::BibFormat {
+    fn from(a: BibFormatArg) -> Self {
+        match a {
+            BibFormatArg::Bibtex => xuewen::export::BibFormat::Bibtex,
+            BibFormatArg::Biblatex => xuewen::export::BibFormat::Biblatex,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -510,6 +549,45 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Command::Export {
+            id,
+            all,
+            project,
+            query,
+            status,
+            format,
+            output,
+        } => {
+            let fmt = xuewen::export::BibFormat::from(format);
+            let text = if let Some(id) = id {
+                let paper = db::find_one(&pool, &id).await?;
+                xuewen::export::format_entry(&paper, fmt)
+            } else {
+                if !all && project.is_none() {
+                    anyhow::bail!("specify a paper id, --all, or --project <name>");
+                }
+                let project_id = match &project {
+                    Some(sel) => Some(db::find_one_project(&pool, sel).await?.id),
+                    None => None,
+                };
+                let papers = db::list_papers(
+                    &pool,
+                    query.as_deref(),
+                    status.as_deref(),
+                    None,
+                    project_id.as_deref(),
+                )
+                .await?;
+                xuewen::export::format_entries(&papers, fmt)
+            };
+            match output {
+                Some(path) => {
+                    tokio::fs::write(&path, &text).await?;
+                    println!("wrote {}", path.display());
+                }
+                None => print!("{text}"),
+            }
+        }
     }
     Ok(())
 }
