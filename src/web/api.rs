@@ -12,7 +12,7 @@ use super::dto::{Candidate, PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
 use crate::import::{self, ImportError};
-use crate::models::Identifier;
+use crate::models::{Identifier, Project};
 use crate::pipeline::{IdentifyOutcome, Outcome};
 
 #[derive(Deserialize)]
@@ -28,6 +28,7 @@ pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams
         p.q.as_deref(),
         p.status.as_deref(),
         p.sort.as_deref(),
+        None,
     )
     .await
     {
@@ -451,6 +452,111 @@ pub async fn clear_proxy_cookie(State(app): State<AppState>) -> Response {
         Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
         Err(e) => {
             tracing::error!("clear proxy cookie: {e}");
+            internal_error()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CreateProjectBody {
+    pub name: String,
+    pub note: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateProjectBody {
+    pub name: Option<String>,
+    pub note: Option<String>,
+}
+
+pub async fn list_projects(State(app): State<AppState>) -> Response {
+    match db::list_projects(&app.pool).await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!("list_projects: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn create_project(
+    State(app): State<AppState>,
+    Json(body): Json<CreateProjectBody>,
+) -> Response {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return bad_request("empty name");
+    }
+    let note = body.note.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    match db::create_project(&app.pool, name, note).await {
+        Ok(project) => (StatusCode::CREATED, Json(project)).into_response(),
+        Err(e) if db::is_unique_violation(&e) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "a project with that name already exists"})),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("create_project: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn update_project(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateProjectBody>,
+) -> Response {
+    let existing = match db::get_project(&app.pool, &id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::error!("update_project lookup: {e}");
+            return internal_error();
+        }
+    };
+    // Merge: an omitted/blank name keeps the old one; an omitted note keeps the
+    // old one, while an explicit blank note clears it.
+    let name = body
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&existing.name);
+    let note = match &body.note {
+        Some(n) => {
+            let t = n.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        }
+        None => existing.note.as_deref(),
+    };
+    match db::update_project(&app.pool, &id, name, note).await {
+        Ok(_) => match db::get_project(&app.pool, &id).await {
+            Ok(Some(p)) => Json(p).into_response(),
+            _ => internal_error(),
+        },
+        Err(e) if db::is_unique_violation(&e) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "a project with that name already exists"})),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("update_project: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn delete_project(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    match db::delete_project(&app.pool, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("delete_project: {e}");
             internal_error()
         }
     }

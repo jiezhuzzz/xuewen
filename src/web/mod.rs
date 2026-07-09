@@ -97,6 +97,14 @@ fn router_with(state: AppState) -> Router {
             "/api/settings/proxy-cookie",
             axum::routing::put(api::set_proxy_cookie).delete(api::clear_proxy_cookie),
         )
+        .route(
+            "/api/projects",
+            get(api::list_projects).post(api::create_project),
+        )
+        .route(
+            "/api/projects/{id}",
+            axum::routing::patch(api::update_project).delete(api::delete_project),
+        )
         .fallback(assets::static_handler)
         .with_state(state)
 }
