@@ -281,7 +281,15 @@ async fn main() -> Result<()> {
                 ctx,
                 staging_dir: cfg.inbox_dir.join("_uploads"),
             });
-            web::serve(&host, port, pool, cfg.library_root.clone(), ingest).await?;
+            web::serve(
+                &host,
+                port,
+                pool,
+                cfg.library_root.clone(),
+                ingest,
+                cfg.proxy.as_ref().map(|p| p.login_url.clone()),
+            )
+            .await?;
         }
         Command::Delete { id, yes } => {
             let paper = db::find_one(&pool, &id).await?;

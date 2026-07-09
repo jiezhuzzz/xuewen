@@ -8,6 +8,7 @@ use xuewen::db;
 use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
 use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::resolve::Resolver;
+use xuewen::web::build_router_with_ingest_proxy;
 use xuewen::web::{build_router, build_router_with_ingest, Ingest};
 
 const DBLP_FIXTURE: &str = include_str!("fixtures/dblp_kgat.json");
@@ -776,4 +777,112 @@ async fn identify_applies_arxiv_id_via_api() {
     assert_eq!(body["title"], "Attention Is All You Need");
     assert_eq!(body["cite_key"], "vaswani2017attention");
     assert!(library.join("vaswani2017attention.pdf").exists());
+}
+
+#[tokio::test]
+async fn settings_report_and_set_proxy_cookie() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".into(),
+        "http://127.0.0.1:1".into(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".into());
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server = TestServer::new(build_router_with_ingest_proxy(
+        pool.clone(),
+        library.clone(),
+        ingest,
+        Some("https://proxy.uchicago.edu/login?url=".into()),
+    ))
+    .unwrap();
+
+    // Initially unset.
+    let s: serde_json::Value = server.get("/api/settings").await.json();
+    assert_eq!(s["proxy_cookie_set"], false);
+
+    // Set it.
+    server
+        .put("/api/settings/proxy-cookie")
+        .json(&serde_json::json!({ "cookie": "ezproxy=abc" }))
+        .await
+        .assert_status_ok();
+    let s: serde_json::Value = server.get("/api/settings").await.json();
+    assert_eq!(s["proxy_cookie_set"], true);
+    assert!(s["proxy_cookie_updated_at"].is_string());
+    // The value is never echoed.
+    assert!(s.get("cookie").is_none());
+
+    // Clear it.
+    server
+        .delete("/api/settings/proxy-cookie")
+        .await
+        .assert_status_ok();
+    let s: serde_json::Value = server.get("/api/settings").await.json();
+    assert_eq!(s["proxy_cookie_set"], false);
+}
+
+#[tokio::test]
+async fn import_url_rejects_unsupported_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".into(),
+        "http://127.0.0.1:1".into(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".into());
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server =
+        TestServer::new(build_router_with_ingest_proxy(pool, library, ingest, None)).unwrap();
+
+    server
+        .post("/api/import")
+        .json(&serde_json::json!({ "input": "just a title, not an id" }))
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn import_url_needs_ingest_context() {
+    let (dir, pool) = temp_pool().await;
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+    server
+        .post("/api/import")
+        .json(&serde_json::json!({ "input": "10.1145/x" }))
+        .await
+        .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
 }
