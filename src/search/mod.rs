@@ -508,4 +508,106 @@ mod tests {
         assert_eq!(st.fts.failed, 0);
         assert!(!st.semantic_available);
     }
+
+    #[tokio::test]
+    async fn authors_only_disables_semantic_even_with_embedder() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("a", "Some Paper")).await.unwrap();
+        crate::search::store::replace_chunks(
+            &pool, "a",
+            &[crate::search::chunker::Chunk { seq: 0, page: None, text: "Ada content".into() }],
+            "hash-a", "mh",
+        ).await.unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/v1/embeddings"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3, 0.4]}]
+            })))
+            .mount(&server).await;
+        Mock::given(method("POST")).and(path("/collections/xuewen/points/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": []
+            })))
+            .mount(&server).await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
+        let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
+        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+
+        let out = svc.search(&SearchRequest {
+            q: "ada".into(),
+            fields: fts::FieldSel { title: false, authors: true, abstract_text: false, body: false },
+            keyword: true, semantic: true, status: None, project: None,
+        }).await.unwrap();
+
+        assert!(!out.semantic.available, "semantic should be disabled for authors-only");
+        assert_eq!(
+            out.semantic.reason.as_deref(),
+            Some("semantic search does not apply to an authors-only query"),
+            "reason should explain authors-only disables semantic"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_counts_failed_rows() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("a", "T")).await.unwrap();
+        crate::search::store::replace_chunks(
+            &pool, "a",
+            &[crate::search::chunker::Chunk { seq: 0, page: None, text: "some chunk".into() }],
+            "hash-a", "mh",
+        ).await.unwrap();
+        crate::search::store::record_error(&pool, "a", "boom").await.unwrap();
+
+        let svc = keyword_only_service(pool).await;
+        let st = svc.status().await.unwrap();
+        assert_eq!(st.fts.failed, 1, "status should count papers with errors");
+    }
+
+    #[tokio::test]
+    async fn semantic_snippet_truncates_long_chunks_with_ellipsis() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("a", "Some Paper")).await.unwrap();
+        let long_text = "x".repeat(250);
+        crate::search::store::replace_chunks(
+            &pool, "a",
+            &[crate::search::chunker::Chunk { seq: 2, page: Some(3), text: long_text }],
+            "hash-a", "mh",
+        ).await.unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/v1/embeddings"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3, 0.4]}]
+            })))
+            .mount(&server).await;
+        Mock::given(method("POST")).and(path("/collections/xuewen/points/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": [{"id": "x", "score": 0.9, "payload": {"paper_id": "a", "seq": 2, "page": 3}}]
+            })))
+            .mount(&server).await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
+        let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
+        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+
+        let out = svc.search(&SearchRequest {
+            q: "different words entirely".into(), fields: fts::FieldSel::all(),
+            keyword: true, semantic: true, status: None, project: None,
+        }).await.unwrap();
+
+        assert_eq!(out.results.len(), 1);
+        let m = &out.results[0].1;
+        assert_eq!(m.engine, "semantic");
+        assert!(m.snippet.ends_with("…"), "snippet should end with ellipsis: {}", m.snippet);
+        let text_before_ellipsis = m.snippet.trim_end_matches('…');
+        assert_eq!(text_before_ellipsis.chars().count(), 200, "text before ellipsis should be exactly 200 chars");
+    }
 }
