@@ -22,6 +22,23 @@ pub fn extract_text(path: &Path, last_page: u32) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Extract text from the whole document (no page limit), pages separated by
+/// form feeds (`\f`), using the `pdftotext` binary.
+pub fn extract_text_all(path: &Path) -> Result<String> {
+    let out = Command::new("pdftotext")
+        .arg(path)
+        .arg("-") // write to stdout
+        .output()
+        .map_err(|e| anyhow!("failed to run pdftotext (is poppler-utils installed?): {e}"))?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "pdftotext failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,6 +56,22 @@ mod tests {
             .unwrap();
     }
 
+    fn write_two_page_pdf(path: &Path, line1: &str, line2: &str) {
+        use printpdf::{BuiltinFont, Mm, PdfDocument};
+        use std::io::BufWriter;
+        let (doc, page1, layer1) = PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
+        let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
+        doc.get_page(page1)
+            .get_layer(layer1)
+            .use_text(line1, 12.0, Mm(15.0), Mm(280.0), &font);
+        let (page2, layer2) = doc.add_page(Mm(210.0), Mm(297.0), "L2");
+        doc.get_page(page2)
+            .get_layer(layer2)
+            .use_text(line2, 12.0, Mm(15.0), Mm(280.0), &font);
+        doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap()))
+            .unwrap();
+    }
+
     #[test]
     fn extracts_known_text() {
         let dir = tempfile::tempdir().unwrap();
@@ -49,5 +82,16 @@ mod tests {
             text.contains("Attention Is All You Need"),
             "extracted text was: {text:?}"
         );
+    }
+
+    #[test]
+    fn extract_text_all_returns_every_page_with_separators() {
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("two.pdf");
+        write_two_page_pdf(&pdf, "First Page Words", "Second Page Words");
+        let text = extract_text_all(&pdf).unwrap();
+        assert!(text.contains("First Page Words"));
+        assert!(text.contains("Second Page Words"));
+        assert!(text.contains('\u{0c}'), "pdftotext page separator expected");
     }
 }
