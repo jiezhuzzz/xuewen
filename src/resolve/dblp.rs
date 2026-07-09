@@ -36,7 +36,7 @@ pub fn parse(json: &str) -> Result<Vec<ResolvedMetadata>> {
         let dblp_key = info["key"].as_str().map(str::to_string);
         let authors = values(&info["authors"]["author"])
             .iter()
-            .filter_map(|a| a["text"].as_str().map(collapse_ws))
+            .filter_map(|a| a["text"].as_str().map(clean_author))
             .collect();
 
         out.push(ResolvedMetadata {
@@ -82,6 +82,18 @@ fn clean_title(s: &str) -> String {
     collapse_ws(s.trim_end_matches('.'))
 }
 
+/// DBLP appends a four-digit homonym number to disambiguate authors who share a
+/// name (e.g. "Hong Hu 0004"); strip that suffix so we store the plain name.
+fn clean_author(s: &str) -> String {
+    let name = collapse_ws(s);
+    if let Some((head, tail)) = name.rsplit_once(' ') {
+        if tail.len() == 4 && tail.bytes().all(|b| b.is_ascii_digit()) {
+            return head.to_string();
+        }
+    }
+    name
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +124,22 @@ mod tests {
     fn zero_hits_is_empty() {
         let json = r#"{"result":{"hits":{"@total":"0"}}}"#;
         assert!(parse(json).unwrap().is_empty());
+    }
+
+    #[test]
+    fn strips_dblp_homonym_numbers() {
+        // DBLP appends a four-digit homonym number to disambiguate authors who
+        // share a name; it must not end up in the stored author list.
+        let json = r#"{"result":{"hits":{"hit":[{"info":{
+            "title":"A Disambiguated Paper.","year":"2021",
+            "authors":{"author":[
+                {"@pid":"1","text":"Jinho Jung 0001"},
+                {"@pid":"2","text":"Hong Hu 0004"},
+                {"@pid":"3","text":"Xiang Wang"}
+            ]}
+        }}]}}}"#;
+        let cands = parse(json).unwrap();
+        assert_eq!(cands[0].authors, vec!["Jinho Jung", "Hong Hu", "Xiang Wang"]);
     }
 
     #[test]
