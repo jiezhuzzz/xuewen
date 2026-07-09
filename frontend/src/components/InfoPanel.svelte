@@ -1,6 +1,14 @@
 <script lang="ts">
-  import { ExternalLink, Trash2, Wand2 } from 'lucide-svelte';
-  import { detailRefresh, loadDetail, openIdentify, removePaper } from '../lib/state.svelte';
+  import { ExternalLink, Trash2, Wand2, X } from 'lucide-svelte';
+  import {
+    addToProject,
+    detailRefresh,
+    loadDetail,
+    openIdentify,
+    projects,
+    removeFromProject,
+    removePaper,
+  } from '../lib/state.svelte';
   import StatusPill from './StatusPill.svelte';
 
   let { id }: { id: string } = $props();
@@ -18,6 +26,34 @@
       deleteError = (e as Error).message;
       deleting = false;
     }
+  }
+
+  let membershipError = $state<string | null>(null);
+
+  async function onAddProject(e: Event) {
+    const sel = e.currentTarget as HTMLSelectElement;
+    const projectId = sel.value;
+    sel.value = '';
+    if (!projectId) return;
+    membershipError = null;
+    try {
+      await addToProject(id, projectId);
+    } catch (err) {
+      membershipError = (err as Error).message;
+    }
+  }
+
+  async function onRemoveProject(projectId: string) {
+    membershipError = null;
+    try {
+      await removeFromProject(id, projectId);
+    } catch (err) {
+      membershipError = (err as Error).message;
+    }
+  }
+
+  function projectName(pid: string): string {
+    return projects.items.find((p) => p.id === pid)?.name ?? pid;
   }
 
   type Link = { label: string; href: string };
@@ -66,6 +102,41 @@
           {/each}
         </div>
       {/if}
+      <div class="mt-4">
+        <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Projects</h3>
+        {#if d.project_ids.length}
+          <div class="flex flex-wrap gap-1.5">
+            {#each d.project_ids as pid (pid)}
+              <span class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300">
+                {projectName(pid)}
+                <button
+                  type="button"
+                  aria-label={`Remove from ${projectName(pid)}`}
+                  onclick={() => void onRemoveProject(pid)}
+                  class="rounded-full hover:bg-indigo-100 dark:hover:bg-indigo-500/20"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            {/each}
+          </div>
+        {/if}
+        {#if projects.items.some((p) => !d.project_ids.includes(p.id))}
+          <select
+            aria-label="Add to project"
+            onchange={onAddProject}
+            class="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800"
+          >
+            <option value="">Add to project…</option>
+            {#each projects.items.filter((p) => !d.project_ids.includes(p.id)) as p (p.id)}
+              <option value={p.id}>{p.name}</option>
+            {/each}
+          </select>
+        {/if}
+        {#if membershipError}
+          <p class="mt-1 text-xs text-red-600 dark:text-red-400">{membershipError}</p>
+        {/if}
+      </div>
       {#if d.abstract}
         <div class="mt-4">
           <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Abstract</h3>
