@@ -30,7 +30,8 @@ export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: b
   infoOpen: false,
 });
 
-export const theme = $state<{ mode: 'light' | 'dark' }>({ mode: 'light' });
+export type ThemeMode = 'light' | 'dark' | 'system';
+export const theme = $state<{ mode: ThemeMode }>({ mode: 'system' });
 
 export const ui = $state<{ sidebarOpen: boolean; importOpen: boolean }>({
   sidebarOpen: true,
@@ -118,17 +119,28 @@ export async function removePaper(id: string): Promise<void> {
   await loadStats();
 }
 
+const darkQuery = (): MediaQueryList => window.matchMedia('(prefers-color-scheme: dark)');
+
+// Resolve a mode to whether the dark class should be applied. 'system' tracks
+// the live OS preference; explicit modes ignore it.
+function resolvesDark(mode: ThemeMode): boolean {
+  return mode === 'dark' || (mode === 'system' && darkQuery().matches);
+}
 function applyTheme(): void {
-  document.documentElement.classList.toggle('dark', theme.mode === 'dark');
+  document.documentElement.classList.toggle('dark', resolvesDark(theme.mode));
 }
 export function initTheme(): void {
   const saved = localStorage.getItem('xuewen-theme');
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  theme.mode = saved === 'dark' || (!saved && prefersDark) ? 'dark' : 'light';
+  theme.mode = saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system';
   applyTheme();
+  // Keep 'system' in sync when the OS preference changes at runtime.
+  darkQuery().addEventListener('change', () => {
+    if (theme.mode === 'system') applyTheme();
+  });
 }
+const THEME_CYCLE: ThemeMode[] = ['light', 'dark', 'system'];
 export function toggleTheme(): void {
-  theme.mode = theme.mode === 'dark' ? 'light' : 'dark';
+  theme.mode = THEME_CYCLE[(THEME_CYCLE.indexOf(theme.mode) + 1) % THEME_CYCLE.length];
   localStorage.setItem('xuewen-theme', theme.mode);
   applyTheme();
 }

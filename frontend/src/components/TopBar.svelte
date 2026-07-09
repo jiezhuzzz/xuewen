@@ -1,6 +1,10 @@
 <script lang="ts">
-  import { Library, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
+  import { Library, Monitor, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
   import { openImport, stats, theme, toggleSidebar, toggleTheme } from '../lib/state.svelte';
+
+  const themeLabel = $derived(
+    theme.mode === 'light' ? 'Light' : theme.mode === 'dark' ? 'Dark' : 'System',
+  );
 </script>
 
 <header class="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
@@ -34,10 +38,11 @@
     <button
       type="button"
       onclick={toggleTheme}
-      aria-label="Toggle theme"
+      aria-label={`Theme: ${themeLabel} (click to change)`}
+      title={`Theme: ${themeLabel}`}
       class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
     >
-      {#if theme.mode === 'dark'}<Sun size={18} />{:else}<Moon size={18} />{/if}
+      {#if theme.mode === 'light'}<Sun size={18} />{:else if theme.mode === 'dark'}<Moon size={18} />{:else}<Monitor size={18} />{/if}
     </button>
   </div>
 </header>
