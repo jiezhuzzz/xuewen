@@ -129,16 +129,21 @@ xuewen identify <ID> --title "<QUERY>" [--pick N]
   fetch; matches the arXiv pattern (`\d{4}\.\d{4,5}`, optional `vN`) → arXiv
   fetch; anything else → title search on Enter.
 - Search results render as candidate rows: title, authors (truncated), venue
-  + year, source badge (dblp/crossref). Direct DOI/arXiv fetch renders the
-  single fetched record the same way.
+  + year, source badge (dblp/crossref). A direct DOI/arXiv input is staged
+  as-is with the parsed value shown ("Direct identifier detected (…)"); Apply
+  performs the authoritative fetch server-side. (The CLI, by contrast,
+  previews the fetched record before confirming — the web flow trades that
+  preview for one fewer round-trip, and a mis-typed identifier is recoverable
+  by re-identifying.)
 - Clicking a row selects it; an **Apply** button POSTs
   `/api/papers/{id}/identify` (with `{"candidate": …}` for picked rows,
   `{"doi"/"arxiv_id": …}` for direct fetches).
 - On success: close the modal, invalidate that paper's detail cache, reload
   the paper list and stats, and update the open tab's title.
 - Errors render inline in the modal (`same work as …` shows the conflicting
-  paper's title when the list has it, else the id; upstream-not-found shows
-  "identifier not found").
+  paper's id; mapping it to a title when the loaded list has one is a
+  possible polish follow-up; upstream-not-found shows "identifier not
+  found").
 - New api.ts functions: `identifySearch(q)`, `identifyPaper(id, body)`;
   state additions live in `state.svelte.ts` following the import-modal
   pattern (plain-TS testable).
