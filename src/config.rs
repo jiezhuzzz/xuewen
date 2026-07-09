@@ -11,6 +11,15 @@ pub struct Config {
     pub grobid_url: Option<String>,
     #[serde(default)]
     pub contact_email: Option<String>,
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProxyConfig {
+    /// EZproxy login prefix; a target URL is percent-encoded and appended.
+    /// e.g. "https://proxy.uchicago.edu/login?url="
+    pub login_url: String,
 }
 
 impl Config {
@@ -81,5 +90,42 @@ database_url = "sqlite:/data/library.db"
     fn load_error_names_the_file() {
         let err = Config::load(Path::new("/nope/xuewen.toml")).unwrap_err();
         assert!(err.to_string().contains("/nope/xuewen.toml"));
+    }
+
+    #[test]
+    fn loads_proxy_section() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"
+inbox_dir = "/data/inbox"
+library_root = "/data/library"
+database_url = "sqlite:/data/library.db"
+
+[proxy]
+login_url = "https://proxy.uchicago.edu/login?url="
+"#
+        )
+        .unwrap();
+        let cfg = Config::load(f.path()).unwrap();
+        assert_eq!(
+            cfg.proxy.unwrap().login_url,
+            "https://proxy.uchicago.edu/login?url="
+        );
+    }
+
+    #[test]
+    fn proxy_defaults_to_none() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"
+inbox_dir = "/data/inbox"
+library_root = "/data/library"
+database_url = "sqlite:/data/library.db"
+"#
+        )
+        .unwrap();
+        assert!(Config::load(f.path()).unwrap().proxy.is_none());
     }
 }
