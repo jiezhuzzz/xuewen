@@ -196,6 +196,7 @@ export function exportUrl(f: Filters, fmt: BibFormat): string {
   if (f.q.trim()) params.set('q', f.q.trim());
   if (f.status !== 'all') params.set('status', f.status);
   if (f.project && f.project !== 'all') params.set('project', f.project);
+  params.set('sort', f.sort);
   params.set('format', fmt);
   return `/api/papers/export?${params.toString()}`;
 }
