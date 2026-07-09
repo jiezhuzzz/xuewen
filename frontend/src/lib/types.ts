@@ -38,3 +38,21 @@ export type ImportResult =
   | { outcome: 'duplicate' }
   | { outcome: 'same_work'; id: string }
   | { outcome: 'in_trash'; id: string };
+
+export interface Candidate {
+  title: string | null;
+  abstract: string | null;
+  authors: string[];
+  venue: string | null;
+  year: number | null;
+  doi: string | null;
+  arxiv_id: string | null;
+  dblp_key: string | null;
+  url: string | null;
+  source: string;
+}
+
+export type IdentifyBody =
+  | { doi: string }
+  | { arxiv_id: string }
+  | { candidate: Candidate };

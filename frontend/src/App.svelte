@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import EmptyState from './components/EmptyState.svelte';
+  import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
   import PdfViewer from './components/PdfViewer.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import TabBar from './components/TabBar.svelte';
   import TopBar from './components/TopBar.svelte';
-  import { initTheme, loadPapers, loadStats, ui, viewer } from './lib/state.svelte';
+  import { identifyState, initTheme, loadPapers, loadStats, ui, viewer } from './lib/state.svelte';
 
   onMount(() => {
     initTheme();
@@ -38,3 +39,4 @@
   </div>
 </div>
 {#if ui.importOpen}<ImportModal />{/if}
+{#if identifyState.open}<IdentifyModal />{/if}

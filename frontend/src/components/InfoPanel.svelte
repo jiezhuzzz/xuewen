@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { ExternalLink, Trash2 } from 'lucide-svelte';
-  import { loadDetail, removePaper } from '../lib/state.svelte';
+  import { ExternalLink, Trash2, Wand2 } from 'lucide-svelte';
+  import { detailRefresh, loadDetail, openIdentify, removePaper } from '../lib/state.svelte';
   import StatusPill from './StatusPill.svelte';
 
   let { id }: { id: string } = $props();
@@ -37,77 +37,86 @@
 </script>
 
 <aside class="flex h-full w-80 shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-  {#await loadDetail(id)}
-    <p class="text-sm text-slate-500 dark:text-slate-400">Loading…</p>
-  {:then d}
-    <h2 class="text-base font-semibold leading-snug">{d.title ?? '(untitled)'}</h2>
-    <div class="mt-2"><StatusPill status={d.status} /></div>
-    {#if d.authors.length}
-      <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">{d.authors.join(', ')}</p>
-    {/if}
-    <dl class="mt-3 space-y-1 text-xs text-slate-500 dark:text-slate-400">
-      {#if d.venue}<div><dt class="inline font-medium">Venue:</dt> {d.venue}</div>{/if}
-      {#if d.year}<div><dt class="inline font-medium">Year:</dt> {d.year}</div>{/if}
-      {#if d.cite_key}<div><dt class="inline font-medium">Cite key:</dt> <code>{d.cite_key}</code></div>{/if}
-      {#if d.source}<div><dt class="inline font-medium">Source:</dt> {d.source}</div>{/if}
-    </dl>
-    {#if links(d).length}
-      <div class="mt-3 flex flex-wrap gap-2">
-        {#each links(d) as l (l.label)}
-          <a
-            href={l.href}
-            target="_blank"
-            rel="noreferrer"
-            class="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-400 dark:hover:bg-indigo-500/10"
-          >
-            {l.label}<ExternalLink size={12} />
-          </a>
-        {/each}
-      </div>
-    {/if}
-    {#if d.abstract}
-      <div class="mt-4">
-        <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Abstract</h3>
-        <p class="text-sm leading-relaxed text-slate-600 dark:text-slate-300">{d.abstract}</p>
-      </div>
-    {/if}
-    <div class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-800">
-      {#if confirming}
-        {#if deleting}
-          <span class="text-sm text-slate-500 dark:text-slate-400">Deleting…</span>
-        {:else}
-          <div class="flex items-center gap-2">
-            <span class="text-sm text-slate-600 dark:text-slate-300">Delete this paper?</span>
-            <button
-              type="button"
-              onclick={doDelete}
-              class="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700"
+  {#key `${id}-${detailRefresh.n}`}
+    {#await loadDetail(id)}
+      <p class="text-sm text-slate-500 dark:text-slate-400">Loading…</p>
+    {:then d}
+      <h2 class="text-base font-semibold leading-snug">{d.title ?? '(untitled)'}</h2>
+      <div class="mt-2"><StatusPill status={d.status} /></div>
+      {#if d.authors.length}
+        <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">{d.authors.join(', ')}</p>
+      {/if}
+      <dl class="mt-3 space-y-1 text-xs text-slate-500 dark:text-slate-400">
+        {#if d.venue}<div><dt class="inline font-medium">Venue:</dt> {d.venue}</div>{/if}
+        {#if d.year}<div><dt class="inline font-medium">Year:</dt> {d.year}</div>{/if}
+        {#if d.cite_key}<div><dt class="inline font-medium">Cite key:</dt> <code>{d.cite_key}</code></div>{/if}
+        {#if d.source}<div><dt class="inline font-medium">Source:</dt> {d.source}</div>{/if}
+      </dl>
+      {#if links(d).length}
+        <div class="mt-3 flex flex-wrap gap-2">
+          {#each links(d) as l (l.label)}
+            <a
+              href={l.href}
+              target="_blank"
+              rel="noreferrer"
+              class="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-400 dark:hover:bg-indigo-500/10"
             >
-              Delete
-            </button>
-            <button
-              type="button"
-              onclick={() => (confirming = false)}
-              class="rounded-lg px-3 py-1 text-xs text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-          </div>
-          {#if deleteError}
-            <p class="mt-2 text-xs text-red-600 dark:text-red-400">Delete failed: {deleteError}</p>
-          {/if}
-        {/if}
-      {:else}
+              {l.label}<ExternalLink size={12} />
+            </a>
+          {/each}
+        </div>
+      {/if}
+      {#if d.abstract}
+        <div class="mt-4">
+          <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Abstract</h3>
+          <p class="text-sm leading-relaxed text-slate-600 dark:text-slate-300">{d.abstract}</p>
+        </div>
+      {/if}
+      <div class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-800">
         <button
           type="button"
-          onclick={() => (confirming = true)}
-          class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-500/10"
+          onclick={() => openIdentify(id, { doi: d.doi, arxiv_id: d.arxiv_id })}
+          class="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-400 dark:hover:bg-indigo-500/10"
         >
-          <Trash2 size={14} /> Delete paper
+          <Wand2 size={14} /> Identify…
         </button>
-      {/if}
-    </div>
-  {:catch}
-    <p class="text-sm text-red-600 dark:text-red-400">Failed to load details.</p>
-  {/await}
+        {#if confirming}
+          {#if deleting}
+            <span class="text-sm text-slate-500 dark:text-slate-400">Deleting…</span>
+          {:else}
+            <div class="flex items-center gap-2">
+              <span class="text-sm text-slate-600 dark:text-slate-300">Delete this paper?</span>
+              <button
+                type="button"
+                onclick={doDelete}
+                class="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700"
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                onclick={() => (confirming = false)}
+                class="rounded-lg px-3 py-1 text-xs text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+            </div>
+            {#if deleteError}
+              <p class="mt-2 text-xs text-red-600 dark:text-red-400">Delete failed: {deleteError}</p>
+            {/if}
+          {/if}
+        {:else}
+          <button
+            type="button"
+            onclick={() => (confirming = true)}
+            class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-500/10"
+          >
+            <Trash2 size={14} /> Delete paper
+          </button>
+        {/if}
+      </div>
+    {:catch}
+      <p class="text-sm text-red-600 dark:text-red-400">Failed to load details.</p>
+    {/await}
+  {/key}
 </aside>

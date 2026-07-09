@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::models::{Paper, PaperStatus};
+use crate::resolve::ResolvedMetadata;
 
 /// A paper for the list view (no abstract, to keep the payload light).
 #[derive(Serialize)]
@@ -64,4 +65,56 @@ pub struct Stats {
     pub total: usize,
     pub resolved: usize,
     pub needs_review: usize,
+}
+
+/// A manual-identify candidate: a lossless wire mirror of `ResolvedMetadata`
+/// (round-trips through POST /api/papers/{id}/identify without loss).
+#[derive(Serialize, serde::Deserialize)]
+pub struct Candidate {
+    pub title: Option<String>,
+    #[serde(rename = "abstract")]
+    pub abstract_text: Option<String>,
+    pub authors: Vec<String>,
+    pub venue: Option<String>,
+    pub year: Option<i64>,
+    pub doi: Option<String>,
+    pub arxiv_id: Option<String>,
+    pub dblp_key: Option<String>,
+    pub url: Option<String>,
+    pub source: String,
+}
+
+impl From<&ResolvedMetadata> for Candidate {
+    fn from(m: &ResolvedMetadata) -> Self {
+        Self {
+            title: m.title.clone(),
+            abstract_text: m.abstract_text.clone(),
+            authors: m.authors.clone(),
+            venue: m.venue.clone(),
+            year: m.year,
+            doi: m.doi.clone(),
+            arxiv_id: m.arxiv_id.clone(),
+            dblp_key: m.dblp_key.clone(),
+            url: m.url.clone(),
+            source: m.source.clone(),
+        }
+    }
+}
+
+impl Candidate {
+    /// Back to resolver metadata for the apply path.
+    pub fn into_metadata(self) -> ResolvedMetadata {
+        ResolvedMetadata {
+            title: self.title,
+            abstract_text: self.abstract_text,
+            authors: self.authors,
+            venue: self.venue,
+            year: self.year,
+            doi: self.doi,
+            arxiv_id: self.arxiv_id,
+            dblp_key: self.dblp_key,
+            url: self.url,
+            source: self.source,
+        }
+    }
 }

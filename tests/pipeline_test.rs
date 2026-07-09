@@ -545,3 +545,57 @@ async fn same_doi_of_trashed_paper_reports_in_trash() {
     let out = ctx.ingest_file(&b).await.unwrap();
     assert_eq!(out, Outcome::InTrash(id_a));
 }
+
+const DBLP_ANTIFUZZ_FIXTURE: &str = include_str!("fixtures/dblp_antifuzz.json");
+
+#[tokio::test]
+async fn wrapped_two_line_title_resolves_via_dblp() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    let processed = inbox.join("_processed");
+    std::fs::create_dir_all(&inbox).unwrap();
+
+    // USENIX-style cover sheet: the title wraps across two lines, no DOI.
+    let pdf_path = inbox.join("paper.pdf");
+    common::write_test_pdf(
+        &pdf_path,
+        &[
+            "AntiFuzz: Impeding Fuzzing Audits of",
+            "Binary Executables",
+            "Emre Guler, Cornelius Aschermann, Ali Abbasi, and Thorsten Holz,",
+            "Ruhr-Universitat Bochum",
+        ],
+    );
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(DBLP_ANTIFUZZ_FIXTURE))
+        .mount(&server)
+        .await;
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: processed.clone(),
+        },
+        resolver: Resolver::with_bases(None, server.uri(), server.uri())
+            .unwrap()
+            .with_dblp_base(server.uri()),
+        grobid: None,
+    };
+
+    let id = match ctx.ingest_file(&pdf_path).await.unwrap() {
+        Outcome::Ingested(id) => id,
+        other => panic!("expected Ingested, got {other:?}"),
+    };
+    let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
+    // The joined title matches DBLP's record at similarity 1.0 -> auto-resolved.
+    assert_eq!(paper.meta.status, PaperStatus::Resolved);
+    assert_eq!(paper.meta.source.as_deref(), Some("dblp"));
+    assert_eq!(paper.cite_key.as_deref(), Some("guler2019antifuzz"));
+    assert!(library.join("guler2019antifuzz.pdf").exists());
+}

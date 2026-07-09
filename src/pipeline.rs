@@ -171,6 +171,110 @@ impl IngestCtx {
             resolution,
         })
     }
+
+    /// Persist `paper` and re-file its PDF to the cite-key path implied by its
+    /// current metadata. Copy-first ordering: copy the file, update the row,
+    /// remove the old file — a failure at any step never leaves the DB
+    /// pointing at a missing file. If the current file is missing or
+    /// unreadable, the copy step fails and only the metadata is persisted —
+    /// the row keeps its previous `rel_path`/`cite_key` and the caller gets
+    /// `Ok(false)`. Returns whether the file moved.
+    pub async fn save_and_refile(&self, paper: &mut Paper) -> Result<bool> {
+        let pdf = self.dirs.library_root.join(&paper.rel_path);
+        let cite_key = match naming::cite_key_base(
+            &paper.meta.authors.0,
+            paper.meta.year,
+            paper.meta.title.as_deref(),
+        ) {
+            Some(base) => {
+                let taken = db::cite_keys_with_base(&self.pool, &base, Some(&paper.id)).await?;
+                Some(naming::disambiguate(&base, &taken))
+            }
+            None => None,
+        };
+        let new_rel = naming::library_rel_path(cite_key.as_deref(), &paper.content_hash);
+        let mut refiled_paths: Option<(std::path::PathBuf, std::path::PathBuf)> = None; // (old, new)
+        if new_rel != paper.rel_path {
+            let to = self.dirs.library_root.join(&new_rel);
+            match copy_to_async(&pdf, &to).await {
+                Ok(()) => {
+                    refiled_paths = Some((pdf.clone(), to));
+                    paper.rel_path = new_rel;
+                    paper.cite_key = cite_key;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "re-file copy failed for {}: {e}; leaving in place",
+                        paper.id
+                    )
+                }
+            }
+        }
+
+        if let Err(e) = db::update_paper(&self.pool, paper).await {
+            // Roll the copy back so filesystem and DB stay consistent.
+            if let Some((_, new_path)) = &refiled_paths {
+                let _ = tokio::fs::remove_file(new_path).await;
+            }
+            return Err(e);
+        }
+        if let Some((old_path, _)) = &refiled_paths {
+            if let Err(e) = tokio::fs::remove_file(old_path).await {
+                tracing::warn!("could not remove old file {}: {e}", old_path.display());
+            }
+        }
+        Ok(refiled_paths.is_some())
+    }
+
+    /// Apply user-confirmed metadata to `paper`: guard identifier conflicts,
+    /// overwrite the metadata block (keeping the old abstract when the source
+    /// has none), mark it resolved, then persist + re-file.
+    pub async fn apply_match(
+        &self,
+        paper: &mut Paper,
+        md: ResolvedMetadata,
+    ) -> Result<IdentifyOutcome> {
+        if paper.deleted_at.is_some() {
+            return Ok(IdentifyOutcome::Trashed);
+        }
+        if let Some(existing) =
+            db::find_by_identifier(&self.pool, md.doi.as_deref(), md.arxiv_id.as_deref()).await?
+        {
+            if existing.id != paper.id {
+                return Ok(IdentifyOutcome::SameWork(existing.id));
+            }
+        }
+        let abstract_text = md
+            .abstract_text
+            .or_else(|| paper.meta.abstract_text.clone());
+        paper.meta = PaperMeta {
+            title: md.title,
+            abstract_text,
+            authors: Authors(md.authors),
+            venue: md.venue,
+            year: md.year,
+            doi: md.doi,
+            arxiv_id: md.arxiv_id,
+            dblp_key: md.dblp_key,
+            url: md.url,
+            source: Some(md.source),
+            status: PaperStatus::Resolved,
+        };
+        // No file-existence pre-check: fixing metadata must succeed even if the
+        // PDF is missing; save_and_refile degrades to metadata-only in that case.
+        self.save_and_refile(paper).await?;
+        Ok(IdentifyOutcome::Applied)
+    }
+}
+
+/// Result of applying a user-confirmed identify match.
+#[derive(Debug, PartialEq, Eq)]
+pub enum IdentifyOutcome {
+    Applied,
+    /// The chosen identifier already belongs to this other paper; no changes.
+    SameWork(String),
+    /// The paper is in the trash; restore it first. No changes.
+    Trashed,
 }
 
 /// Decide the stored fields. A confident resolution yields `resolved` (with a
@@ -390,5 +494,92 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn apply_match_updates_conflicts_and_keeps_abstract() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}", dir.path().join("t.db").display());
+        let pool = db::connect(&url).await.unwrap();
+        let library = dir.path().join("library");
+        std::fs::create_dir_all(&library).unwrap();
+        let ctx = IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: dir.path().join("_processed"),
+            },
+            resolver: Resolver::with_bases(
+                None,
+                "http://127.0.0.1:1".to_string(),
+                "http://127.0.0.1:1".to_string(),
+            )
+            .unwrap(),
+            grobid: None,
+        };
+
+        // Seed a needs_review paper with a GROBID abstract and a real file.
+        let mut a = paper("01890000-0000-7000-8000-0000000000a1", "ha", None);
+        a.meta.abstract_text = Some("kept abstract".into());
+        std::fs::write(library.join("ha.pdf"), b"%PDF-1.4 fake").unwrap();
+        db::insert_paper(&pool, &a).await.unwrap();
+
+        // Another paper already owns a DOI (for the conflict case).
+        let b = paper(
+            "01890000-0000-7000-8000-0000000000b2",
+            "hb",
+            Some("10.9/owned"),
+        );
+        db::insert_paper(&pool, &b).await.unwrap();
+
+        // Conflict: applying b's DOI to a -> SameWork(b.id), nothing changed.
+        let md_conflict = ResolvedMetadata {
+            title: Some("X".into()),
+            doi: Some("10.9/owned".into()),
+            source: "crossref".into(),
+            ..Default::default()
+        };
+        let out = ctx.apply_match(&mut a.clone(), md_conflict).await.unwrap();
+        assert_eq!(out, IdentifyOutcome::SameWork(b.id.clone()));
+        let unchanged = db::get_by_id(&pool, &a.id).await.unwrap().unwrap();
+        assert_eq!(unchanged.meta.status, PaperStatus::NeedsReview);
+
+        // Apply: DBLP-style metadata without an abstract keeps the old abstract,
+        // sets Resolved, recomputes cite key and re-files.
+        let md = ResolvedMetadata {
+            title: Some("AntiFuzz: Impeding Fuzzing Audits of Binary Executables".into()),
+            authors: vec!["Emre Güler".into(), "Thorsten Holz".into()],
+            venue: Some("USENIX Security Symposium".into()),
+            year: Some(2019),
+            dblp_key: Some("conf/uss/GulerAAH19".into()),
+            source: "dblp".into(),
+            ..Default::default()
+        };
+        let out = ctx.apply_match(&mut a, md.clone()).await.unwrap();
+        assert_eq!(out, IdentifyOutcome::Applied);
+        let got = db::get_by_id(&pool, &a.id).await.unwrap().unwrap();
+        assert_eq!(got.meta.status, PaperStatus::Resolved);
+        assert_eq!(got.meta.abstract_text.as_deref(), Some("kept abstract"));
+        assert_eq!(got.cite_key.as_deref(), Some("guler2019antifuzz"));
+        assert_eq!(got.rel_path, "guler2019antifuzz.pdf");
+        assert!(library.join("guler2019antifuzz.pdf").exists());
+
+        // Idempotent: re-applying the same match succeeds and changes nothing.
+        let out = ctx.apply_match(&mut a, md.clone()).await.unwrap();
+        assert_eq!(out, IdentifyOutcome::Applied);
+        let again = db::get_by_id(&pool, &a.id).await.unwrap().unwrap();
+        assert_eq!(again.cite_key.as_deref(), Some("guler2019antifuzz"));
+        assert_eq!(again.rel_path, "guler2019antifuzz.pdf");
+        assert!(library.join("guler2019antifuzz.pdf").exists());
+
+        // Trashed: a soft-deleted paper is guarded inside apply_match itself,
+        // not just at the CLI/web call sites.
+        db::soft_delete(&pool, &a.id).await.unwrap();
+        a.deleted_at = Some("x".into());
+        let out = ctx.apply_match(&mut a, md).await.unwrap();
+        assert_eq!(out, IdentifyOutcome::Trashed);
+        let still_trashed = db::get_by_id(&pool, &a.id).await.unwrap().unwrap();
+        assert_eq!(still_trashed.cite_key.as_deref(), Some("guler2019antifuzz"));
+        assert_eq!(still_trashed.rel_path, "guler2019antifuzz.pdf");
     }
 }

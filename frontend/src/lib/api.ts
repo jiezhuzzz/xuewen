@@ -1,4 +1,12 @@
-import type { Filters, ImportResult, PaperDetail, PaperSummary, Stats } from './types';
+import type {
+  Candidate,
+  Filters,
+  IdentifyBody,
+  ImportResult,
+  PaperDetail,
+  PaperSummary,
+  Stats,
+} from './types';
 
 export async function listPapers(f: Filters): Promise<PaperSummary[]> {
   const params = new URLSearchParams();
@@ -37,6 +45,31 @@ export async function importPaper(file: File): Promise<ImportResult> {
   const res = await fetch('/api/papers', { method: 'POST', body });
   if (!res.ok) {
     let msg = `import failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j && typeof j.error === 'string') msg = j.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+export async function identifySearch(q: string): Promise<Candidate[]> {
+  const res = await fetch(`/api/identify/search?q=${encodeURIComponent(q)}`);
+  if (!res.ok) throw new Error(`search failed: ${res.status}`);
+  return res.json();
+}
+
+export async function identifyPaper(id: string, body: IdentifyBody): Promise<PaperDetail> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(id)}/identify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = `identify failed: ${res.status}`;
     try {
       const j = await res.json();
       if (j && typeof j.error === 'string') msg = j.error;
