@@ -88,6 +88,24 @@ pub struct Paper {
     pub meta: PaperMeta,
 }
 
+/// A named group of related papers. Column names match the `projects` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+/// A project plus its membership count, for list views.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct ProjectSummary {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub project: Project,
+    pub paper_count: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
