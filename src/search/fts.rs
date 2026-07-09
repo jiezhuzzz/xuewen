@@ -167,7 +167,7 @@ impl FtsIndex {
 
     pub fn search(&self, q: &str, sel: &FieldSel, limit: usize) -> Result<Vec<FtsHit>> {
         let q = q.trim();
-        if q.is_empty() || !sel.any() {
+        if q.is_empty() || !sel.any() || limit == 0 {
             return Ok(Vec::new());
         }
         let mut fields = Vec::new();
@@ -331,5 +331,12 @@ mod tests {
     #[test]
     fn escapes_html() {
         assert_eq!(html_escape("<b>&\"'"), "&lt;b&gt;&amp;&quot;&#39;");
+    }
+
+    #[test]
+    fn zero_limit_returns_empty_instead_of_panicking() {
+        let (idx, _dir) = open_tmp();
+        idx.upsert(&doc("p1", "AntiFuzz: Impeding Fuzzing Audits", "fuzzing resistance")).unwrap();
+        assert!(idx.search("fuzzing", &FieldSel::all(), 0).unwrap().is_empty());
     }
 }
