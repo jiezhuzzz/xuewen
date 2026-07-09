@@ -877,6 +877,82 @@ async fn import_url_rejects_unsupported_input() {
 }
 
 #[tokio::test]
+async fn projects_crud_membership_and_filter() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    db::insert_paper(&pool, &paper("bbbb2222", "Attention Is All You Need", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // Create.
+    let resp = server
+        .post("/api/projects")
+        .json(&serde_json::json!({"name": "Survey", "note": "draft"}))
+        .await;
+    resp.assert_status(axum::http::StatusCode::CREATED);
+    let proj: serde_json::Value = resp.json();
+    let pid = proj["id"].as_str().unwrap().to_string();
+    assert_eq!(proj["name"], "Survey");
+
+    // Duplicate name -> 409.
+    server
+        .post("/api/projects")
+        .json(&serde_json::json!({"name": "survey"}))
+        .await
+        .assert_status(axum::http::StatusCode::CONFLICT);
+
+    // Add membership (idempotent) -> 204.
+    server
+        .put(&format!("/api/papers/aaaa1111/projects/{pid}"))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    server
+        .put(&format!("/api/papers/aaaa1111/projects/{pid}"))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    // Membership to a missing paper -> 404.
+    server
+        .put(&format!("/api/papers/nope/projects/{pid}"))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // List shows count 1.
+    let list: Vec<serde_json::Value> = server.get("/api/projects").await.json();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["paper_count"], 1);
+
+    // Detail carries project_ids.
+    let detail: serde_json::Value = server.get("/api/papers/aaaa1111").await.json();
+    assert_eq!(detail["project_ids"], serde_json::json!([pid]));
+
+    // Filter list by project.
+    let filtered: Vec<serde_json::Value> =
+        server.get(&format!("/api/papers?project={pid}")).await.json();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0]["id"], "aaaa1111");
+
+    // Remove membership -> 204, then 404 when absent.
+    server
+        .delete(&format!("/api/papers/aaaa1111/projects/{pid}"))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    server
+        .delete(&format!("/api/papers/aaaa1111/projects/{pid}"))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // Delete project -> 204.
+    server
+        .delete(&format!("/api/projects/{pid}"))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn import_url_needs_ingest_context() {
     let (dir, pool) = temp_pool().await;
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();

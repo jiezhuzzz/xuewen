@@ -105,6 +105,10 @@ fn router_with(state: AppState) -> Router {
             "/api/projects/{id}",
             axum::routing::patch(api::update_project).delete(api::delete_project),
         )
+        .route(
+            "/api/papers/{paper_id}/projects/{project_id}",
+            axum::routing::put(api::add_paper_to_project).delete(api::remove_paper_from_project),
+        )
         .fallback(assets::static_handler)
         .with_state(state)
 }

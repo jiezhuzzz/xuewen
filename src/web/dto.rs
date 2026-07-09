@@ -41,13 +41,15 @@ impl From<&Paper> for PaperSummary {
     }
 }
 
-/// A paper for the detail view: the summary fields plus the abstract.
+/// A paper for the detail view: the summary fields, the abstract, and the ids of
+/// the projects it belongs to.
 #[derive(Serialize)]
 pub struct PaperDetail {
     #[serde(flatten)]
     pub summary: PaperSummary,
     #[serde(rename = "abstract")]
     pub abstract_text: Option<String>,
+    pub project_ids: Vec<String>,
 }
 
 impl From<&Paper> for PaperDetail {
@@ -55,6 +57,17 @@ impl From<&Paper> for PaperDetail {
         Self {
             summary: PaperSummary::from(p),
             abstract_text: p.meta.abstract_text.clone(),
+            project_ids: Vec::new(),
+        }
+    }
+}
+
+impl PaperDetail {
+    /// Same as `from`, but with the paper's project memberships attached.
+    pub fn with_project_ids(p: &Paper, project_ids: Vec<String>) -> Self {
+        Self {
+            project_ids,
+            ..Self::from(p)
         }
     }
 }

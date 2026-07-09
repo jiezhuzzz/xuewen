@@ -20,6 +20,7 @@ pub struct ListParams {
     pub q: Option<String>,
     pub status: Option<String>,
     pub sort: Option<String>,
+    pub project: Option<String>,
 }
 
 pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams>) -> Response {
@@ -28,7 +29,7 @@ pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams
         p.q.as_deref(),
         p.status.as_deref(),
         p.sort.as_deref(),
-        None,
+        p.project.as_deref(),
     )
     .await
     {
@@ -45,7 +46,12 @@ pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams
 
 pub async fn get_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
     match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(p)) => Json(PaperDetail::from(&p)).into_response(),
+        Ok(Some(p)) => {
+            let ids = db::project_ids_for_paper(&app.pool, &p.id)
+                .await
+                .unwrap_or_default();
+            Json(PaperDetail::with_project_ids(&p, ids)).into_response()
+        }
         Ok(None) => not_found(),
         Err(e) => {
             tracing::error!("get_paper: {e}");
@@ -311,7 +317,12 @@ pub async fn identify_paper(
 
     let (md_doi, md_arxiv) = (md.doi.clone(), md.arxiv_id.clone());
     match ingest.ctx.apply_match(&mut paper, md).await {
-        Ok(IdentifyOutcome::Applied) => Json(PaperDetail::from(&paper)).into_response(),
+        Ok(IdentifyOutcome::Applied) => {
+            let ids = db::project_ids_for_paper(&ingest.ctx.pool, &paper.id)
+                .await
+                .unwrap_or_default();
+            Json(PaperDetail::with_project_ids(&paper, ids)).into_response()
+        }
         Ok(IdentifyOutcome::SameWork(other)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": format!("same work as {other}"), "id": other})),
@@ -557,6 +568,50 @@ pub async fn delete_project(State(app): State<AppState>, Path(id): Path<String>)
         Ok(false) => not_found(),
         Err(e) => {
             tracing::error!("delete_project: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn add_paper_to_project(
+    State(app): State<AppState>,
+    Path((paper_id, project_id)): Path<(String, String)>,
+) -> Response {
+    // Pre-check both ids so a bad request is a clean 404 (not an FK error).
+    match db::get_by_id(&app.pool, &paper_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::error!("membership paper lookup: {e}");
+            return internal_error();
+        }
+    }
+    match db::get_project(&app.pool, &project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::error!("membership project lookup: {e}");
+            return internal_error();
+        }
+    }
+    match db::add_paper_to_project(&app.pool, &paper_id, &project_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!("add membership: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn remove_paper_from_project(
+    State(app): State<AppState>,
+    Path((paper_id, project_id)): Path<(String, String)>,
+) -> Response {
+    match db::remove_paper_from_project(&app.pool, &paper_id, &project_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("remove membership: {e}");
             internal_error()
         }
     }
