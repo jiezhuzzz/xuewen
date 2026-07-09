@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time", "sync"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v7", "v5"] }
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
