@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use xuewen::config::Config;
 use xuewen::db;
-use xuewen::pipeline::{IngestCtx, Libraries, Outcome};
+use xuewen::models::Identifier;
+use xuewen::pipeline::{IdentifyOutcome, IngestCtx, Libraries, Outcome};
 use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::http::RetryPolicy;
@@ -22,6 +23,15 @@ fn confirm(prompt: &str) -> anyhow::Result<bool> {
         line.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
     ))
+}
+
+/// First three authors, "et al."-truncated — matches the web UI's rule.
+fn author_line(authors: &[String]) -> String {
+    if authors.len() > 3 {
+        format!("{}, et al.", authors[..3].join(", "))
+    } else {
+        authors.join(", ")
+    }
 }
 
 #[derive(Parser)]
@@ -48,6 +58,26 @@ enum Command {
         /// Re-resolve every paper, not just needs_review records.
         #[arg(long)]
         all: bool,
+    },
+    /// Manually match a paper to a DOI, arXiv id, or searched title.
+    Identify {
+        /// Paper id (exact or unique prefix).
+        id: String,
+        /// Apply the Crossref record for this DOI.
+        #[arg(long, conflicts_with_all = ["arxiv", "title"])]
+        doi: Option<String>,
+        /// Apply the arXiv record for this id.
+        #[arg(long, conflicts_with_all = ["doi", "title"])]
+        arxiv: Option<String>,
+        /// Search DBLP/Crossref for this title and list candidates.
+        #[arg(long, conflicts_with_all = ["doi", "arxiv"])]
+        title: Option<String>,
+        /// Apply candidate N from the --title list (1-based).
+        #[arg(long, requires = "title")]
+        pick: Option<usize>,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
     /// Serve the web UI over HTTP (loopback by default).
     Serve {
@@ -141,6 +171,82 @@ async fn main() -> Result<()> {
                 "refresh: {} processed, {} re-resolved, {} re-filed",
                 summary.processed, summary.reresolved, summary.refiled
             );
+        }
+        Command::Identify {
+            id,
+            doi,
+            arxiv,
+            title,
+            pick,
+            yes,
+        } => {
+            let mut paper = db::find_one(&pool, &id).await?;
+            if paper.deleted_at.is_some() {
+                anyhow::bail!(
+                    "{} is in the trash — run: xuewen restore {}",
+                    paper.id,
+                    paper.id
+                );
+            }
+            let md = if let Some(doi) = doi {
+                ctx.resolver
+                    .resolve(&Identifier::Doi(doi.clone()), None)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("no Crossref record for doi {doi}"))?
+            } else if let Some(axv) = arxiv {
+                ctx.resolver
+                    .resolve(&Identifier::Arxiv(axv.clone()), None)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("no arXiv record for {axv}"))?
+            } else if let Some(query) = title {
+                let cands = ctx.resolver.search_candidates(&query).await;
+                if cands.is_empty() {
+                    anyhow::bail!("no candidates found for {query:?}");
+                }
+                match pick {
+                    Some(n) if n >= 1 && n <= cands.len() => cands.into_iter().nth(n - 1).unwrap(),
+                    Some(n) => anyhow::bail!("--pick {n} is out of range (1..={})", cands.len()),
+                    None => {
+                        for (i, c) in cands.iter().enumerate() {
+                            println!(
+                                "{:2}. {} — {} ({}, {}) [{}]",
+                                i + 1,
+                                c.title.as_deref().unwrap_or("(untitled)"),
+                                author_line(&c.authors),
+                                c.venue.as_deref().unwrap_or("?"),
+                                c.year.map_or("?".to_string(), |y| y.to_string()),
+                                c.source,
+                            );
+                        }
+                        println!("re-run with --pick <N> to apply one");
+                        return Ok(());
+                    }
+                }
+            } else {
+                anyhow::bail!("provide one of --doi, --arxiv, or --title");
+            };
+
+            println!(
+                "match: {} — {} ({}, {})",
+                md.title.as_deref().unwrap_or("(untitled)"),
+                author_line(&md.authors),
+                md.venue.as_deref().unwrap_or("?"),
+                md.year.map_or("?".to_string(), |y| y.to_string()),
+            );
+            if yes || confirm("Apply this match?")? {
+                match ctx.apply_match(&mut paper, md).await? {
+                    IdentifyOutcome::Applied => println!(
+                        "identified {} as {}",
+                        paper.id,
+                        paper.cite_key.as_deref().unwrap_or("(no cite key)")
+                    ),
+                    IdentifyOutcome::SameWork(other) => {
+                        anyhow::bail!("that identifier already belongs to {other}")
+                    }
+                }
+            } else {
+                println!("cancelled");
+            }
         }
         Command::Serve {
             host,
