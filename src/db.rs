@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use crate::models::Paper;
+use crate::models::{Paper, Project, ProjectSummary};
 
 /// Open (creating if needed) the SQLite database and run migrations.
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
@@ -233,6 +233,66 @@ pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
         1 => Ok(matches.pop().unwrap()),
         n => bail!("ambiguous id prefix {id:?} matches {n} papers"),
     }
+}
+
+pub async fn create_project(pool: &SqlitePool, name: &str, note: Option<&str>) -> Result<Project> {
+    let project = Project {
+        id: uuid::Uuid::now_v7().to_string(),
+        name: name.to_string(),
+        note: note.map(str::to_string),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    sqlx::query("INSERT INTO projects (id, name, note, created_at) VALUES (?,?,?,?)")
+        .bind(&project.id)
+        .bind(&project.name)
+        .bind(&project.note)
+        .bind(&project.created_at)
+        .execute(pool)
+        .await?;
+    Ok(project)
+}
+
+pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<ProjectSummary>> {
+    let rows = sqlx::query_as::<_, ProjectSummary>(
+        "SELECT p.id, p.name, p.note, p.created_at, \
+         COUNT(pp.paper_id) AS paper_count \
+         FROM projects p LEFT JOIN paper_projects pp ON pp.project_id = p.id \
+         GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn get_project(pool: &SqlitePool, id: &str) -> Result<Option<Project>> {
+    let p = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(p)
+}
+
+pub async fn update_project(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    note: Option<&str>,
+) -> Result<bool> {
+    let res = sqlx::query("UPDATE projects SET name = ?, note = ? WHERE id = ?")
+        .bind(name)
+        .bind(note)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let res = sqlx::query("DELETE FROM projects WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 /// Escape `\`, `%`, `_` in a user search term for `LIKE … ESCAPE '\'`.
@@ -780,6 +840,37 @@ mod tests {
         let err = insert_paper(&pool, &b).await.unwrap_err();
         assert!(is_unique_violation(&err));
         assert!(!is_unique_violation(&anyhow::anyhow!("something else")));
+    }
+
+    #[tokio::test]
+    async fn project_crud_and_unique_name() {
+        let (_dir, pool) = temp_pool().await;
+
+        let p = create_project(&pool, "Survey", Some("draft")).await.unwrap();
+        assert_eq!(p.name, "Survey");
+        assert_eq!(p.note.as_deref(), Some("draft"));
+
+        // Case-insensitive unique name.
+        let dup = create_project(&pool, "survey", None).await;
+        assert!(dup.is_err());
+        assert!(is_unique_violation(&dup.unwrap_err()));
+
+        // List with counts (zero members yet).
+        let list = list_projects(&pool).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].project.id, p.id);
+        assert_eq!(list[0].paper_count, 0);
+
+        // Update name + note.
+        assert!(update_project(&pool, &p.id, "Survey v2", Some("final")).await.unwrap());
+        let got = get_project(&pool, &p.id).await.unwrap().unwrap();
+        assert_eq!(got.name, "Survey v2");
+        assert_eq!(got.note.as_deref(), Some("final"));
+
+        // Delete.
+        assert!(delete_project(&pool, &p.id).await.unwrap());
+        assert!(get_project(&pool, &p.id).await.unwrap().is_none());
+        assert!(!delete_project(&pool, &p.id).await.unwrap());
     }
 
     #[tokio::test]
