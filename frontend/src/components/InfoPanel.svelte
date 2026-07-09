@@ -17,13 +17,17 @@
   let { id }: { id: string } = $props();
 
   let copied = $state(false);
+  let copyError = $state(false);
   async function doCopy() {
+    copyError = false;
     try {
       await copyCitation(id);
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
-      /* clipboard blocked (insecure context) — the Download link still works */
+      // Both clipboard paths failed — surface it instead of doing nothing
+      // silently, so the user knows to use Download.
+      copyError = true;
     }
   }
 
@@ -187,6 +191,9 @@
             <Download size={12} /> Download
           </a>
         </div>
+        {#if copyError}
+          <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Couldn't copy — use Download instead.</p>
+        {/if}
       </div>
       <div class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-800">
         <button
