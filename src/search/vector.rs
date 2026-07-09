@@ -290,4 +290,57 @@ mod tests {
             .await;
         store(&server).delete_paper("p1").await.unwrap();
     }
+
+    #[tokio::test]
+    async fn recreate_collection_tolerates_missing_then_creates() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen"))
+            .and(body_partial_json(json!({"vectors": {"size": 4, "distance": "Cosine"}})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": true})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        store(&server).recreate_collection().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_is_noop_when_size_matches() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        store(&server).ensure_collection().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn upsert_batches_at_64_points() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen/points"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": {}})))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let points: Vec<ChunkPoint> = (0..65)
+            .map(|i| ChunkPoint {
+                paper_id: "p1".into(),
+                seq: i,
+                page: None,
+                vector: vec![0.1; 4],
+            })
+            .collect();
+        store(&server).upsert(&points).await.unwrap();
+    }
 }
