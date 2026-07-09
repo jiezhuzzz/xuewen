@@ -171,6 +171,60 @@ impl IngestCtx {
             resolution,
         })
     }
+
+    /// Persist `paper` and re-file its PDF to the cite-key path implied by its
+    /// current metadata. Copy-first ordering: copy the file, update the row,
+    /// remove the old file — a failure at any step never leaves the DB
+    /// pointing at a missing file. If the current file is missing or
+    /// unreadable, the copy step fails and only the metadata is persisted —
+    /// the row keeps its previous `rel_path`/`cite_key` and the caller gets
+    /// `Ok(false)`. Returns whether the file moved.
+    pub async fn save_and_refile(&self, paper: &mut Paper) -> Result<bool> {
+        let pdf = self.dirs.library_root.join(&paper.rel_path);
+        let cite_key = match naming::cite_key_base(
+            &paper.meta.authors.0,
+            paper.meta.year,
+            paper.meta.title.as_deref(),
+        ) {
+            Some(base) => {
+                let taken = db::cite_keys_with_base(&self.pool, &base, Some(&paper.id)).await?;
+                Some(naming::disambiguate(&base, &taken))
+            }
+            None => None,
+        };
+        let new_rel = naming::library_rel_path(cite_key.as_deref(), &paper.content_hash);
+        let mut refiled_paths: Option<(std::path::PathBuf, std::path::PathBuf)> = None; // (old, new)
+        if new_rel != paper.rel_path {
+            let to = self.dirs.library_root.join(&new_rel);
+            match copy_to_async(&pdf, &to).await {
+                Ok(()) => {
+                    refiled_paths = Some((pdf.clone(), to));
+                    paper.rel_path = new_rel;
+                    paper.cite_key = cite_key;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "re-file copy failed for {}: {e}; leaving in place",
+                        paper.id
+                    )
+                }
+            }
+        }
+
+        if let Err(e) = db::update_paper(&self.pool, paper).await {
+            // Roll the copy back so filesystem and DB stay consistent.
+            if let Some((_, new_path)) = &refiled_paths {
+                let _ = tokio::fs::remove_file(new_path).await;
+            }
+            return Err(e);
+        }
+        if let Some((old_path, _)) = &refiled_paths {
+            if let Err(e) = tokio::fs::remove_file(old_path).await {
+                tracing::warn!("could not remove old file {}: {e}", old_path.display());
+            }
+        }
+        Ok(refiled_paths.is_some())
+    }
 }
 
 /// Decide the stored fields. A confident resolution yields `resolved` (with a

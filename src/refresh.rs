@@ -2,8 +2,7 @@ use anyhow::Result;
 
 use crate::db;
 use crate::models::{Paper, PaperStatus};
-use crate::naming;
-use crate::pipeline::{copy_to_async, resolve_fields, IngestCtx, ResolveInputs};
+use crate::pipeline::{resolve_fields, IngestCtx, ResolveInputs};
 
 /// Which papers a refresh pass re-resolves. Every processed paper is re-filed
 /// regardless; this only controls whose metadata is re-fetched.
@@ -107,50 +106,6 @@ async fn refresh_one(ctx: &IngestCtx, paper: &mut Paper, reresolve: bool) -> Res
         }
     }
 
-    // Re-file: copy first, persist the row second, remove the old file last —
-    // a failure at any step never leaves the DB pointing at a missing file.
-    let cite_key = match naming::cite_key_base(
-        &paper.meta.authors.0,
-        paper.meta.year,
-        paper.meta.title.as_deref(),
-    ) {
-        Some(base) => {
-            let taken = db::cite_keys_with_base(&ctx.pool, &base, Some(&paper.id)).await?;
-            Some(naming::disambiguate(&base, &taken))
-        }
-        None => None,
-    };
-    let new_rel = naming::library_rel_path(cite_key.as_deref(), &paper.content_hash);
-    let mut refiled_paths: Option<(std::path::PathBuf, std::path::PathBuf)> = None; // (old, new)
-    if new_rel != paper.rel_path {
-        let to = library_root.join(&new_rel);
-        match copy_to_async(&pdf, &to).await {
-            Ok(()) => {
-                refiled_paths = Some((pdf.clone(), to));
-                paper.rel_path = new_rel;
-                paper.cite_key = cite_key;
-                outcome.refiled = true;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "re-file copy failed for {}: {e}; leaving in place",
-                    paper.id
-                )
-            }
-        }
-    }
-
-    if let Err(e) = db::update_paper(&ctx.pool, paper).await {
-        // Roll the copy back so filesystem and DB stay consistent.
-        if let Some((_, new_path)) = &refiled_paths {
-            let _ = tokio::fs::remove_file(new_path).await;
-        }
-        return Err(e);
-    }
-    if let Some((old_path, _)) = &refiled_paths {
-        if let Err(e) = tokio::fs::remove_file(old_path).await {
-            tracing::warn!("could not remove old file {}: {e}", old_path.display());
-        }
-    }
+    outcome.refiled = ctx.save_and_refile(paper).await?;
     Ok(outcome)
 }
