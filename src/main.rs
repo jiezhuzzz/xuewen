@@ -127,6 +127,36 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Manage projects (named groups of related papers).
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCmd {
+    /// List projects with paper counts.
+    List,
+    /// Create a new project.
+    New {
+        name: String,
+        /// Optional free-text note (e.g. the manuscript's working title).
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Delete a project (papers are kept).
+    Rm { project: String },
+    /// Add one or more papers to a project.
+    Add {
+        project: String,
+        #[arg(required = true)]
+        papers: Vec<String>,
+    },
+    /// Remove a paper from a project.
+    Remove { project: String, paper: String },
+    /// List the papers in a project.
+    Show { project: String },
 }
 
 #[tokio::main]
@@ -424,6 +454,58 @@ async fn main() -> Result<()> {
                 println!("cancelled");
             }
         }
+        Command::Project { cmd } => match cmd {
+            ProjectCmd::List => {
+                let projects = db::list_projects(&pool).await?;
+                if projects.is_empty() {
+                    println!("no projects");
+                }
+                for s in projects {
+                    match s.project.note {
+                        Some(note) => {
+                            println!("{}  ({} papers)  — {}", s.project.name, s.paper_count, note)
+                        }
+                        None => println!("{}  ({} papers)", s.project.name, s.paper_count),
+                    }
+                }
+            }
+            ProjectCmd::New { name, note } => {
+                let p = db::create_project(&pool, name.trim(), note.as_deref()).await?;
+                println!("created project {} ({})", p.name, p.id);
+            }
+            ProjectCmd::Rm { project } => {
+                let p = db::find_one_project(&pool, &project).await?;
+                db::delete_project(&pool, &p.id).await?;
+                println!("deleted project {}", p.name);
+            }
+            ProjectCmd::Add { project, papers } => {
+                let proj = db::find_one_project(&pool, &project).await?;
+                for sel in &papers {
+                    let paper = db::find_one(&pool, sel).await?;
+                    db::add_paper_to_project(&pool, &paper.id, &proj.id).await?;
+                    let label = paper.cite_key.as_deref().unwrap_or(&paper.id);
+                    println!("added {label} to {}", proj.name);
+                }
+            }
+            ProjectCmd::Remove { project, paper } => {
+                let proj = db::find_one_project(&pool, &project).await?;
+                let paper = db::find_one(&pool, &paper).await?;
+                let label = paper.cite_key.as_deref().unwrap_or(&paper.id);
+                if db::remove_paper_from_project(&pool, &paper.id, &proj.id).await? {
+                    println!("removed {label} from {}", proj.name);
+                } else {
+                    println!("{label} was not in {}", proj.name);
+                }
+            }
+            ProjectCmd::Show { project } => {
+                let proj = db::find_one_project(&pool, &project).await?;
+                let papers = db::list_papers(&pool, None, None, None, Some(&proj.id)).await?;
+                println!("{} — {} paper(s)", proj.name, papers.len());
+                for p in papers {
+                    println!("  {}  {}", p.id, p.meta.title.as_deref().unwrap_or("(untitled)"));
+                }
+            }
+        },
     }
     Ok(())
 }

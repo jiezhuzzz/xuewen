@@ -335,6 +335,35 @@ pub async fn project_ids_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
+pub async fn find_project_by_name(pool: &SqlitePool, name: &str) -> Result<Option<Project>> {
+    let p = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE name = ? COLLATE NOCASE")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+    Ok(p)
+}
+
+/// Resolve a project selector: exact (case-insensitive) name, then exact id,
+/// then unique id prefix. Errors on no match or an ambiguous prefix.
+pub async fn find_one_project(pool: &SqlitePool, sel: &str) -> Result<Project> {
+    if let Some(p) = find_project_by_name(pool, sel).await? {
+        return Ok(p);
+    }
+    if let Some(p) = get_project(pool, sel).await? {
+        return Ok(p);
+    }
+    let pattern = format!("{sel}%");
+    let mut matches = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id LIKE ?")
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await?;
+    match matches.len() {
+        0 => bail!("no project named or id-prefixed {sel:?}"),
+        1 => Ok(matches.pop().unwrap()),
+        n => bail!("ambiguous project selector {sel:?} matches {n} projects"),
+    }
+}
+
 /// Escape `\`, `%`, `_` in a user search term for `LIKE … ESCAPE '\'`.
 fn escape_like(term: &str) -> String {
     term.replace('\\', r"\\")
@@ -978,6 +1007,19 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_one_project_by_name_then_prefix() {
+        let (_dir, pool) = temp_pool().await;
+        let p = create_project(&pool, "My Survey", None).await.unwrap();
+
+        // Exact, case-insensitive name.
+        assert_eq!(find_one_project(&pool, "my survey").await.unwrap().id, p.id);
+        // Id prefix.
+        assert_eq!(find_one_project(&pool, &p.id[..8]).await.unwrap().id, p.id);
+        // Miss.
+        assert!(find_one_project(&pool, "nope").await.is_err());
     }
 
     #[tokio::test]
