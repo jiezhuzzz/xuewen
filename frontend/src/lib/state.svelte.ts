@@ -1,5 +1,8 @@
 import {
+  addPaperToProject,
+  createProject,
   deletePaper,
+  deleteProject,
   getPaper,
   getStats,
   identifyPaper,
@@ -7,10 +10,23 @@ import {
   importPaper,
   importUrl,
   listPapers,
+  listProjects,
+  removePaperFromProject,
+  updateProject,
 } from './api';
-import type { Candidate, Filters, IdentifyBody, PaperDetail, PaperSummary, Stats } from './types';
+import type {
+  Candidate,
+  Filters,
+  IdentifyBody,
+  PaperDetail,
+  PaperSummary,
+  Project,
+  Stats,
+} from './types';
 
-export const filters = $state<Filters>({ q: '', status: 'all', sort: 'year_desc' });
+export const filters = $state<Filters>({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
+
+export const projects = $state<{ items: Project[] }>({ items: [] });
 
 export const library = $state<{
   papers: PaperSummary[];
@@ -33,9 +49,10 @@ export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: b
 export type ThemeMode = 'light' | 'dark' | 'system';
 export const theme = $state<{ mode: ThemeMode }>({ mode: 'system' });
 
-export const ui = $state<{ sidebarOpen: boolean; importOpen: boolean }>({
+export const ui = $state<{ sidebarOpen: boolean; importOpen: boolean; projectsOpen: boolean }>({
   sidebarOpen: true,
   importOpen: false,
+  projectsOpen: false,
 });
 export function toggleSidebar(): void {
   ui.sidebarOpen = !ui.sidebarOpen;
@@ -50,6 +67,12 @@ export function openImport(): void {
 export function closeImport(): void {
   importState.cancelled = true;
   ui.importOpen = false;
+}
+export function openProjects(): void {
+  ui.projectsOpen = true;
+}
+export function closeProjects(): void {
+  ui.projectsOpen = false;
 }
 
 const detailCache = new Map<string, PaperDetail>();
@@ -76,6 +99,55 @@ export async function loadPapers(): Promise<void> {
   } finally {
     if (my === seq) library.loading = false;
   }
+}
+
+export async function loadProjects(): Promise<void> {
+  try {
+    projects.items = await listProjects();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+export async function setProjectFilter(id: string): Promise<void> {
+  filters.project = id;
+  await loadPapers();
+}
+
+export async function createNewProject(name: string, note: string | null): Promise<Project> {
+  const p = await createProject(name, note);
+  await loadProjects();
+  return p;
+}
+
+export async function renameProject(
+  id: string,
+  patch: { name?: string; note?: string | null },
+): Promise<void> {
+  await updateProject(id, patch);
+  await loadProjects();
+}
+
+export async function removeProject(id: string): Promise<void> {
+  await deleteProject(id);
+  if (filters.project === id) filters.project = 'all';
+  await loadProjects();
+  await loadPapers();
+}
+
+export async function addToProject(paperId: string, projectId: string): Promise<void> {
+  await addPaperToProject(paperId, projectId);
+  detailCache.delete(paperId);
+  detailRefresh.n += 1;
+  await loadProjects();
+}
+
+export async function removeFromProject(paperId: string, projectId: string): Promise<void> {
+  await removePaperFromProject(paperId, projectId);
+  detailCache.delete(paperId);
+  detailRefresh.n += 1;
+  await loadProjects();
+  if (filters.project === projectId) await loadPapers();
 }
 
 let debounce: ReturnType<typeof setTimeout> | undefined;
