@@ -4,8 +4,19 @@
 /* Class-based dark mode (toggled on <html> by the theme state). */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Keep the browser's UA color scheme in sync with the class-based theme
+   toggle (.dark on <html>). Using `light dark` here would make UA defaults
+   — including the `canvastext` fallback color inherited by elements without
+   an explicit text color, such as modal titles rendered outside the themed
+   app wrapper — follow the OS `prefers-color-scheme` instead of the selected
+   theme. On a dark-OS with the app in light mode that renders near-white text
+   on the white modal card (invisible). Tracking the class keeps them legible. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
 }
 
 html,
