@@ -9,7 +9,9 @@ use crate::models::Paper;
 
 /// Open (creating if needed) the SQLite database and run migrations.
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::from_str(database_url)?.create_if_missing(true);
+    let opts = SqliteConnectOptions::from_str(database_url)?
+        .create_if_missing(true)
+        .foreign_keys(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(opts)
