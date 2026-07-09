@@ -75,7 +75,7 @@ async fn refresh_one(ctx: &IngestCtx, paper: &mut Paper, reresolve: bool) -> Res
 
     // Re-resolve metadata from the stored PDF (best-effort; keep old data on failure).
     if reresolve {
-        match ctx.resolve_pdf(&pdf).await {
+        match ctx.resolve_pdf(&pdf, None).await {
             Ok(inputs) => {
                 let ResolveInputs {
                     ident,

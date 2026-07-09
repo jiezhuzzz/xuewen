@@ -3,7 +3,7 @@ mod common;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
-use xuewen::models::{Authors, PaperMeta, PaperStatus};
+use xuewen::models::{Authors, Identifier, PaperMeta, PaperStatus};
 use xuewen::pipeline::{IngestCtx, Libraries, Outcome};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
@@ -598,4 +598,50 @@ async fn wrapped_two_line_title_resolves_via_dblp() {
     assert_eq!(paper.meta.source.as_deref(), Some("dblp"));
     assert_eq!(paper.cite_key.as_deref(), Some("guler2019antifuzz"));
     assert!(library.join("guler2019antifuzz.pdf").exists());
+}
+
+#[tokio::test]
+async fn ingest_with_hint_seeds_identifier() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    // Offline resolver: upstreams refuse instantly (degrades to needs_review).
+    let resolver = Resolver::with_bases(
+        None,
+        "http://127.0.0.1:1".to_string(),
+        "http://127.0.0.1:1".to_string(),
+    )
+    .unwrap()
+    .with_dblp_base("http://127.0.0.1:1".to_string());
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries {
+            library_root: library.clone(),
+            processed_dir: inbox.join("_processed"),
+        },
+        resolver,
+        grobid: None,
+    };
+
+    // A one-page PDF whose text carries NO identifier.
+    let pdf_path = inbox.join("in.pdf");
+    common::write_test_pdf(&pdf_path, &["A Paper Without Any Identifier In Text"]);
+
+    // Import with a DOI hint: the hint seeds the stored identifier even though
+    // the PDF text has none.
+    let id = match ctx
+        .ingest_file_with_hint(&pdf_path, Some(Identifier::Doi("10.1234/hinted".into())))
+        .await
+        .unwrap()
+    {
+        Outcome::Ingested(id) => id,
+        other => panic!("expected Ingested, got {other:?}"),
+    };
+    let got = db::get_by_id(&pool, &id).await.unwrap().unwrap();
+    assert_eq!(got.meta.doi.as_deref(), Some("10.1234/hinted"));
+    assert_eq!(got.meta.status, PaperStatus::NeedsReview);
 }
