@@ -580,6 +580,14 @@ async fn main() -> Result<()> {
                 .await?;
                 xuewen::export::format_entries(&papers, fmt)
             };
+            // Normalize to exactly one trailing newline so single-entry output
+            // (which has none) doesn't abut the shell prompt; batch output is
+            // already newline-terminated and is left unchanged.
+            let text = if text.ends_with('\n') {
+                text
+            } else {
+                format!("{text}\n")
+            };
             match output {
                 Some(path) => {
                     tokio::fs::write(&path, &text).await?;

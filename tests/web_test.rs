@@ -1034,6 +1034,11 @@ async fn exports_bibtex_and_biblatex() {
     // Individual (default bibtex). The `paper` helper sets venue=KDD, no dblp_key -> @article.
     let resp = server.get("/api/papers/aaaa1111/export").await;
     resp.assert_status_ok();
+    assert_eq!(
+        resp.header("content-type"),
+        "text/plain; charset=utf-8",
+        "single-entry export should be inline plain text"
+    );
     let text = resp.text();
     assert!(text.contains("@article{aaaa1111,"), "got: {text}");
     assert!(text.contains("journal = {KDD},"));
@@ -1049,9 +1054,14 @@ async fn exports_bibtex_and_biblatex() {
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
 
-    // Batch: whole library has both entries.
+    // Batch: whole library has both entries, served as a downloadable .bib file.
     let all = server.get("/api/papers/export").await;
     all.assert_status_ok();
+    assert_eq!(all.header("content-type"), "application/x-bibtex");
+    let disposition = all.header("content-disposition");
+    let disposition = disposition.to_str().unwrap();
+    assert!(disposition.contains("attachment"), "got: {disposition}");
+    assert!(disposition.contains("xuewen.bib"), "got: {disposition}");
     let all_text = all.text();
     assert!(all_text.contains("@article{aaaa1111,"));
     assert!(all_text.contains("@article{bbbb2222,"));

@@ -49,7 +49,11 @@ pub fn format_entry(p: &Paper, fmt: BibFormat) -> String {
 }
 
 /// Many entries, blank-line separated, with a single trailing newline.
+/// An empty slice yields an empty string (not a bare newline).
 pub fn format_entries(papers: &[Paper], fmt: BibFormat) -> String {
+    if papers.is_empty() {
+        return String::new();
+    }
     let mut out = papers
         .iter()
         .map(|p| format_entry(p, fmt))
@@ -236,10 +240,33 @@ mod tests {
     }
 
     #[test]
+    fn escapes_backslash_without_double_escaping() {
+        let mut p = paper();
+        p.meta.title = Some(r"A\B".into());
+        let out = format_entry(&p, BibFormat::Bibtex);
+        assert!(out.contains(r"title = {A\textbackslash{}B},"), "got: {out}");
+    }
+
+    #[test]
+    fn stored_url_wins_over_arxiv_fallback() {
+        let mut p = paper();
+        p.meta.url = Some("https://example.com/paper".into());
+        p.meta.arxiv_id = Some("1706.03762".into());
+        let out = format_entry(&p, BibFormat::Bibtex);
+        assert!(out.contains("url = {https://example.com/paper},"), "got: {out}");
+        assert!(!out.contains("https://arxiv.org/abs/1706.03762"), "got: {out}");
+    }
+
+    #[test]
     fn batch_joins_entries_with_blank_line() {
         let out = format_entries(&[paper(), paper()], BibFormat::Bibtex);
         assert_eq!(out.matches("@inproceedings{").count(), 2);
         assert!(out.contains("}\n\n@inproceedings{"));
         assert!(out.ends_with("}\n"));
+    }
+
+    #[test]
+    fn empty_batch_is_empty_string() {
+        assert_eq!(format_entries(&[], BibFormat::Bibtex), "");
     }
 }
