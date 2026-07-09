@@ -232,3 +232,54 @@ async fn resolves_after_transient_429() {
 
     assert!(res.is_some());
 }
+
+#[tokio::test]
+async fn search_candidates_merges_both_sources_ungated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(DBLP_FIXTURE))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_SEARCH_FIXTURE))
+        .mount(&server)
+        .await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri());
+
+    // A truncated query that the 0.85 gate would reject still yields the hit.
+    let cands = resolver.search_candidates("KGAT: Knowledge Graph").await;
+    assert_eq!(cands.len(), 1, "same DOI from both sources dedups to one");
+    assert_eq!(cands[0].source, "dblp"); // DBLP queried first, wins the dedup
+    assert_eq!(cands[0].doi.as_deref(), Some("10.1145/3292500.3330701"));
+
+    // Empty query short-circuits without network.
+    assert!(resolver.search_candidates("  ").await.is_empty());
+}
+
+#[tokio::test]
+async fn search_candidates_degrades_when_one_source_fails() {
+    let server = MockServer::start().await;
+    // DBLP is down...
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    // ...Crossref search still answers.
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_SEARCH_FIXTURE))
+        .mount(&server)
+        .await;
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri());
+
+    let cands = resolver.search_candidates("KGAT Knowledge Graph").await;
+    assert_eq!(cands.len(), 1, "surviving source still yields candidates");
+    assert_eq!(cands[0].source, "crossref");
+}

@@ -208,6 +208,68 @@ impl Resolver {
     }
 }
 
+/// Most candidates a manual-identify search returns.
+const MAX_CANDIDATES: usize = 8;
+
+impl Resolver {
+    /// Title-search candidates from DBLP then Crossref, WITHOUT the
+    /// confidence gate: the caller (a human picking a match) is the gate.
+    /// Deduped, ranked by similarity to `query`, capped at `MAX_CANDIDATES`.
+    /// Source failures degrade to fewer (possibly zero) candidates.
+    pub async fn search_candidates(&self, query: &str) -> Vec<ResolvedMetadata> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        let mut cands = Vec::new();
+        let (dblp, crossref) = tokio::join!(
+            self.fetch_parse_dblp(query),
+            self.fetch_parse_crossref_search(query)
+        );
+        match dblp {
+            Ok(c) => cands.extend(c),
+            Err(e) => tracing::warn!("dblp candidate search failed for {query:?}: {e}"),
+        }
+        match crossref {
+            Ok(c) => cands.extend(c),
+            Err(e) => tracing::warn!("crossref candidate search failed for {query:?}: {e}"),
+        }
+        rank_candidates(query, cands)
+    }
+}
+
+/// Dedup (by lowercased DOI, else DBLP key; first occurrence wins), rank by
+/// title similarity to `query` (untitled candidates sink), cap the list.
+fn rank_candidates(query: &str, cands: Vec<ResolvedMetadata>) -> Vec<ResolvedMetadata> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<ResolvedMetadata> = Vec::new();
+    for c in cands {
+        let key = c
+            .doi
+            .as_deref()
+            .map(|d| format!("doi:{}", d.to_lowercase()))
+            .or_else(|| c.dblp_key.as_deref().map(|k| format!("dblp:{k}")));
+        if let Some(key) = key {
+            if !seen.insert(key) {
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out.sort_by(|a, b| {
+        let score = |c: &ResolvedMetadata| {
+            c.title
+                .as_deref()
+                .map(|t| matching::title_similarity(query, t))
+                .unwrap_or(-1.0)
+        };
+        score(b)
+            .partial_cmp(&score(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out.truncate(MAX_CANDIDATES);
+    out
+}
+
 /// Pick the highest-similarity candidate whose title confidently matches `query`.
 fn best_match(query: &str, candidates: Vec<ResolvedMetadata>) -> Option<ResolvedMetadata> {
     let mut best: Option<(f64, ResolvedMetadata)> = None;
@@ -238,5 +300,55 @@ mod tests {
             strip_tags("<jats:p>Hello  <b>world</b></jats:p>"),
             "Hello world"
         );
+    }
+
+    fn cand(title: &str, doi: Option<&str>, dblp_key: Option<&str>) -> ResolvedMetadata {
+        ResolvedMetadata {
+            title: Some(title.to_string()),
+            doi: doi.map(str::to_string),
+            dblp_key: dblp_key.map(str::to_string),
+            source: "test".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rank_candidates_sorts_dedups_and_caps() {
+        let query = "AntiFuzz: Impeding Fuzzing Audits of Binary Executables";
+        let mut cands = vec![
+            cand("Something Unrelated Entirely", None, Some("conf/x/1")),
+            cand(query, Some("10.1/af"), Some("conf/uss/GulerAAH19")),
+            // Same DOI from the other source: deduped, first occurrence wins.
+            cand(query, Some("10.1/AF"), None),
+        ];
+        // Pad with distinct filler beyond the cap.
+        for i in 0..10 {
+            cands.push(cand(&format!("Filler Paper Number {i}"), None, None));
+        }
+        let ranked = rank_candidates(query, cands);
+        assert_eq!(ranked.len(), 8); // capped
+                                     // Exact-title match ranks first; its DOI-duplicate is gone.
+        assert_eq!(ranked[0].dblp_key.as_deref(), Some("conf/uss/GulerAAH19"));
+        assert_eq!(
+            ranked.iter().filter(|c| c.doi.is_some()).count(),
+            1,
+            "case-insensitive DOI dedup"
+        );
+    }
+
+    #[test]
+    fn rank_candidates_keeps_untitled_last_and_handles_empty() {
+        assert!(rank_candidates("query", Vec::new()).is_empty());
+        let ranked = rank_candidates(
+            "Deep Residual Learning",
+            vec![
+                ResolvedMetadata {
+                    source: "test".into(),
+                    ..Default::default()
+                }, // no title
+                cand("Deep Residual Learning", None, None),
+            ],
+        );
+        assert_eq!(ranked[0].title.as_deref(), Some("Deep Residual Learning"));
     }
 }
