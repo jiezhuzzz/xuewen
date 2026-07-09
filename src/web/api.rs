@@ -11,6 +11,8 @@ use uuid::Uuid;
 use super::dto::{Candidate, PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
+use crate::import::{self, ImportError};
+use crate::models::Identifier;
 use crate::pipeline::{IdentifyOutcome, Outcome};
 
 #[derive(Deserialize)]
@@ -103,61 +105,64 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             return bad_request("not a PDF");
         }
 
-        // Stage the bytes under a sanitized, collision-safe name.
-        let stem = std::path::Path::new(&filename)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("upload.pdf");
-        let staged = ingest
-            .staging_dir
-            .join(format!("{}-{stem}", Uuid::now_v7()));
-        if let Err(e) = tokio::fs::create_dir_all(&ingest.staging_dir).await {
-            tracing::error!("import staging dir: {e}");
-            return internal_error();
-        }
-        if let Err(e) = tokio::fs::write(&staged, data.as_ref()).await {
-            tracing::error!("import stage write: {e}");
-            return internal_error();
-        }
+        return stage_and_ingest(&ingest, data.as_ref(), &filename, None).await;
+    }
+}
 
-        return match ingest.ctx.ingest_file(&staged).await {
-            Ok(Outcome::Ingested(id)) => {
-                // Look up the fresh row so the UI can show title + resolved/needs_review.
-                let (title, status) = match db::get_by_id(&ingest.ctx.pool, &id).await {
-                    Ok(Some(p)) => (serde_json::json!(p.meta.title), p.meta.status),
-                    _ => (
-                        serde_json::Value::Null,
-                        crate::models::PaperStatus::NeedsReview,
-                    ),
-                };
-                Json(serde_json::json!({
-                    "outcome": "ingested",
-                    "id": id,
-                    "title": title,
-                    "status": status,
-                }))
+/// Stage `bytes` under a sanitized, collision-safe name in the staging dir, run
+/// the ingest pipeline (optionally with an identifier hint), and map the outcome
+/// to the shared `ImportResult` JSON. Shared by file upload and URL import.
+async fn stage_and_ingest(
+    ingest: &super::Ingest,
+    bytes: &[u8],
+    filename: &str,
+    hint: Option<Identifier>,
+) -> Response {
+    let stem = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("import.pdf");
+    let staged = ingest
+        .staging_dir
+        .join(format!("{}-{stem}", Uuid::now_v7()));
+    if let Err(e) = tokio::fs::create_dir_all(&ingest.staging_dir).await {
+        tracing::error!("import staging dir: {e}");
+        return internal_error();
+    }
+    if let Err(e) = tokio::fs::write(&staged, bytes).await {
+        tracing::error!("import stage write: {e}");
+        return internal_error();
+    }
+    match ingest.ctx.ingest_file_with_hint(&staged, hint).await {
+        Ok(Outcome::Ingested(id)) => {
+            let (title, status) = match db::get_by_id(&ingest.ctx.pool, &id).await {
+                Ok(Some(p)) => (serde_json::json!(p.meta.title), p.meta.status),
+                _ => (
+                    serde_json::Value::Null,
+                    crate::models::PaperStatus::NeedsReview,
+                ),
+            };
+            Json(serde_json::json!({
+                "outcome": "ingested", "id": id, "title": title, "status": status,
+            }))
+            .into_response()
+        }
+        Ok(Outcome::Duplicate) => Json(serde_json::json!({"outcome": "duplicate"})).into_response(),
+        Ok(Outcome::SameWork(id)) => {
+            Json(serde_json::json!({"outcome": "same_work", "id": id})).into_response()
+        }
+        Ok(Outcome::InTrash(id)) => {
+            Json(serde_json::json!({"outcome": "in_trash", "id": id})).into_response()
+        }
+        Err(e) => {
+            tracing::error!("import ingest: {e}");
+            let _ = tokio::fs::remove_file(&staged).await;
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "import failed"})),
+            )
                 .into_response()
-            }
-            Ok(Outcome::Duplicate) => {
-                Json(serde_json::json!({"outcome": "duplicate"})).into_response()
-            }
-            Ok(Outcome::SameWork(id)) => {
-                Json(serde_json::json!({"outcome": "same_work", "id": id})).into_response()
-            }
-            Ok(Outcome::InTrash(id)) => {
-                Json(serde_json::json!({"outcome": "in_trash", "id": id})).into_response()
-            }
-            Err(e) => {
-                tracing::error!("import ingest: {e}");
-                // On error the pipeline did not move the original — clean it up.
-                let _ = tokio::fs::remove_file(&staged).await;
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "import failed"})),
-                )
-                    .into_response()
-            }
-        };
+        }
     }
 }
 
@@ -335,6 +340,117 @@ pub async fn identify_paper(
                 }
             }
             tracing::error!("identify apply: {e}");
+            internal_error()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ImportUrlBody {
+    pub input: String,
+}
+
+/// Import from a URL/DOI/arXiv id: fetch the PDF (arXiv/proxy/OA), then ingest.
+pub async fn import_url(State(app): State<AppState>, Json(body): Json<ImportUrlBody>) -> Response {
+    let Some(ingest) = app.ingest.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "import not configured"})),
+        )
+            .into_response();
+    };
+    let fetcher = match import::Fetcher::new(app.proxy_login_url.clone()) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("build fetcher: {e}");
+            return internal_error();
+        }
+    };
+    let cookie = db::get_setting(&ingest.ctx.pool, "proxy_cookie")
+        .await
+        .ok()
+        .flatten();
+    match import::import_source(
+        &fetcher,
+        &ingest.ctx.resolver,
+        &body.input,
+        cookie.as_deref(),
+    )
+    .await
+    {
+        Ok(fetched) => stage_and_ingest(&ingest, &fetched.bytes, "import.pdf", fetched.hint).await,
+        Err(ImportError::Unsupported) => bad_request("unsupported input"),
+        Err(ImportError::CookieExpired) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": "proxy session expired — refresh your cookie"})),
+        )
+            .into_response(),
+        Err(ImportError::Unfetched { metadata }) => {
+            let (title, doi) = match metadata {
+                Some(m) => (serde_json::json!(m.title), serde_json::json!(m.doi)),
+                None => (serde_json::Value::Null, serde_json::Value::Null),
+            };
+            Json(serde_json::json!({"outcome": "unfetched", "title": title, "doi": doi}))
+                .into_response()
+        }
+        Err(ImportError::Network(e)) => {
+            tracing::error!("import fetch: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "fetch failed"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ProxyCookieBody {
+    pub cookie: String,
+}
+
+/// Report whether a proxy cookie is stored (never the value itself).
+pub async fn get_settings(State(app): State<AppState>) -> Response {
+    let set = db::get_setting(&app.pool, "proxy_cookie")
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    let updated = db::setting_updated_at(&app.pool, "proxy_cookie")
+        .await
+        .ok()
+        .flatten();
+    Json(serde_json::json!({
+        "proxy_cookie_set": set,
+        "proxy_cookie_updated_at": updated,
+    }))
+    .into_response()
+}
+
+/// Store (overwrite) the EZproxy cookie.
+pub async fn set_proxy_cookie(
+    State(app): State<AppState>,
+    Json(body): Json<ProxyCookieBody>,
+) -> Response {
+    let cookie = body.cookie.trim();
+    if cookie.is_empty() {
+        return bad_request("empty cookie");
+    }
+    match db::set_setting(&app.pool, "proxy_cookie", cookie).await {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => {
+            tracing::error!("set proxy cookie: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// Clear the stored EZproxy cookie.
+pub async fn clear_proxy_cookie(State(app): State<AppState>) -> Response {
+    match db::delete_setting(&app.pool, "proxy_cookie").await {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => {
+            tracing::error!("clear proxy cookie: {e}");
             internal_error()
         }
     }

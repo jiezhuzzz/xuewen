@@ -41,8 +41,19 @@ pub struct IngestCtx {
 }
 
 impl IngestCtx {
-    /// Ingest a single PDF: hash, dedup, extract, identify, file, and store.
+    /// Ingest a single PDF with no identifier hint (text extraction decides).
     pub async fn ingest_file(&self, path: &Path) -> Result<Outcome> {
+        self.ingest_file_with_hint(path, None).await
+    }
+
+    /// Ingest a single PDF, optionally seeding metadata resolution with a known
+    /// identifier (used by URL/DOI import, where we already know the id and the
+    /// PDF's first page may not print it).
+    pub async fn ingest_file_with_hint(
+        &self,
+        path: &Path,
+        hint: Option<Identifier>,
+    ) -> Result<Outcome> {
         let path = path.to_path_buf();
 
         // 1. Hash (blocking IO off the async runtime).
@@ -67,7 +78,7 @@ impl IngestCtx {
             provisional_title,
             extracted,
             resolution,
-        } = self.resolve_pdf(&path).await?;
+        } = self.resolve_pdf(&path, hint).await?;
 
         // 4. Decide the stored fields, then the cite-key filename.
         let fields = resolve_fields(provisional_title, extracted, &ident, resolution);
@@ -135,13 +146,17 @@ impl IngestCtx {
     /// Extract first-page text, identify a DOI/arXiv id, optionally enrich via GROBID
     /// (title-only path), and resolve authoritative metadata. Degrades to
     /// `None` on any resolver/network failure — never aborts.
-    pub(crate) async fn resolve_pdf(&self, path: &Path) -> Result<ResolveInputs> {
+    pub(crate) async fn resolve_pdf(
+        &self,
+        path: &Path,
+        hint: Option<Identifier>,
+    ) -> Result<ResolveInputs> {
         // Extract first-page text (blocking IO off the async runtime) and identify.
         let text = {
             let p = path.to_path_buf();
             tokio::task::spawn_blocking(move || pdf::extract_text(&p, 1)).await??
         };
-        let ident = identify::identify(&text);
+        let ident = hint.unwrap_or_else(|| identify::identify(&text));
         let provisional_title = identify::guess_title(&text);
 
         // For the title-only path, optionally use GROBID for a better header

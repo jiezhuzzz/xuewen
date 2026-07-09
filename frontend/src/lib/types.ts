@@ -37,7 +37,13 @@ export type ImportResult =
   | { outcome: 'ingested'; id: string; title: string | null; status: string }
   | { outcome: 'duplicate' }
   | { outcome: 'same_work'; id: string }
-  | { outcome: 'in_trash'; id: string };
+  | { outcome: 'in_trash'; id: string }
+  | { outcome: 'unfetched'; title: string | null; doi: string | null };
+
+export interface Settings {
+  proxy_cookie_set: boolean;
+  proxy_cookie_updated_at: string | null;
+}
 
 export interface Candidate {
   title: string | null;

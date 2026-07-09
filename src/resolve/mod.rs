@@ -3,6 +3,7 @@ pub mod crossref;
 pub mod dblp;
 pub mod grobid;
 pub mod http;
+pub mod unpaywall;
 
 use crate::matching;
 use crate::models::Identifier;
@@ -48,6 +49,8 @@ pub struct Resolver {
     arxiv_base: String,
     crossref_base: String,
     dblp_base: String,
+    email: Option<String>,
+    unpaywall_base: String,
 }
 
 impl Resolver {
@@ -101,12 +104,20 @@ impl Resolver {
             arxiv_base,
             crossref_base,
             dblp_base: "https://dblp.org".to_string(),
+            email: contact_email.map(str::to_string),
+            unpaywall_base: "https://api.unpaywall.org".to_string(),
         })
     }
 
     /// Override the DBLP base URL (used by tests to point at a mock server).
     pub fn with_dblp_base(mut self, base: String) -> Self {
         self.dblp_base = base;
+        self
+    }
+
+    /// Override the Unpaywall base URL (used by tests to point at a mock server).
+    pub fn with_unpaywall_base(mut self, base: String) -> Self {
+        self.unpaywall_base = base;
         self
     }
 
@@ -205,6 +216,19 @@ impl Resolver {
     async fn fetch_parse_crossref_search(&self, title: &str) -> Result<Vec<ResolvedMetadata>> {
         let body = crossref::search(&self.http, &self.crossref_base, title).await?;
         crossref::parse_search(&body)
+    }
+
+    /// The best open-access PDF URL for a DOI via Unpaywall, or `None` when
+    /// there is no OA copy, no configured contact email, or the lookup fails.
+    pub async fn oa_pdf_url(&self, doi: &str) -> Option<String> {
+        let email = self.email.as_deref()?;
+        match unpaywall::fetch(&self.http, &self.unpaywall_base, doi, email).await {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!("unpaywall lookup failed for {doi}: {e}");
+                None
+            }
+        }
     }
 }
 
@@ -350,5 +374,33 @@ mod tests {
             ],
         );
         assert_eq!(ranked[0].title.as_deref(), Some("Deep Residual Learning"));
+    }
+
+    #[tokio::test]
+    async fn oa_pdf_url_hits_unpaywall() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let body = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/unpaywall_oa.json"
+        ));
+        Mock::given(method("GET"))
+            .and(path("/v2/10.1145/3292500.3330701"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let r = Resolver::with_bases(Some("me@uchicago.edu"), server.uri(), server.uri())
+            .unwrap()
+            .with_unpaywall_base(server.uri());
+        assert_eq!(
+            r.oa_pdf_url("10.1145/3292500.3330701").await.as_deref(),
+            Some("https://example.org/paper.pdf")
+        );
+        // No email configured → skipped entirely.
+        let r2 = Resolver::with_bases(None, server.uri(), server.uri())
+            .unwrap()
+            .with_unpaywall_base(server.uri());
+        assert_eq!(r2.oa_pdf_url("10.1145/3292500.3330701").await, None);
     }
 }

@@ -6,3 +6,10 @@ database_url  = "sqlite:./library.db"
 # Used in later plans (Plan 2/3). Optional now.
 # grobid_url    = "http://localhost:8070"
 # contact_email = "you@example.com"
+
+# Optional: institutional proxy for fetching paywalled PDFs by URL/DOI.
+# The login prefix has the target URL percent-encoded and appended. The rotating
+# session cookie is NOT stored here — set it via the web UI's "Institutional
+# access" panel or `xuewen proxy-cookie --set '<cookie>'`.
+# [proxy]
+# login_url = "https://proxy.uchicago.edu/login?url="

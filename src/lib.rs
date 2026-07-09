@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod hash;
 pub mod identify;
+pub mod import;
 pub mod matching;
 pub mod models;
 pub mod naming;

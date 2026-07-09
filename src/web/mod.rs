@@ -29,6 +29,8 @@ pub struct AppState {
     pub library_root: PathBuf,
     /// Present only when the server was started to allow uploads (`serve`).
     pub ingest: Option<Arc<Ingest>>,
+    /// EZproxy login prefix (from `[proxy].login_url`); `None` disables proxy fetch.
+    pub proxy_login_url: Option<String>,
 }
 
 /// Assemble the read-only web router (no import). Used directly by tests.
@@ -37,6 +39,7 @@ pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
         pool,
         library_root,
         ingest: None,
+        proxy_login_url: None,
     })
 }
 
@@ -50,6 +53,22 @@ pub fn build_router_with_ingest(
         pool,
         library_root,
         ingest: Some(ingest),
+        proxy_login_url: None,
+    })
+}
+
+/// Full router with import + a configured proxy prefix. Used by `serve`.
+pub fn build_router_with_ingest_proxy(
+    pool: SqlitePool,
+    library_root: PathBuf,
+    ingest: Arc<Ingest>,
+    proxy_login_url: Option<String>,
+) -> Router {
+    router_with(AppState {
+        pool,
+        library_root,
+        ingest: Some(ingest),
+        proxy_login_url,
     })
 }
 
@@ -72,6 +91,12 @@ fn router_with(state: AppState) -> Router {
             axum::routing::post(api::identify_paper),
         )
         .route("/papers/{id}/pdf", get(api::pdf))
+        .route("/api/import", axum::routing::post(api::import_url))
+        .route("/api/settings", get(api::get_settings))
+        .route(
+            "/api/settings/proxy-cookie",
+            axum::routing::put(api::set_proxy_cookie).delete(api::clear_proxy_cookie),
+        )
         .fallback(assets::static_handler)
         .with_state(state)
 }
@@ -83,8 +108,9 @@ pub async fn serve(
     pool: SqlitePool,
     library_root: PathBuf,
     ingest: Arc<Ingest>,
+    proxy_login_url: Option<String>,
 ) -> Result<()> {
-    let app = build_router_with_ingest(pool, library_root, ingest);
+    let app = build_router_with_ingest_proxy(pool, library_root, ingest, proxy_login_url);
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("xuewen serving on http://{addr}");
