@@ -8,7 +8,7 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 use uuid::Uuid;
 
-use super::dto::{PaperDetail, PaperSummary, Stats};
+use super::dto::{Candidate, PaperDetail, PaperSummary, Stats};
 use super::AppState;
 use crate::db;
 use crate::pipeline::Outcome;
@@ -211,6 +211,31 @@ pub async fn pdf(State(app): State<AppState>, Path(id): Path<String>, req: Reque
             internal_error()
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct IdentifyQuery {
+    pub q: Option<String>,
+}
+
+/// Ungated candidate search for manual identify (the user is the gate).
+pub async fn identify_search(
+    State(app): State<AppState>,
+    Query(p): Query<IdentifyQuery>,
+) -> Response {
+    let Some(ingest) = &app.ingest else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "identify not configured"})),
+        )
+            .into_response();
+    };
+    let Some(q) = p.q.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return bad_request("missing query");
+    };
+    let cands = ingest.ctx.resolver.search_candidates(q).await;
+    let out: Vec<Candidate> = cands.iter().map(Candidate::from).collect();
+    Json(out).into_response()
 }
 
 pub(super) fn not_found() -> Response {

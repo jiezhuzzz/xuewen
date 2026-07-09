@@ -2,11 +2,15 @@ mod common;
 
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::TestServer;
+use wiremock::matchers::{method, path as wm_path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
 use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
 use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::resolve::Resolver;
 use xuewen::web::{build_router, build_router_with_ingest, Ingest};
+
+const DBLP_FIXTURE: &str = include_str!("fixtures/dblp_kgat.json");
 
 async fn temp_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
     let dir = tempfile::tempdir().unwrap();
@@ -445,4 +449,71 @@ async fn import_reports_same_work_for_known_doi() {
     let body: serde_json::Value = server.post("/api/papers").multipart(form).await.json();
     assert_eq!(body["outcome"], "same_work");
     assert_eq!(body["id"], serde_json::json!(existing.id));
+}
+
+#[tokio::test]
+async fn identify_search_returns_candidates() {
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let url = format!("sqlite:{}", dir.path().join("t.db").display());
+    let pool = db::connect(&url).await.unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(DBLP_FIXTURE))
+        .mount(&server)
+        .await;
+    // Crossref search 404s -> degrade to DBLP-only candidates.
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri());
+    let ingest = std::sync::Arc::new(Ingest {
+        ctx: IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries {
+                library_root: library.clone(),
+                processed_dir: inbox.join("_processed"),
+            },
+            resolver,
+            grobid: None,
+        },
+        staging_dir: inbox.join("_uploads"),
+    });
+    let server_http =
+        TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
+
+    let body: serde_json::Value = server_http
+        .get("/api/identify/search")
+        .add_query_param("q", "KGAT Knowledge Graph")
+        .await
+        .json();
+    let arr = body.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(
+        arr[0]["title"],
+        "KGAT: Knowledge Graph Attention Network for Recommendation"
+    );
+    assert_eq!(arr[0]["source"], "dblp");
+    assert!(arr[0]["authors"].is_array());
+
+    // Empty q -> 400.
+    server_http
+        .get("/api/identify/search")
+        .add_query_param("q", "  ")
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn identify_search_needs_ingest_context() {
+    let (dir, pool) = temp_pool().await;
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+    server
+        .get("/api/identify/search")
+        .add_query_param("q", "anything")
+        .await
+        .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
 }
