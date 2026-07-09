@@ -5,6 +5,7 @@
     closeIdentify,
     dropsIdentifier,
     identifyState,
+    pseudoDoiHint,
     runIdentifySearch,
   } from '../lib/state.svelte';
 
@@ -68,6 +69,11 @@
         <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">
           Direct identifier detected ({directValue}) — Apply fetches the authoritative record.
         </p>
+        {#if pseudoDoiHint(identifyState.direct)}
+          <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+            {pseudoDoiHint(identifyState.direct)}
+          </p>
+        {/if}
       {/if}
 
       {#if identifyState.candidates.length}

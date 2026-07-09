@@ -631,12 +631,21 @@ async fn identify_applies_doi_candidate_and_guards() {
         .await
         .assert_status(axum::http::StatusCode::BAD_REQUEST);
 
-    // Unresolvable DOI (mock has no route for it -> 404 upstream) -> 404.
-    server
+    // Unresolvable DOI (mock has no route for it -> 404 upstream) -> 404,
+    // with an actionable hint pointing at the title-search path.
+    let resp = server
         .post(&format!("/api/papers/{}/identify", q.id))
         .json(&serde_json::json!({ "doi": "10.9999/nope" }))
-        .await
-        .assert_status(axum::http::StatusCode::NOT_FOUND);
+        .await;
+    resp.assert_status(axum::http::StatusCode::NOT_FOUND);
+    let body: serde_json::Value = resp.json();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("try a title search"),
+        "not-found error should suggest the title path, got: {body}"
+    );
 }
 
 #[tokio::test]
