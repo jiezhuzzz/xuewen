@@ -295,6 +295,46 @@ pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<bool> {
     Ok(res.rows_affected() > 0)
 }
 
+pub async fn add_paper_to_project(
+    pool: &SqlitePool,
+    paper_id: &str,
+    project_id: &str,
+) -> Result<()> {
+    let ts = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO paper_projects (paper_id, project_id, added_at) VALUES (?,?,?) \
+         ON CONFLICT (paper_id, project_id) DO NOTHING",
+    )
+    .bind(paper_id)
+    .bind(project_id)
+    .bind(&ts)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn remove_paper_from_project(
+    pool: &SqlitePool,
+    paper_id: &str,
+    project_id: &str,
+) -> Result<bool> {
+    let res = sqlx::query("DELETE FROM paper_projects WHERE paper_id = ? AND project_id = ?")
+        .bind(paper_id)
+        .bind(project_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn project_ids_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT project_id FROM paper_projects WHERE paper_id = ? ORDER BY added_at")
+            .bind(paper_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// Escape `\`, `%`, `_` in a user search term for `LIKE … ESCAPE '\'`.
 fn escape_like(term: &str) -> String {
     term.replace('\\', r"\\")
@@ -310,6 +350,7 @@ pub async fn list_papers(
     q: Option<&str>,
     status: Option<&str>,
     sort: Option<&str>,
+    project: Option<&str>,
 ) -> Result<Vec<Paper>> {
     let mut qb: QueryBuilder<sqlx::Sqlite> =
         QueryBuilder::new("SELECT * FROM papers WHERE deleted_at IS NULL");
@@ -323,6 +364,11 @@ pub async fn list_papers(
     }
     if let Some(st) = status.filter(|s| matches!(*s, "resolved" | "needs_review")) {
         qb.push(" AND status = ").push_bind(st.to_string());
+    }
+    if let Some(pid) = project.map(str::trim).filter(|s| !s.is_empty()) {
+        qb.push(" AND id IN (SELECT paper_id FROM paper_projects WHERE project_id = ")
+            .push_bind(pid.to_string())
+            .push(")");
     }
     // Whitelisted ORDER BY (never interpolate raw user input).
     let order = match sort {
@@ -607,48 +653,48 @@ mod tests {
         insert_paper(&pool, &b).await.unwrap();
 
         // No filters → both, default sort year DESC (2017 before 2016).
-        let all = list_papers(&pool, None, None, None).await.unwrap();
+        let all = list_papers(&pool, None, None, None, None).await.unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].meta.year, Some(2017));
 
         // q matches title (case-insensitive) or authors.
-        let hits = list_papers(&pool, Some("residual"), None, None)
+        let hits = list_papers(&pool, Some("residual"), None, None, None)
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, a.id);
-        let by_author = list_papers(&pool, Some("vaswani"), None, None)
+        let by_author = list_papers(&pool, Some("vaswani"), None, None, None)
             .await
             .unwrap();
         assert_eq!(by_author.len(), 1);
         assert_eq!(by_author[0].id, b.id);
 
         // status filter.
-        let resolved = list_papers(&pool, None, Some("resolved"), None)
+        let resolved = list_papers(&pool, None, Some("resolved"), None, None)
             .await
             .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].id, a.id);
 
         // q + status together (covers the AND branch).
-        let combined = list_papers(&pool, Some("attention"), Some("needs_review"), None)
+        let combined = list_papers(&pool, Some("attention"), Some("needs_review"), None, None)
             .await
             .unwrap();
         assert_eq!(combined.len(), 1);
         assert_eq!(combined[0].id, b.id);
-        let none = list_papers(&pool, Some("attention"), Some("resolved"), None)
+        let none = list_papers(&pool, Some("attention"), Some("resolved"), None, None)
             .await
             .unwrap();
         assert!(none.is_empty());
 
         // year_asc sort.
-        let asc = list_papers(&pool, None, None, Some("year_asc"))
+        let asc = list_papers(&pool, None, None, Some("year_asc"), None)
             .await
             .unwrap();
         assert_eq!(asc[0].meta.year, Some(2016));
 
         // An unknown status is ignored (not an error) → both rows.
-        let bogus = list_papers(&pool, None, Some("nonsense"), None)
+        let bogus = list_papers(&pool, None, Some("nonsense"), None, None)
             .await
             .unwrap();
         assert_eq!(bogus.len(), 2);
@@ -665,7 +711,7 @@ mod tests {
         insert_paper(&pool, &b).await.unwrap();
 
         // "%" must match only the literal percent title, not act as a wildcard.
-        let hits = list_papers(&pool, Some("100%"), None, None).await.unwrap();
+        let hits = list_papers(&pool, Some("100%"), None, None, None).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, a.id);
     }
@@ -718,7 +764,7 @@ mod tests {
         // Soft-delete a: hidden from list/stats/all_papers; b remains.
         assert!(soft_delete(&pool, &a.id).await.unwrap());
         assert!(!soft_delete(&pool, &a.id).await.unwrap()); // idempotent: already trashed
-        let listed = list_papers(&pool, None, None, None).await.unwrap();
+        let listed = list_papers(&pool, None, None, None, None).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, b.id);
         assert_eq!(stats(&pool).await.unwrap().0, 1); // total counts only active
@@ -828,7 +874,7 @@ mod tests {
             .unwrap()
             .deleted_at
             .is_none());
-        assert_eq!(list_papers(&pool, None, None, None).await.unwrap().len(), 1);
+        assert_eq!(list_papers(&pool, None, None, None, None).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -871,6 +917,67 @@ mod tests {
         assert!(delete_project(&pool, &p.id).await.unwrap());
         assert!(get_project(&pool, &p.id).await.unwrap().is_none());
         assert!(!delete_project(&pool, &p.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn membership_add_remove_and_filter_and_cascade() {
+        let (_dir, pool) = temp_pool().await;
+        insert_paper(&pool, &sample_paper("01890000-0000-7000-8000-0000000000a1", "ha"))
+            .await
+            .unwrap();
+        insert_paper(&pool, &sample_paper("01890000-0000-7000-8000-0000000000a2", "hb"))
+            .await
+            .unwrap();
+        let proj = create_project(&pool, "P", None).await.unwrap();
+
+        // Add is idempotent.
+        add_paper_to_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
+            .await
+            .unwrap();
+        add_paper_to_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            project_ids_for_paper(&pool, "01890000-0000-7000-8000-0000000000a1")
+                .await
+                .unwrap(),
+            vec![proj.id.clone()]
+        );
+
+        // Count reflects membership.
+        assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 1);
+
+        // Filter returns only members.
+        let filtered = list_papers(&pool, None, None, None, Some(&proj.id))
+            .await
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "01890000-0000-7000-8000-0000000000a1");
+
+        // Remove.
+        assert!(remove_paper_from_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
+            .await
+            .unwrap());
+        assert!(!remove_paper_from_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
+            .await
+            .unwrap());
+
+        // FK cascade: hard-purging a paper drops its memberships.
+        add_paper_to_project(&pool, "01890000-0000-7000-8000-0000000000a2", &proj.id)
+            .await
+            .unwrap();
+        delete_row(&pool, "01890000-0000-7000-8000-0000000000a2").await.unwrap();
+        assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 0);
+
+        // FK cascade: deleting a project drops memberships (no orphan rows).
+        add_paper_to_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
+            .await
+            .unwrap();
+        delete_project(&pool, &proj.id).await.unwrap();
+        assert!(project_ids_for_paper(&pool, "01890000-0000-7000-8000-0000000000a1")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
