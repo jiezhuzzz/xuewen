@@ -16,6 +16,14 @@ export interface PaperSummary {
 
 export interface PaperDetail extends PaperSummary {
   abstract: string | null;
+  project_ids: string[];
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  note: string | null;
+  paper_count: number;
 }
 
 export interface Stats {
@@ -31,6 +39,7 @@ export interface Filters {
   q: string;
   status: StatusFilter;
   sort: Sort;
+  project: string;
 }
 
 export type ImportResult =

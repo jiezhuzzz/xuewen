@@ -5,6 +5,7 @@ import type {
   ImportResult,
   PaperDetail,
   PaperSummary,
+  Project,
   Settings,
   Stats,
 } from './types';
@@ -14,6 +15,7 @@ export async function listPapers(f: Filters): Promise<PaperSummary[]> {
   if (f.q.trim()) params.set('q', f.q.trim());
   if (f.status !== 'all') params.set('status', f.status);
   params.set('sort', f.sort);
+  if (f.project && f.project !== 'all') params.set('project', f.project);
   const res = await fetch(`/api/papers?${params.toString()}`);
   if (!res.ok) throw new Error(`list failed: ${res.status}`);
   return res.json();
@@ -119,4 +121,65 @@ export async function identifyPaper(id: string, body: IdentifyBody): Promise<Pap
     throw new Error(msg);
   }
   return res.json();
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const res = await fetch('/api/projects');
+  if (!res.ok) throw new Error(`projects failed: ${res.status}`);
+  return res.json();
+}
+
+async function projectError(res: Response, fallback: string): Promise<never> {
+  let msg = `${fallback}: ${res.status}`;
+  try {
+    const j = await res.json();
+    if (j && typeof j.error === 'string') msg = j.error;
+  } catch {
+    /* non-JSON error body */
+  }
+  throw new Error(msg);
+}
+
+export async function createProject(name: string, note: string | null): Promise<Project> {
+  const res = await fetch('/api/projects', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, note }),
+  });
+  if (!res.ok) return projectError(res, 'create project failed');
+  return res.json();
+}
+
+export async function updateProject(
+  id: string,
+  patch: { name?: string; note?: string | null },
+): Promise<Project> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) return projectError(res, 'update project failed');
+  return res.json();
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`delete project failed: ${res.status}`);
+}
+
+export async function addPaperToProject(paperId: string, projectId: string): Promise<void> {
+  const res = await fetch(
+    `/api/papers/${encodeURIComponent(paperId)}/projects/${encodeURIComponent(projectId)}`,
+    { method: 'PUT' },
+  );
+  if (!res.ok) throw new Error(`add to project failed: ${res.status}`);
+}
+
+export async function removePaperFromProject(paperId: string, projectId: string): Promise<void> {
+  const res = await fetch(
+    `/api/papers/${encodeURIComponent(paperId)}/projects/${encodeURIComponent(projectId)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) throw new Error(`remove from project failed: ${res.status}`);
 }
