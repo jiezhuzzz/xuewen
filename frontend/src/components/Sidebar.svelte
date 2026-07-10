@@ -138,13 +138,25 @@
         <Settings2 size={16} />
       </button>
     </div>
-    <a
-      href={exportUrl(filters, bibFormat.value)}
-      download="xuewen.bib"
-      class="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-    >
-      <Download size={14} /> Export .bib
-    </a>
+    {#if filters.q.trim()}
+      <!-- Batch export filters by the legacy title/author match, not hybrid
+           search results — hidden while a query is active to avoid exporting
+           a different set than the list shows. -->
+      <span
+        title="Clear the search to export"
+        class="inline-flex w-full cursor-not-allowed items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-400 dark:border-slate-700 dark:text-slate-600"
+      >
+        <Download size={14} /> Export .bib
+      </span>
+    {:else}
+      <a
+        href={exportUrl(filters, bibFormat.value)}
+        download="xuewen.bib"
+        class="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+      >
+        <Download size={14} /> Export .bib
+      </a>
+    {/if}
   </div>
 
   <div class="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto dark:divide-slate-800/60">
