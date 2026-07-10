@@ -499,6 +499,10 @@ async fn main() -> Result<()> {
             if let Some(d) = &daily {
                 tokio::spawn(daily::scheduler::run(d.clone()));
             }
+            let chat = xuewen::chat::ChatService::from_config(&cfg.chat);
+            if chat.is_none() {
+                tracing::info!("paper chat disabled (no [[chat.models]] configured)");
+            }
             web::serve(
                 &host,
                 port,
@@ -508,6 +512,7 @@ async fn main() -> Result<()> {
                 cfg.proxy.as_ref().map(|p| p.login_url.clone()),
                 search,
                 daily,
+                chat,
             )
             .await?;
         }
@@ -623,7 +628,11 @@ async fn main() -> Result<()> {
                 let papers = db::list_papers(&pool, None, None, None, Some(&proj.id)).await?;
                 println!("{} — {} paper(s)", proj.name, papers.len());
                 for p in papers {
-                    println!("  {}  {}", p.id, p.meta.title.as_deref().unwrap_or("(untitled)"));
+                    println!(
+                        "  {}  {}",
+                        p.id,
+                        p.meta.title.as_deref().unwrap_or("(untitled)")
+                    );
                 }
             }
         },
@@ -740,7 +749,8 @@ async fn main() -> Result<()> {
                     // Refuse to wipe an index another process is writing
                     // (tantivy's writer lock, e.g. a running `xuewen serve`).
                     if cfg.search.index_dir.join("meta.json").exists() {
-                        let (probe, _) = xuewen::search::fts::FtsIndex::open(&cfg.search.index_dir)?;
+                        let (probe, _) =
+                            xuewen::search::fts::FtsIndex::open(&cfg.search.index_dir)?;
                         probe.delete("__rebuild_lock_probe__").map_err(|e| {
                             anyhow::anyhow!(
                                 "search index at {} is in use (is `xuewen serve` running?) — stop it and retry ({e})",

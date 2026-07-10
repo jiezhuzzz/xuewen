@@ -1,5 +1,6 @@
 mod api;
 mod assets;
+mod chat;
 mod dto;
 
 use std::path::PathBuf;
@@ -37,6 +38,9 @@ pub struct AppState {
     /// Present when daily arXiv recommendations are configured (`serve`).
     /// `None` -> /api/daily answers 503.
     pub daily: Option<Arc<crate::daily::DailyService>>,
+    /// Present when paper chat is configured (`serve`). `None` -> chat
+    /// endpoints answer 503 / available:false.
+    pub chat: Option<Arc<crate::chat::ChatService>>,
 }
 
 impl AppState {
@@ -57,6 +61,7 @@ pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
         proxy_login_url: None,
         search: None,
         daily: None,
+        chat: None,
     })
 }
 
@@ -73,6 +78,7 @@ pub fn build_router_with_ingest(
         proxy_login_url: None,
         search: None,
         daily: None,
+        chat: None,
     })
 }
 
@@ -90,6 +96,7 @@ pub fn build_router_with_ingest_proxy(
         proxy_login_url,
         search: None,
         daily: None,
+        chat: None,
     })
 }
 
@@ -106,6 +113,7 @@ pub fn build_router_with_search(
         proxy_login_url: None,
         search: Some(search),
         daily: None,
+        chat: None,
     })
 }
 
@@ -122,6 +130,24 @@ pub fn build_router_with_daily(
         proxy_login_url: None,
         search: None,
         daily: Some(daily),
+        chat: None,
+    })
+}
+
+/// Read-only router plus a configured chat service. Used by tests.
+pub fn build_router_with_chat(
+    pool: SqlitePool,
+    library_root: PathBuf,
+    chat: Arc<crate::chat::ChatService>,
+) -> Router {
+    router_with(AppState {
+        pool,
+        library_root,
+        ingest: None,
+        proxy_login_url: None,
+        search: None,
+        daily: None,
+        chat: Some(chat),
     })
 }
 
@@ -168,6 +194,11 @@ fn router_with(state: AppState) -> Router {
         .route("/api/search/status", get(api::search_status))
         .route("/api/daily", get(api::daily_papers))
         .route("/api/daily/run", axum::routing::post(api::run_daily))
+        .route("/api/chat/models", get(chat::models))
+        .route(
+            "/api/papers/{id}/chat",
+            get(chat::history).post(chat::send).delete(chat::clear),
+        )
         .fallback(assets::static_handler)
         .with_state(state)
 }
@@ -182,6 +213,7 @@ pub async fn serve(
     proxy_login_url: Option<String>,
     search: Option<Arc<crate::search::SearchService>>,
     daily: Option<Arc<crate::daily::DailyService>>,
+    chat: Option<Arc<crate::chat::ChatService>>,
 ) -> Result<()> {
     let app = router_with(AppState {
         pool,
@@ -190,6 +222,7 @@ pub async fn serve(
         proxy_login_url,
         search,
         daily,
+        chat,
     });
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
