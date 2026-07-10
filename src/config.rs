@@ -18,6 +18,8 @@ pub struct Config {
     /// Daily arXiv recommendations. Absent ⇒ the feature is off.
     #[serde(default)]
     pub daily: Option<DailyConfig>,
+    #[serde(default)]
+    pub chat: ChatConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -125,6 +127,58 @@ fn default_daily_retention_days() -> u32 {
 }
 fn default_daily_language() -> String {
     "English".to_string()
+}
+
+/// One selectable chat model (`[[chat.models]]`): an OpenAI-compatible
+/// chat-completions endpoint. Its API id is its position in the config file.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatModelConfig {
+    /// Shown in the UI dropdown; display-only, need not be unique.
+    pub label: String,
+    #[serde(default = "default_embed_base_url")]
+    pub base_url: String,
+    pub model: String,
+    /// Inline key; when absent the key is read from `api_key_env`.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default = "default_api_key_env")]
+    pub api_key_env: String,
+}
+
+impl ChatModelConfig {
+    /// Inline key wins; else the env var. Unset/empty -> None: the entry is
+    /// served keyless (no Authorization header) — right for local servers,
+    /// and a forgotten hosted key surfaces as a 401 in the chat's inline
+    /// error rather than silently hiding the model.
+    pub fn resolve_key(&self) -> Option<String> {
+        self.api_key
+            .clone()
+            .or_else(|| std::env::var(&self.api_key_env).ok())
+            .filter(|k| !k.trim().is_empty())
+    }
+}
+
+/// Paper-chat settings (`[chat]`). No models = feature disabled.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatConfig {
+    #[serde(default)]
+    pub models: Vec<ChatModelConfig>,
+    /// Chars of extracted paper text included in the system prompt.
+    #[serde(default = "default_chat_max_context_chars")]
+    pub max_context_chars: usize,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            models: Vec::new(),
+            max_context_chars: default_chat_max_context_chars(),
+        }
+    }
+}
+
+fn default_chat_max_context_chars() -> usize {
+    60_000
 }
 
 impl Config {
@@ -327,5 +381,61 @@ model = "gpt-4o-mini"
         assert_eq!(d.llm.api_key, None);
         assert_eq!(d.llm.api_key_env, "OPENAI_API_KEY");
         assert_eq!(d.llm.language, "English");
+    }
+
+    #[test]
+    fn chat_config_parses_models_with_defaults() {
+        let cfg: Config = toml::from_str(
+            r#"
+inbox_dir     = "./inbox"
+library_root  = "./library"
+database_url  = "sqlite:./x.db"
+
+[[chat.models]]
+label = "GPT-5 Mini"
+model = "gpt-5-mini"
+
+[[chat.models]]
+label    = "Local Qwen"
+base_url = "http://localhost:11434/v1"
+model    = "qwen3:32b"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.chat.models.len(), 2);
+        assert_eq!(cfg.chat.models[0].base_url, "https://api.openai.com/v1");
+        assert_eq!(cfg.chat.models[0].api_key_env, "OPENAI_API_KEY");
+        assert_eq!(cfg.chat.models[1].model, "qwen3:32b");
+        assert_eq!(cfg.chat.max_context_chars, 60_000);
+    }
+
+    #[test]
+    fn chat_config_absent_means_disabled() {
+        let cfg: Config = toml::from_str(
+            r#"
+inbox_dir     = "./inbox"
+library_root  = "./library"
+database_url  = "sqlite:./x.db"
+"#,
+        )
+        .unwrap();
+        assert!(cfg.chat.models.is_empty());
+        assert_eq!(cfg.chat.max_context_chars, 60_000);
+    }
+
+    #[test]
+    fn chat_model_key_resolution() {
+        let m = ChatModelConfig {
+            label: "x".into(),
+            base_url: "http://localhost".into(),
+            model: "m".into(),
+            api_key: Some("sk-inline".into()),
+            api_key_env: "XUEWEN_TEST_UNSET_ENV".into(),
+        };
+        assert_eq!(m.resolve_key().as_deref(), Some("sk-inline"));
+
+        let keyless = ChatModelConfig { api_key: None, ..m };
+        // Env var unset -> keyless entry (requests carry no Authorization).
+        assert_eq!(keyless.resolve_key(), None);
     }
 }
