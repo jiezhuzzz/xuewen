@@ -43,7 +43,32 @@
             runHook postInstall
           '';
         };
-        default = frontend; # replaced by `xuewen` in Task 2
+        xuewen = pkgs.rustPlatform.buildRustPackage {
+          pname = "xuewen";
+          version = "0.1.0";
+          # Exclude the frontend sources (dist comes from the `frontend`
+          # package), docs, and deploy manifests so editing them never
+          # rebuilds the backend.
+          src = pkgs.lib.cleanSourceWith {
+            src = self;
+            filter = path: _type:
+              let rel = pkgs.lib.removePrefix (toString self + "/") (toString path);
+              in !(pkgs.lib.hasPrefix "frontend" rel
+                || pkgs.lib.hasPrefix "docs" rel
+                || pkgs.lib.hasPrefix "deploy" rel);
+          };
+          cargoLock.lockFile = ./Cargo.lock;
+          # rust-embed reads frontend/dist at compile time; build.rs would
+          # write a placeholder if this were missing.
+          preBuild = ''
+            mkdir -p frontend/dist
+            cp -r ${frontend}/. frontend/dist/
+          '';
+          # The full test suite runs in the sandbox: wiremock binds loopback
+          # (available in Nix builds) and pdftotext comes from poppler.
+          nativeCheckInputs = [ pkgs.poppler-utils ];
+        };
+        default = xuewen;
       });
     };
 }
