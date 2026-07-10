@@ -6,3 +6,4 @@ library.db*
 /search-index/
 result
 result-*
+deploy/k8s/secret.yaml
