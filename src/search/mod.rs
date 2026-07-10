@@ -256,20 +256,39 @@ impl SearchService {
     pub async fn status(&self) -> Result<IndexStatus> {
         let papers = self.paper_states().await?;
         let rows = store::all_index_rows(&self.pool).await?;
-        let plan = planner::plan(
-            &papers,
-            &rows,
-            self.embedder.as_ref().map(|e| e.model()),
-            chrono::Utc::now(),
-        );
-        let live = papers.iter().filter(|p| !p.trashed).count() as i64;
+        let by_id: std::collections::HashMap<&str, &store::IndexRow> =
+            rows.iter().map(|r| (r.paper_id.as_str(), r)).collect();
+        let model = self.embedder.as_ref().map(|e| e.model());
+
+        // A tier is "indexed" only when its stamp is set AND the stored
+        // hashes still match the paper (a stale stamp is pending work).
+        let (mut fts_indexed, mut vec_indexed, mut live_n) = (0i64, 0i64, 0i64);
+        for p in papers.iter().filter(|p| !p.trashed) {
+            live_n += 1;
+            if let Some(r) = by_id.get(p.id.as_str()) {
+                let content_ok = r.content_hash == p.content_hash && r.meta_hash == p.meta_hash;
+                if content_ok && r.fts_indexed_at.is_some() {
+                    fts_indexed += 1;
+                }
+                if content_ok
+                    && r.vectors_indexed_at.is_some()
+                    && r.embed_model.as_deref() == model
+                {
+                    vec_indexed += 1;
+                }
+            }
+        }
         let failed = rows.iter().filter(|r| r.last_error.is_some()).count() as i64;
-        let fts_pending = plan.index.iter().filter(|w| w.fts).count() as i64;
-        let vec_pending = plan.index.iter().filter(|w| w.vectors).count() as i64;
         let sem = self.semantic_config_state();
+        // Without an embedder the vectors tier is idle, not "all indexed".
+        let vectors = if self.embedder.is_some() {
+            TierCounts { indexed: vec_indexed, pending: live_n - vec_indexed, failed }
+        } else {
+            TierCounts { indexed: 0, pending: 0, failed }
+        };
         Ok(IndexStatus {
-            fts: TierCounts { indexed: live - fts_pending, pending: fts_pending, failed },
-            vectors: TierCounts { indexed: live - vec_pending, pending: vec_pending, failed },
+            fts: TierCounts { indexed: fts_indexed, pending: live_n - fts_indexed, failed },
+            vectors,
             semantic_available: sem.available,
             reason: sem.reason,
         })
@@ -609,5 +628,28 @@ mod tests {
         assert!(m.snippet.ends_with("…"), "snippet should end with ellipsis: {}", m.snippet);
         let text_before_ellipsis = m.snippet.trim_end_matches('…');
         assert_eq!(text_before_ellipsis.chars().count(), 200, "text before ellipsis should be exactly 200 chars");
+    }
+
+    #[tokio::test]
+    async fn status_counts_backed_off_failures_as_pending() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("a", "T")).await.unwrap();
+        crate::search::store::replace_chunks(
+            &pool,
+            "a",
+            &[crate::search::chunker::Chunk { seq: 0, page: None, text: "T".into() }],
+            "hash-a",
+            "mh",
+        )
+        .await
+        .unwrap();
+        crate::search::store::record_error(&pool, "a", "boom").await.unwrap();
+        let svc = keyword_only_service(pool).await;
+        let st = svc.status().await.unwrap();
+        assert_eq!(st.fts.pending, 1, "failed+backed-off paper is still pending");
+        assert_eq!(st.fts.indexed, 0);
+        assert_eq!(st.fts.failed, 1);
+        assert_eq!(st.vectors.indexed, 0);
+        assert_eq!(st.vectors.pending, 0, "no embedder -> vectors tier idle");
     }
 }
