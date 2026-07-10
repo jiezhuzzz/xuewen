@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use xuewen::config::Config;
+use xuewen::daily::{self, DailyService};
 use xuewen::db;
 use xuewen::models::Identifier;
 use xuewen::pipeline::{IdentifyOutcome, IngestCtx, Libraries, Outcome};
@@ -494,6 +495,10 @@ async fn main() -> Result<()> {
                     std::time::Duration::from_secs(30),
                 ));
             }
+            let daily = DailyService::from_config(&cfg, pool.clone())?;
+            if let Some(d) = &daily {
+                tokio::spawn(daily::scheduler::run(d.clone()));
+            }
             web::serve(
                 &host,
                 port,
@@ -502,7 +507,7 @@ async fn main() -> Result<()> {
                 ingest,
                 cfg.proxy.as_ref().map(|p| p.login_url.clone()),
                 search,
-                None,
+                daily,
             )
             .await?;
         }

@@ -1,5 +1,6 @@
 pub mod feed;
 pub mod job;
+pub mod scheduler;
 pub mod score;
 pub mod store;
 pub mod tldr;
@@ -44,6 +45,7 @@ impl DailyService {
         if daily.categories.is_empty() {
             anyhow::bail!("[daily].categories must not be empty");
         }
+        scheduler::parse_run_at(&daily.run_at)?; // fail fast on typos
         let Some(embed_cfg) = &cfg.search.embedding else {
             tracing::warn!("[daily] set but [search.embedding] missing — daily papers disabled");
             return Ok(None);
