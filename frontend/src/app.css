@@ -1,8 +1,29 @@
 @import 'tailwindcss';
 @import '@fontsource-variable/inter';
+@import '@fontsource-variable/source-serif-4';
 
 /* Class-based dark mode (toggled on <html> by the theme state). */
 @custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Inter Variable', system-ui, -apple-system, sans-serif;
+  --font-serif: 'Source Serif 4 Variable', 'Iowan Old Style', Georgia, serif;
+
+  /* Paper & Ink surfaces (light) */
+  --color-paper: #faf9f7;
+  --color-parchment: #f1efea;
+  --color-ink: #1c1917;
+
+  /* Warm dark counterparts */
+  --color-night: #161311;
+  --color-soot: #211d1a;
+
+  /* The seal — signature mark only (TopBar wordmark, Welcome). Never an
+     action color; actions use amber-700/amber-500. */
+  --color-seal: #9e2b25;
+
+  --ease-fluent: cubic-bezier(0.22, 1, 0.36, 1);
+}
 
 /* Keep the browser's UA color scheme in sync with the class-based theme
    toggle (.dark on <html>). Using `light dark` here would make UA defaults
@@ -26,5 +47,15 @@ body,
 }
 
 body {
-  font-family: 'Inter Variable', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* Theme toggles use the View Transitions API for a soft crossfade; kill it
+   for users who asked for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
 }
