@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Spring } from 'svelte/motion';
   import { fly, slide } from 'svelte/transition';
+  import CommandPalette from './components/CommandPalette.svelte';
   import DetailView from './components/DetailView.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
@@ -104,5 +105,6 @@
 {#if ui.importOpen}<ImportModal />{/if}
 {#if identifyState.open}<IdentifyModal />{/if}
 {#if ui.projectsOpen}<ProjectsModal />{/if}
+{#if ui.paletteOpen}<CommandPalette />{/if}
 {#if ui.zen}<ZenPill />{/if}
 <Toaster />
