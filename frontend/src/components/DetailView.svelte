@@ -2,17 +2,12 @@
   import { BookOpen } from 'lucide-svelte';
   import { fly } from 'svelte/transition';
   import { DUR, dur } from '../lib/motion';
-  import { detailRefresh, library, loadDetail, openTab, selection } from '../lib/state.svelte';
+  import { detailRefresh, loadDetail, openTab, selection } from '../lib/state.svelte';
   import CiteActions from './CiteActions.svelte';
   import PaperActions from './PaperActions.svelte';
   import PaperMeta from './PaperMeta.svelte';
   import ProjectTags from './ProjectTags.svelte';
   import Welcome from './Welcome.svelte';
-
-  function openPdf(id: string) {
-    const p = library.papers.find((x) => x.id === id);
-    if (p) openTab(p);
-  }
 </script>
 
 {#if selection.id === null}
@@ -33,7 +28,7 @@
           >
             <button
               type="button"
-              onclick={() => openPdf(d.id)}
+              onclick={() => openTab(d)}
               class="inline-flex items-center gap-1.5 rounded-lg bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 dark:bg-amber-600 dark:hover:bg-amber-500"
             >
               <BookOpen size={15} /> Open PDF

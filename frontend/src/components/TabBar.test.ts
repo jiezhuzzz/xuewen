@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 import TabBar from './TabBar.svelte';
-import { closeTab, goHome, openTab, ui, viewer } from '../lib/state.svelte';
+import { closeTab, openTab, ui, viewer } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
 
 function paper(id: string, title: string): PaperSummary {

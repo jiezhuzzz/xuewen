@@ -12,7 +12,6 @@
     toggleTheme,
     toggleZen,
     ui,
-    viewer,
   } from '../lib/state.svelte';
   import type { PaperSummary } from '../lib/types';
 

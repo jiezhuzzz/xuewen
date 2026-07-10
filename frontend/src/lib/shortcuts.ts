@@ -89,6 +89,9 @@ export function handleKeydown(e: KeyboardEvent): void {
       moveSelection(-1);
       break;
     case 'Enter':
+      // Enter on a focused control activates that control — it must not
+      // also open the selected paper.
+      if (e.target instanceof HTMLElement && e.target.closest('button, a, summary')) break;
       openSelected();
       break;
   }

@@ -2,7 +2,7 @@
   import { Info, LibraryBig, Maximize2, X } from 'lucide-svelte';
   import { flip } from 'svelte/animate';
   import { crossfade, fade } from 'svelte/transition';
-  import { DUR, EASE, dur } from '../lib/motion';
+  import { DUR, dur } from '../lib/motion';
   import { closeTab, goHome, toggleZen, viewer } from '../lib/state.svelte';
 
   // The active-tab underline crossfades between tabs — a real sliding

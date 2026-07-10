@@ -100,6 +100,13 @@ describe('handleKeydown', () => {
     input.remove();
   });
 
+  it('Enter on a focused button activates the button only, not the selection', () => {
+    handleKeydown(key('j')); // selection = first paper
+    const btn = document.createElement('button');
+    handleKeydown(key('Enter', { target: btn }));
+    expect(viewer.tabs).toHaveLength(0);
+  });
+
   it('single-key shortcuts are inert while a modal is open', () => {
     ui.importOpen = true;
     handleKeydown(key('['));
