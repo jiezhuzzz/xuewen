@@ -2,6 +2,7 @@ pub mod chunker;
 pub mod embedder;
 pub mod fts;
 pub mod fusion;
+pub mod indexer;
 pub mod planner;
 pub mod store;
 pub mod vector;
