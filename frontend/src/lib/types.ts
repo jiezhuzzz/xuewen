@@ -72,3 +72,42 @@ export type IdentifyBody =
   | { doi: string }
   | { arxiv_id: string }
   | { candidate: Candidate };
+
+export interface SearchOpts {
+  title: boolean;
+  authors: boolean;
+  abstract: boolean;
+  body: boolean;
+  keyword: boolean;
+  semantic: boolean;
+}
+
+export interface SearchMatch {
+  engine: 'keyword' | 'semantic' | 'both';
+  field: string;
+  snippet: string;
+  page: number | null;
+}
+
+export interface SearchResultItem {
+  paper: PaperSummary;
+  match: SearchMatch;
+}
+
+export interface SearchResponse {
+  semantic: { available: boolean; reason: string | null };
+  results: SearchResultItem[];
+}
+
+export interface TierCounts {
+  indexed: number;
+  pending: number;
+  failed: number;
+}
+
+export interface SearchStatus {
+  fts: TierCounts;
+  vectors: TierCounts;
+  semantic_available: boolean;
+  reason: string | null;
+}

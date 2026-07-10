@@ -7,6 +7,9 @@ import type {
   PaperDetail,
   PaperSummary,
   Project,
+  SearchOpts,
+  SearchResponse,
+  SearchStatus,
   Settings,
   Stats,
 } from './types';
@@ -199,4 +202,42 @@ export function exportUrl(f: Filters, fmt: BibFormat): string {
   params.set('sort', f.sort);
   params.set('format', fmt);
   return `/api/papers/export?${params.toString()}`;
+}
+
+/// Query string for /api/search. Omits fields/engines when everything is
+/// selected (the server default), so URLs stay short and cacheable.
+export function searchParams(
+  q: string,
+  opts: SearchOpts,
+  f: Filters,
+  keywordOnly = false,
+): URLSearchParams {
+  const params = new URLSearchParams();
+  params.set('q', q);
+  const fields = (['title', 'authors', 'abstract', 'body'] as const).filter((k) => opts[k]);
+  if (fields.length > 0 && fields.length < 4) params.set('fields', fields.join(','));
+  const engines = keywordOnly
+    ? ['keyword']
+    : (['keyword', 'semantic'] as const).filter((k) => opts[k]);
+  if (engines.length > 0 && engines.length < 2) params.set('engines', engines.join(','));
+  if (f.status !== 'all') params.set('status', f.status);
+  if (f.project && f.project !== 'all') params.set('project', f.project);
+  return params;
+}
+
+export async function searchPapers(
+  q: string,
+  opts: SearchOpts,
+  f: Filters,
+  keywordOnly = false,
+): Promise<SearchResponse> {
+  const res = await fetch(`/api/search?${searchParams(q, opts, f, keywordOnly).toString()}`);
+  if (!res.ok) throw new Error(`search failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getSearchStatus(): Promise<SearchStatus> {
+  const res = await fetch('/api/search/status');
+  if (!res.ok) throw new Error(`search status failed: ${res.status}`);
+  return res.json();
 }
