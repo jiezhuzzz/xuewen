@@ -133,19 +133,50 @@ export interface Tab {
   id: string;
   title: string;
 }
+/// The content pane's tab strip. `activeId === null` means the permanent
+/// "Library" home tab is active (DetailView of `selection`); a string means
+/// that PDF tab is active. Tabs persist while home is active.
 export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: boolean }>({
   tabs: [],
   activeId: null,
   infoOpen: false,
 });
 
+/// The browsing selection shown by the Library home's DetailView. Distinct
+/// from viewer.activeId: selecting inspects, opening reads.
+export const selection = $state<{ id: string | null }>({ id: null });
+
+export function selectPaper(id: string | null): void {
+  selection.id = id;
+}
+
+/// Activate the Library home tab (keeps PDF tabs open). Leaving the reader
+/// always leaves zen too — zen without a PDF is a blank screen.
+export function goHome(): void {
+  viewer.activeId = null;
+  ui.zen = false;
+}
+
+/// Zen requires an active PDF tab; toggling from home is a no-op.
+export function toggleZen(): void {
+  ui.zen = viewer.activeId !== null && !ui.zen;
+}
+
 export type ThemeMode = 'light' | 'dark' | 'system';
 export const theme = $state<{ mode: ThemeMode }>({ mode: 'system' });
 
-export const ui = $state<{ sidebarOpen: boolean; importOpen: boolean; projectsOpen: boolean }>({
+export const ui = $state<{
+  sidebarOpen: boolean;
+  importOpen: boolean;
+  projectsOpen: boolean;
+  zen: boolean;
+  paletteOpen: boolean;
+}>({
   sidebarOpen: true,
   importOpen: false,
   projectsOpen: false,
+  zen: false,
+  paletteOpen: false,
 });
 export function toggleSidebar(): void {
   ui.sidebarOpen = !ui.sidebarOpen;
@@ -281,6 +312,7 @@ export function openTab(p: PaperSummary): void {
     viewer.tabs.push({ id: p.id, title: p.title ?? p.cite_key ?? p.id });
   }
   viewer.activeId = p.id;
+  selection.id = p.id;
 }
 
 export function closeTab(id: string): void {
@@ -290,6 +322,7 @@ export function closeTab(id: string): void {
   if (viewer.activeId === id) {
     viewer.activeId = viewer.tabs[Math.max(0, idx - 1)]?.id ?? null;
   }
+  if (viewer.tabs.length === 0) ui.zen = false;
 }
 
 export async function loadDetail(id: string): Promise<PaperDetail> {
@@ -307,6 +340,7 @@ export async function removePaper(id: string): Promise<void> {
   closeTab(id);
   library.papers = library.papers.filter((p) => p.id !== id);
   detailCache.delete(id);
+  if (selection.id === id) selection.id = null;
   await loadStats();
 }
 
