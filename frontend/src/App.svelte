@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import { Spring } from 'svelte/motion';
   import { fly, slide } from 'svelte/transition';
+  import ChatBubble from './components/ChatBubble.svelte';
+  import ChatPanel from './components/ChatPanel.svelte';
   import CommandPalette from './components/CommandPalette.svelte';
   import DetailView from './components/DetailView.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
@@ -14,6 +16,7 @@
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
   import ZenPill from './components/ZenPill.svelte';
+  import { chat, loadChatModels, loadThread } from './lib/chat.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
   import {
@@ -33,6 +36,7 @@
     loadProjects();
     loadPapers();
     loadSearchStatus();
+    loadChatModels();
   });
 
   const PANE_W = 304;
@@ -49,6 +53,10 @@
   });
   $effect(() => {
     if (!paneHidden) peek = false;
+  });
+  // The chat thread follows the active paper while the panel is open.
+  $effect(() => {
+    if (chat.open && viewer.activeId) void loadThread(viewer.activeId);
   });
 </script>
 
@@ -87,13 +95,15 @@
       <div class="flex min-h-0 flex-1">
         <!-- PdfViewer stays mounted while home is active so iframe scroll
              positions survive a trip to the Library. -->
-        <div class={`min-h-0 min-w-0 flex-1 ${viewer.activeId === null ? 'hidden' : 'flex'}`}>
+        <div class={`relative min-h-0 min-w-0 flex-1 ${viewer.activeId === null ? 'hidden' : 'flex'}`}>
           <PdfViewer />
           {#if viewer.infoOpen && viewer.activeId}
             {#key viewer.activeId}
               <InfoPanel id={viewer.activeId} />
             {/key}
           {/if}
+          {#if chat.available && !chat.open}<ChatBubble />{/if}
+          {#if chat.open}<ChatPanel />{/if}
         </div>
         {#if viewer.activeId === null}
           <DetailView />
