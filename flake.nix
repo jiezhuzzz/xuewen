@@ -104,6 +104,11 @@
               api_key_env = "OPENAI_API_KEY"
             '';
           };
+          # Empty /data owned 1000:1000 baked into the image so Docker's
+          # named-volume copy-up (which mirrors the mountpoint's ownership)
+          # doesn't leave the volume root-owned and unwritable by the
+          # container's non-root user.
+          dataDir = pkgs.runCommand "xuewen-data-dir" { } "mkdir -p $out/data";
           image = n2c.buildImage {
             name = "ghcr.io/jiezhuzzz/xuewen";
             inherit tag;
@@ -113,7 +118,16 @@
             layers = [
               (n2c.buildLayer { deps = [ pkgs.poppler-utils pkgs.cacert ]; })
             ];
-            copyToRoot = [ configFile ];
+            copyToRoot = [ configFile dataDir ];
+            perms = [
+              {
+                path = dataDir;
+                regex = "/data";
+                mode = "0755";
+                uid = 1000;
+                gid = 1000;
+              }
+            ];
             config = {
               Entrypoint = [
                 "${base.xuewen}/bin/xuewen"
@@ -121,7 +135,7 @@
                 "serve" "--host" "0.0.0.0" "--port" "8080" "--allow-remote"
               ];
               Env = [
-                "PATH=${pkgs.poppler-utils}/bin"
+                "PATH=${base.xuewen}/bin:${pkgs.poppler-utils}/bin"
                 "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
                 "RUST_LOG=info"
               ];
@@ -140,20 +154,36 @@
           set -euo pipefail
           # Prereq: skopeo login ghcr.io (documented in deploy/k8s/README.md)
           nix run .#image.copyTo -- docker://ghcr.io/jiezhuzzz/xuewen:${tag}
-          nix run .#image.copyTo -- docker://ghcr.io/jiezhuzzz/xuewen:latest
+          if [ "${tag}" = "dev" ]; then
+            echo "dirty tree — pushed :dev only, not :latest"
+          else
+            nix run .#image.copyTo -- docker://ghcr.io/jiezhuzzz/xuewen:latest
+          fi
         '';
         load = pkgs.writeShellScriptBin "xuewen-load" ''
           set -euo pipefail
           nix run .#image.copyToDockerDaemon
         '';
       in {
-        push = { type = "app"; program = "${push}/bin/xuewen-push"; };
-        load = { type = "app"; program = "${load}/bin/xuewen-load"; };
+        push = {
+          type = "app";
+          program = "${push}/bin/xuewen-push";
+          meta.description = "push the xuewen image to ghcr";
+        };
+        load = {
+          type = "app";
+          program = "${load}/bin/xuewen-load";
+          meta.description = "load the xuewen image into the local docker daemon";
+        };
       };
 
-      checks = forAll (pkgs: {
-        frontend = self.packages.${pkgs.system}.frontend;
-        xuewen = self.packages.${pkgs.system}.xuewen;
-      });
+      checks = let
+        base = forAll (pkgs: {
+          frontend = self.packages.${pkgs.stdenv.hostPlatform.system}.frontend;
+          xuewen = self.packages.${pkgs.stdenv.hostPlatform.system}.xuewen;
+        });
+      in base // {
+        x86_64-linux = base.x86_64-linux // { image = self.packages.x86_64-linux.image; };
+      };
     };
 }
