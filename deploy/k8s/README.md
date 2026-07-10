@@ -32,6 +32,44 @@ and delete papers. Keep the Service ClusterIP-only and put your own
 authenticating ingress (oauth2-proxy, Authelia, Tailscale, …) in front.
 No Ingress manifest ships here because it is cluster-specific.
 
+## Daily arXiv papers on Glance
+
+`xuewen serve` exposes daily arXiv recommendations at `GET /api/daily`
+when the ConfigMap's `xuewen.toml` has a `[daily]` section (see
+`xuewen.example.toml`; requires `[search.embedding]` and the
+`OPENAI_API_KEY` secret, which the TL;DR generation shares by default).
+
+Add a `custom-api` widget to your Glance dashboard's `glance.yml`:
+
+```yaml
+- type: custom-api
+  title: Daily arXiv
+  cache: 1h
+  url: http://xuewen.<namespace>.svc.cluster.local/api/daily
+  template: |
+    {{ if .JSON.Array "papers" }}
+    <p class="size-h6 color-subdue">{{ .JSON.String "date" }}</p>
+    <ul class="list list-gap-14">
+      {{ range .JSON.Array "papers" }}
+      <li>
+        <a class="size-h4 color-primary" href="{{ .String "abs_url" }}">{{ .String "title" }}</a>
+        <div class="size-h6 color-subdue">
+          {{ printf "%.2f" (.Float "score") }} · {{ .String "arxiv_id" }} ·
+          <a href="{{ .String "pdf_url" }}">PDF</a>
+        </div>
+        <p>{{ if .String "tldr" }}{{ .String "tldr" }}{{ else }}{{ .String "abstract" }}{{ end }}</p>
+      </li>
+      {{ end }}
+    </ul>
+    {{ else }}
+    <p>No papers yet — the first batch appears after the daily run.</p>
+    {{ end }}
+```
+
+Trigger a run without waiting for the schedule:
+
+    kubectl exec deploy/xuewen -- curl -s -X POST localhost:8000/api/daily/run
+
 ## Notes
 
 - `replicas` must stay 1 (SQLite and Tantivy are single-writer); the
