@@ -4,3 +4,5 @@ library.db*
 /frontend/dist/
 /frontend/node_modules/
 /search-index/
+result
+result-*
