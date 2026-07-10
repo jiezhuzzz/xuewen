@@ -11,20 +11,10 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
-    in {
-      devShells = forAll (pkgs: {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            cargo rustc rustfmt clippy rust-analyzer
-            poppler-utils   # provides `pdftotext`
-            sqlite
-            nodejs          # frontend build (npm)
-            pkg-config
-          ];
-        };
-      });
-
-      packages = forAll (pkgs: rec {
+      # Bound locally (rather than read back through `self.packages`) so the
+      # x86_64-linux image override below can extend it without a
+      # self-referential infinite recursion.
+      perSystemPackages = forAll (pkgs: rec {
         frontend = pkgs.buildNpmPackage {
           pname = "xuewen-frontend";
           version = "0.1.0";
@@ -71,6 +61,99 @@
           nativeCheckInputs = [ pkgs.poppler-utils ];
         };
         default = xuewen;
+      });
+    in {
+      devShells = forAll (pkgs: {
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            cargo rustc rustfmt clippy rust-analyzer
+            poppler-utils   # provides `pdftotext`
+            sqlite
+            nodejs          # frontend build (npm)
+            pkg-config
+          ];
+        };
+      });
+
+      packages = perSystemPackages // {
+        # Image + registry wiring are Linux/amd64-only.
+        x86_64-linux = let
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+          base = perSystemPackages.x86_64-linux; # frontend/xuewen from forAll above
+          n2c = nix2container.packages.x86_64-linux.nix2container;
+          tag = self.shortRev or "dev";
+          # Baked default config: single /data volume, in-cluster Qdrant,
+          # key from the environment. A mounted ConfigMap shadows this file.
+          configFile = pkgs.writeTextFile {
+            name = "xuewen-default-config";
+            destination = "/etc/xuewen/xuewen.toml";
+            text = ''
+              inbox_dir     = "/data/inbox"
+              library_root  = "/data/library"
+              database_url  = "sqlite:/data/library.db"
+
+              [search]
+              index_dir         = "/data/search-index"
+              qdrant_url        = "http://xuewen-qdrant:6333"
+              qdrant_collection = "xuewen"
+
+              [search.embedding]
+              base_url    = "https://api.openai.com/v1"
+              model       = "text-embedding-3-small"
+              dims        = 1536
+              api_key_env = "OPENAI_API_KEY"
+            '';
+          };
+          image = n2c.buildImage {
+            name = "ghcr.io/jiezhuzzz/xuewen";
+            inherit tag;
+            # Layer 1: runtime deps that rarely change (cheap re-pulls on
+            # app updates). The app closure lands in the final layer via
+            # the Entrypoint reference.
+            layers = [
+              (n2c.buildLayer { deps = [ pkgs.poppler-utils pkgs.cacert ]; })
+            ];
+            copyToRoot = [ configFile ];
+            config = {
+              Entrypoint = [
+                "${base.xuewen}/bin/xuewen"
+                "--config" "/etc/xuewen/xuewen.toml"
+                "serve" "--host" "0.0.0.0" "--port" "8080" "--allow-remote"
+              ];
+              Env = [
+                "PATH=${pkgs.poppler-utils}/bin"
+                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "RUST_LOG=info"
+              ];
+              User = "1000:1000";
+              WorkingDir = "/data";
+              ExposedPorts = { "8080/tcp" = { }; };
+            };
+          };
+        in base // { inherit image; };
+      };
+
+      apps.x86_64-linux = let
+        pkgs = nixpkgs.legacyPackages.x86_64-linux;
+        tag = self.shortRev or "dev";
+        push = pkgs.writeShellScriptBin "xuewen-push" ''
+          set -euo pipefail
+          # Prereq: skopeo login ghcr.io (documented in deploy/k8s/README.md)
+          nix run .#image.copyTo -- docker://ghcr.io/jiezhuzzz/xuewen:${tag}
+          nix run .#image.copyTo -- docker://ghcr.io/jiezhuzzz/xuewen:latest
+        '';
+        load = pkgs.writeShellScriptBin "xuewen-load" ''
+          set -euo pipefail
+          nix run .#image.copyToDockerDaemon
+        '';
+      in {
+        push = { type = "app"; program = "${push}/bin/xuewen-push"; };
+        load = { type = "app"; program = "${load}/bin/xuewen-load"; };
+      };
+
+      checks = forAll (pkgs: {
+        frontend = self.packages.${pkgs.system}.frontend;
+        xuewen = self.packages.${pkgs.system}.xuewen;
       });
     };
 }
