@@ -14,6 +14,7 @@
   import TopBar from './components/TopBar.svelte';
   import ZenPill from './components/ZenPill.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
+  import { handleKeydown } from './lib/shortcuts';
   import {
     identifyState,
     initTheme,
@@ -49,6 +50,8 @@
     if (!paneHidden) peek = false;
   });
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="flex h-full flex-col bg-paper text-ink dark:bg-night dark:text-stone-100">
   {#if !ui.zen}
