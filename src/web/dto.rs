@@ -190,6 +190,8 @@ pub struct DailyPaperDto {
     pub tldr: Option<String>,
     pub abs_url: String,
     pub pdf_url: String,
+    pub summary: Option<crate::daily::tldr::Summary>,
+    pub code_url: Option<String>,
 }
 
 impl From<&crate::daily::store::DailyPaper> for DailyPaperDto {
@@ -205,6 +207,8 @@ impl From<&crate::daily::store::DailyPaper> for DailyPaperDto {
             tldr: p.tldr.clone(),
             abs_url: p.abs_url.clone(),
             pdf_url: p.pdf_url.clone(),
+            summary: p.summary.clone(),
+            code_url: p.code_url.clone(),
         }
     }
 }

@@ -70,11 +70,20 @@ async fn get_daily_returns_latest_batch() {
     store::replace_batch(&pool, "2026-07-09", &[batch_paper("2026-07-09", 1, "2507.1", None)])
         .await
         .unwrap();
+    let mut rich = batch_paper("2026-07-10", 1, "2507.2", Some("Short."));
+    rich.summary = Some(xuewen::daily::tldr::Summary {
+        tldr: "Short.".into(),
+        problem: "Gap.".into(),
+        approach: "Idea.".into(),
+        results: "+4.2 on X.".into(),
+        limitations: "Small data.".into(),
+    });
+    rich.code_url = Some("https://github.com/acme/widget".into());
     store::replace_batch(
         &pool,
         "2026-07-10",
         &[
-            batch_paper("2026-07-10", 1, "2507.2", Some("Short.")),
+            rich,
             batch_paper("2026-07-10", 2, "2507.3", None),
         ],
     )
@@ -93,7 +102,12 @@ async fn get_daily_returns_latest_batch() {
     assert_eq!(v["papers"][0]["arxiv_id"], "2507.2");
     assert_eq!(v["papers"][0]["tldr"], "Short.");
     assert_eq!(v["papers"][0]["abstract"], "An abstract.");
+    assert_eq!(v["papers"][0]["summary"]["problem"], "Gap.");
+    assert_eq!(v["papers"][0]["summary"]["limitations"], "Small data.");
+    assert_eq!(v["papers"][0]["code_url"], "https://github.com/acme/widget");
     assert_eq!(v["papers"][1]["tldr"], Value::Null);
+    assert_eq!(v["papers"][1]["summary"], Value::Null);
+    assert_eq!(v["papers"][1]["code_url"], Value::Null);
 }
 
 #[tokio::test]
