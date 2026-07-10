@@ -4,9 +4,9 @@
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
+  import LibraryPane from './components/LibraryPane.svelte';
   import PdfViewer from './components/PdfViewer.svelte';
   import ProjectsModal from './components/ProjectsModal.svelte';
-  import Sidebar from './components/Sidebar.svelte';
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
@@ -33,7 +33,7 @@
 <div class="flex h-full flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
   <TopBar />
   <div class="flex min-h-0 flex-1">
-    {#if ui.sidebarOpen}<Sidebar />{/if}
+    {#if ui.sidebarOpen}<LibraryPane />{/if}
     <main class="flex min-h-0 flex-1 flex-col">
       {#if viewer.tabs.length === 0}
         <EmptyState />
