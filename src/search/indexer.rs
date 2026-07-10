@@ -37,7 +37,8 @@ pub async fn sweep(svc: &SearchService, library_root: &Path) -> Result<SweepSumm
     }
     for work in &plan.index {
         match index_paper(svc, library_root, work).await {
-            Ok(()) => summary.indexed += 1,
+            Ok(true) => summary.indexed += 1,
+            Ok(false) => {}
             Err(e) => {
                 tracing::warn!("index {}: {e}", work.paper_id);
                 store::record_error(&svc.pool, &work.paper_id, &e.to_string())
@@ -50,9 +51,9 @@ pub async fn sweep(svc: &SearchService, library_root: &Path) -> Result<SweepSumm
     Ok(summary)
 }
 
-async fn index_paper(svc: &SearchService, library_root: &Path, work: &planner::Work) -> Result<()> {
+async fn index_paper(svc: &SearchService, library_root: &Path, work: &planner::Work) -> Result<bool> {
     let Some(paper) = crate::db::get_by_id(&svc.pool, &work.paper_id).await? else {
-        return Ok(()); // purged since the plan was computed; tombstone next sweep
+        return Ok(false); // purged since the plan was computed; tombstone next sweep
     };
 
     let chunks = if work.fts {
@@ -96,7 +97,7 @@ async fn index_paper(svc: &SearchService, library_root: &Path, work: &planner::W
 
     if work.vectors {
         let Some(embedder) = &svc.embedder else {
-            return Ok(()); // planner only schedules vectors when configured
+            return Ok(true); // planner only schedules vectors when configured
         };
         if !chunks.is_empty() {
             let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
@@ -116,7 +117,7 @@ async fn index_paper(svc: &SearchService, library_root: &Path, work: &planner::W
         }
         store::mark_vectors_done(&svc.pool, &paper.id, embedder_model(svc)).await?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn embedder_model(svc: &SearchService) -> &str {
@@ -315,6 +316,44 @@ mod tests {
         assert!(store::all_index_rows(&f.svc.pool).await.unwrap().is_empty());
         assert!(store::chunks_for_paper(&f.svc.pool, "p1").await.unwrap().is_empty());
         // Qdrant delete for a no-embedder service is skipped, not an error.
+    }
+
+    #[tokio::test]
+    async fn qdrant_delete_failure_does_not_wedge_tombstone() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/v1/embeddings"))
+            .respond_with(|req: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let n = body["input"].as_array().map(|a| a.len()).unwrap_or(1);
+                let data: Vec<_> = (0..n)
+                    .map(|i| json!({"index": i, "embedding": [0.1, 0.2, 0.3, 0.4]}))
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(json!({"data": data}))
+            })
+            .mount(&server).await;
+        Mock::given(method("GET")).and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
+            })))
+            .mount(&server).await;
+        Mock::given(method("PUT")).and(path("/collections/xuewen/points"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": {}})))
+            .mount(&server).await;
+        // The delete endpoint is down: the tombstone must still clear.
+        Mock::given(method("POST")).and(path("/collections/xuewen/points/delete"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server).await;
+
+        let f = fixture(Some(&server)).await;
+        insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "body words").await;
+        sweep_in(&f).await.unwrap();
+
+        crate::db::soft_delete(&f.svc.pool, "p1").await.unwrap();
+        let s = sweep_in(&f).await.unwrap();
+        assert_eq!(s.deindexed, 1, "tombstone cleared despite qdrant failure");
+        assert!(store::all_index_rows(&f.svc.pool).await.unwrap().is_empty());
+        assert!(f.svc.fts.search("fuzzing", &fts::FieldSel::all(), 10).unwrap().is_empty());
     }
 
     // Helper used by every test: sweep against the fixture's library root.
