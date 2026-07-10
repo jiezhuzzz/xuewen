@@ -57,7 +57,16 @@ Add a `custom-api` widget to your Glance dashboard's `glance.yml`:
           {{ printf "%.2f" (.Float "score") }} · {{ .String "arxiv_id" }} ·
           <a href="{{ .String "pdf_url" }}">PDF</a>
         </div>
-        <p>{{ if .String "tldr" }}{{ .String "tldr" }}{{ else }}{{ .String "abstract" }}{{ end }}</p>
+        <p>{{ if .String "tldr" }}{{ .String "tldr" }}{{ else }}{{ .String "abstract" }}{{ end }}{{ if .String "code_url" }} · <a href="{{ .String "code_url" }}">Code</a>{{ end }}</p>
+        {{ if .String "summary.problem" }}
+        <details>
+          <summary class="size-h6 color-subdue">details</summary>
+          <p><strong>Problem:</strong> {{ .String "summary.problem" }}</p>
+          <p><strong>Approach:</strong> {{ .String "summary.approach" }}</p>
+          <p><strong>Results:</strong> {{ .String "summary.results" }}</p>
+          <p><strong>Limitations:</strong> {{ .String "summary.limitations" }}</p>
+        </details>
+        {{ end }}
       </li>
       {{ end }}
     </ul>
