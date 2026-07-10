@@ -135,6 +135,13 @@ impl LlmClient {
                         }
                         let v: serde_json::Value = serde_json::from_str(data)
                             .map_err(|e| anyhow!("bad stream payload: {e}"))?;
+                        if let Some(err) = v.get("error") {
+                            let msg = err
+                                .get("message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("unknown provider error");
+                            Err(anyhow!("provider error: {msg}"))?;
+                        }
                         if let Some(s) = v["choices"][0]["delta"]["content"].as_str() {
                             if !s.is_empty() {
                                 yield s.to_string();
@@ -205,5 +212,32 @@ mod tests {
             .err()
             .expect("401 must fail");
         assert!(err.to_string().contains("401"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn stream_surfaces_mid_stream_error_frames() {
+        let server = MockServer::start().await;
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"He\"}}]}\n\n\
+                    data: {\"error\":{\"message\":\"rate limited\"}}\n\n";
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+            .mount(&server)
+            .await;
+
+        let client = LlmClient::new(&server.uri(), "test-model", None);
+        let stream = client
+            .stream(&[ChatMessage {
+                role: "user",
+                content: "hi".into(),
+            }])
+            .await
+            .unwrap();
+        futures_util::pin_mut!(stream);
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first, "He");
+        let second = stream.next().await.unwrap();
+        let err = second.err().expect("error frame must surface as Err");
+        assert!(err.to_string().contains("rate limited"), "got: {err}");
     }
 }
