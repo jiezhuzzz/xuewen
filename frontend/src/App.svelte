@@ -8,6 +8,7 @@
   import ProjectsModal from './components/ProjectsModal.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import TabBar from './components/TabBar.svelte';
+  import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
   import {
     identifyState,
@@ -53,3 +54,4 @@
 {#if ui.importOpen}<ImportModal />{/if}
 {#if identifyState.open}<IdentifyModal />{/if}
 {#if ui.projectsOpen}<ProjectsModal />{/if}
+<Toaster />
