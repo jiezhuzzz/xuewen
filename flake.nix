@@ -55,7 +55,9 @@
               let
                 rel = pkgs.lib.removePrefix (toString self + "/") (toString path);
                 under = dir: rel == dir || pkgs.lib.hasPrefix (dir + "/") rel;
-              in !(under "frontend" || under "docs" || under "deploy");
+              in !(under "frontend" || under "docs" || under "deploy"
+                || rel == "flake.nix" || rel == "flake.lock"
+                || rel == ".gitignore" || rel == ".envrc");
           };
           cargoLock.lockFile = ./Cargo.lock;
           # rust-embed reads frontend/dist at compile time; build.rs would
