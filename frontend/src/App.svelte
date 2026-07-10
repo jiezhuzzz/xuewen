@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Spring } from 'svelte/motion';
-  import { fly } from 'svelte/transition';
+  import { fly, slide } from 'svelte/transition';
   import DetailView from './components/DetailView.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
@@ -12,6 +12,7 @@
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
+  import ZenPill from './components/ZenPill.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import {
     identifyState,
@@ -50,7 +51,11 @@
 </script>
 
 <div class="flex h-full flex-col bg-paper text-ink dark:bg-night dark:text-stone-100">
-  <TopBar />
+  {#if !ui.zen}
+    <div transition:slide={{ duration: dur(DUR.base) }}>
+      <TopBar />
+    </div>
+  {/if}
   <div class="relative flex min-h-0 flex-1">
     <div class="relative min-h-0 shrink-0 overflow-hidden" style={`width:${paneW.current}px`} inert={paneHidden}>
       <div class="absolute inset-y-0 left-0 w-[304px]"><LibraryPane /></div>
@@ -70,7 +75,11 @@
       {/if}
     {/if}
     <main class="flex min-h-0 min-w-0 flex-1 flex-col">
-      <TabBar />
+      {#if !ui.zen}
+        <div transition:slide={{ duration: dur(DUR.base) }}>
+          <TabBar />
+        </div>
+      {/if}
       <div class="flex min-h-0 flex-1">
         <!-- PdfViewer stays mounted while home is active so iframe scroll
              positions survive a trip to the Library. -->
@@ -92,4 +101,5 @@
 {#if ui.importOpen}<ImportModal />{/if}
 {#if identifyState.open}<IdentifyModal />{/if}
 {#if ui.projectsOpen}<ProjectsModal />{/if}
+{#if ui.zen}<ZenPill />{/if}
 <Toaster />
