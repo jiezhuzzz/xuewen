@@ -36,7 +36,7 @@
         <PaperActions {d} />
       </div>
     {:catch}
-      <p class="text-sm text-red-600 dark:text-red-400">Failed to load details.</p>
+      <p class="text-sm text-red-600 dark:text-red-400">Failed to load details. Check that the server is running, then reopen this panel.</p>
     {/await}
   {/key}
 </aside>
