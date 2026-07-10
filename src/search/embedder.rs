@@ -33,7 +33,10 @@ impl Embedder {
             return None;
         };
         Some(Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .build()
+                .expect("building embedding HTTP client"),
             base_url: cfg.base_url.trim_end_matches('/').to_string(),
             model: cfg.model.clone(),
             dims: cfg.dims,

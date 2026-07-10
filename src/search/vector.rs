@@ -46,7 +46,9 @@ pub struct QdrantStore {
 impl QdrantStore {
     pub fn new(base_url: &str, collection: &str, dims: usize) -> Result<Self> {
         Ok(Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()?,
             base_url: base_url.trim_end_matches('/').to_string(),
             collection: collection.to_string(),
             dims,

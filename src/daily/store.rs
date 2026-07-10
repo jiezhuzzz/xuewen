@@ -33,6 +33,7 @@ pub struct DailyRun {
     pub status: String,
     /// Candidates after dedup, before top-N.
     pub papers_found: i64,
+    /// Failure detail; also set on 'ok' runs where summaries failed.
     pub error: Option<String>,
     pub ran_at: String,
 }

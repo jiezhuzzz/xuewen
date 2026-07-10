@@ -19,6 +19,13 @@ pub const ARXIV_FEED_BASE: &str = "https://rss.arxiv.org/atom";
 pub const ARXIV_PDF_BASE: &str = "https://arxiv.org/pdf";
 pub const ARXIV_ABS_BASE: &str = "https://arxiv.org/abs";
 
+fn user_agent(contact_email: Option<&str>) -> String {
+    match contact_email {
+        Some(email) => format!("xuewen/0.1 (mailto:{email})"),
+        None => "xuewen/0.1".to_string(),
+    }
+}
+
 /// Daily arXiv recommendations. Owns its own HTTP clients (all stateless)
 /// so it stays independent of `SearchService`.
 pub struct DailyService {
@@ -61,16 +68,18 @@ impl DailyService {
             &cfg.search.qdrant_collection,
             embed_cfg.dims,
         )?;
+        let ua = user_agent(cfg.contact_email.as_deref());
         Ok(Some(Arc::new(Self {
             cfg: daily.clone(),
             pool,
             http: HttpClient::new(
                 reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
+                    .user_agent(&ua)
                     .build()?,
                 RetryPolicy::production(),
             ),
-            plain_http: reqwest::Client::new(),
+            plain_http: reqwest::Client::builder().user_agent(&ua).build()?,
             embedder,
             vectors,
             chat,
@@ -90,11 +99,15 @@ impl DailyService {
         feed_base: &str,
         pdf_base: &str,
     ) -> Arc<Self> {
+        let ua = user_agent(None);
         Arc::new(Self {
             cfg,
             pool,
-            http: HttpClient::new(reqwest::Client::new(), RetryPolicy::fast_for_tests()),
-            plain_http: reqwest::Client::new(),
+            http: HttpClient::new(
+                reqwest::Client::builder().user_agent(&ua).build().unwrap(),
+                RetryPolicy::fast_for_tests(),
+            ),
+            plain_http: reqwest::Client::builder().user_agent(&ua).build().unwrap(),
             embedder,
             vectors,
             chat,

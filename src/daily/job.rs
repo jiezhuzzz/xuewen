@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -9,6 +9,9 @@ use super::{feed, score, store, tldr, DailyService, ARXIV_ABS_BASE, ARXIV_PDF_BA
 const SUMMARY_PDF_PAGES: u32 = 12;
 const PDF_MAX_BYTES: usize = 30 * 1024 * 1024;
 const PDF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// Hard ceiling on one daily run; a wedged remote call must not hold the
+/// run guard (and thus the scheduler) hostage forever.
+const RUN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
 
 static GITHUB_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").unwrap()
@@ -21,12 +24,48 @@ fn find_code_url(text: &str) -> Option<String> {
     Some(m.as_str().trim_end_matches('.').to_string())
 }
 
+struct PipelineOutcome {
+    /// Candidates after dedup, before top-N (drives ok/empty).
+    found: i64,
+    /// Papers actually stored (after top-N truncation).
+    kept: usize,
+    /// Papers whose summary generation failed entirely.
+    summaries_failed: usize,
+}
+
 /// One full daily run. Never fails: the outcome (ok/empty/failed) is
 /// recorded in `daily_runs` and returned. Old batches are pruned after.
 pub async fn run_once(svc: &DailyService, batch_date: &str) -> store::DailyRun {
-    let (status, found, error) = match pipeline(svc, batch_date).await {
-        Ok(0) => ("empty", 0, None),
-        Ok(found) => ("ok", found, None),
+    run_once_with_deadline(svc, batch_date, RUN_DEADLINE).await
+}
+
+/// `run_once`, parameterized on the run deadline so it's testable without
+/// waiting out the real ceiling.
+async fn run_once_with_deadline(
+    svc: &DailyService,
+    batch_date: &str,
+    deadline: std::time::Duration,
+) -> store::DailyRun {
+    let outcome = match tokio::time::timeout(deadline, pipeline(svc, batch_date)).await {
+        Ok(r) => r,
+        Err(_) => Err(anyhow!(
+            "daily run timed out after {}s",
+            deadline.as_secs()
+        )),
+    };
+    let (status, found, error) = match outcome {
+        Ok(PipelineOutcome { found: 0, .. }) => ("empty", 0, None),
+        Ok(PipelineOutcome { found, kept, summaries_failed }) => {
+            let error = if summaries_failed > 0 {
+                tracing::warn!(
+                    "daily run {batch_date}: {summaries_failed}/{kept} summaries failed"
+                );
+                Some(format!("{summaries_failed}/{kept} summaries failed — see logs"))
+            } else {
+                None
+            };
+            ("ok", found, error)
+        }
         Err(e) => {
             tracing::error!("daily run {batch_date} failed: {e:#}");
             ("failed", 0, Some(format!("{e:#}")))
@@ -48,9 +87,9 @@ pub async fn run_once(svc: &DailyService, batch_date: &str) -> store::DailyRun {
     run
 }
 
-/// Fetch → dedup → score → summarize → store. Returns the candidate count
-/// after dedup (0 ⇒ the caller records an "empty" run).
-async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
+/// Fetch → dedup → score → summarize → store. `found` (candidates after
+/// dedup) drives ok/empty; `found == 0` ⇒ the caller records an "empty" run.
+async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<PipelineOutcome> {
     let xml = feed::fetch_feed(&svc.http, &svc.feed_base, &svc.cfg.categories)
         .await
         .context("fetching arXiv feed")?;
@@ -60,7 +99,7 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
     candidates.retain(|c| !known.contains(&c.arxiv_id));
     let found = candidates.len() as i64;
     if candidates.is_empty() {
-        return Ok(0);
+        return Ok(PipelineOutcome { found: 0, kept: 0, summaries_failed: 0 });
     }
 
     let Some(profile) = score::build_profile(&svc.pool, &svc.vectors).await? else {
@@ -92,6 +131,7 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
     scored.truncate(svc.cfg.max_papers);
 
     let mut rows = Vec::with_capacity(scored.len());
+    let mut summaries_failed = 0;
     for (i, (s, c)) in scored.into_iter().enumerate() {
         let full_text = match fetch_pdf_text(svc, &c.arxiv_id).await {
             Ok(t) => Some(t),
@@ -109,6 +149,9 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
             full_text.as_deref(),
         )
         .await;
+        if summary.is_none() {
+            summaries_failed += 1;
+        }
         rows.push(store::DailyPaper {
             batch_date: batch_date.to_string(),
             rank: i as i64 + 1,
@@ -125,8 +168,9 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
             pdf_url: format!("{ARXIV_PDF_BASE}/{}", c.arxiv_id),
         });
     }
+    let kept = rows.len();
     store::replace_batch(&svc.pool, batch_date, &rows).await?;
-    Ok(found)
+    Ok(PipelineOutcome { found, kept, summaries_failed })
 }
 
 /// Download the paper's PDF and return the text of its first pages,
@@ -293,6 +337,7 @@ Abstract: Very similar to the library.</summary>
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/atom/cs.AI+cs.LG"))
+            .and(wiremock::matchers::header("user-agent", "xuewen/0.1"))
             .respond_with(ResponseTemplate::new(200).set_body_string(FEED))
             .mount(&server)
             .await;
@@ -348,6 +393,75 @@ Abstract: Very similar to the library.</summary>
         assert_eq!(papers[0].pdf_url, "https://arxiv.org/pdf/2507.00003");
         let recorded = store::get_run(&pool, "2026-07-10").await.unwrap().unwrap();
         assert_eq!(recorded.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn all_summaries_failing_is_recorded_on_ok_run() {
+        let pool = pool_with_library_paper().await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/atom/cs.AI+cs.LG"))
+            .and(wiremock::matchers::header("user-agent", "xuewen/0.1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FEED))
+            .mount(&server)
+            .await;
+        mount_scroll(
+            &server,
+            json!([{"id": "x", "payload": {"paper_id": "lib1", "seq": 0},
+                    "vector": [1.0, 0.0, 0.0, 0.0]}]),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {"index": 0, "embedding": [0.0, 1.0, 0.0, 0.0]},
+                    {"index": 1, "embedding": [1.0, 0.0, 0.0, 0.0]}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path_regex("^/pdf/.*"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        // Every summary attempt (full-text and abstract-only) fails.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+
+        let svc = service(&server, pool.clone());
+        let run = run_once(&svc, "2026-07-10").await;
+
+        assert_eq!(run.status, "ok");
+        assert!(run.error.unwrap().contains("2/2 summaries failed"));
+        let (_, papers) = store::latest_batch(&pool).await.unwrap().unwrap();
+        assert!(papers.iter().all(|p| p.summary.is_none() && p.tldr.is_none()));
+    }
+
+    #[tokio::test]
+    async fn run_deadline_records_timed_out_failure() {
+        let pool = pool_with_library_paper().await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/atom/cs.AI+cs.LG"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(EMPTY_FEED)
+                    .set_delay(std::time::Duration::from_millis(500)),
+            )
+            .mount(&server)
+            .await;
+        let svc = service(&server, pool.clone());
+        let run = run_once_with_deadline(&svc, "2026-07-10", std::time::Duration::from_millis(50))
+            .await;
+        assert_eq!(run.status, "failed");
+        assert!(run.error.unwrap().contains("timed out"));
+        // The failure is recorded, so the scheduler's hourly retry will fire.
+        assert!(store::get_run(&pool, "2026-07-10").await.unwrap().is_some());
     }
 
     #[tokio::test]
