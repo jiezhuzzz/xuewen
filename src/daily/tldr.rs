@@ -10,6 +10,16 @@ pub const FULL_TEXT_CAP: usize = 40_000;
 const SYSTEM: &str =
     "You summarize scientific papers accurately and concisely for a researcher's daily feed.";
 
+/// Structured five-part paper summary produced by the LLM.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Summary {
+    pub tldr: String,
+    pub problem: String,
+    pub approach: String,
+    pub results: String,
+    pub limitations: String,
+}
+
 /// Minimal OpenAI-compatible /chat/completions client. Retry behavior
 /// mirrors `search::embedder::Embedder` (429/5xx/network, backoff).
 pub struct ChatClient {
@@ -109,8 +119,12 @@ impl ChatClient {
 
 fn prompt(language: &str, title: &str, abstract_text: &str, full_text: Option<&str>) -> String {
     let mut p = format!(
-        "Given the following information about a paper, write a 2-3 sentence TL;DR in \
-         {language}: the problem, the approach, and the key result. Output only the TL;DR.\n\n\
+        "Summarize the following paper as a JSON object with exactly these string \
+         keys: \"tldr\", \"problem\", \"approach\", \"results\", \"limitations\". \
+         Write in {language}. Keep \"tldr\" to one sentence and every other field \
+         to 1-2 sentences, about 120 words in total. Prefer concrete numbers in \
+         \"results\" (benchmark, metric, delta over baseline). Base \"limitations\" \
+         on the paper's own discussion when present. Output ONLY the JSON object.\n\n\
          Title: {title}\n\nAbstract: {abstract_text}\n"
     );
     if let Some(t) = full_text {
@@ -120,6 +134,55 @@ fn prompt(language: &str, title: &str, abstract_text: &str, full_text: Option<&s
         p.push('\n');
     }
     p
+}
+
+/// Parse the model's reply as a `Summary`, tolerating a Markdown code fence
+/// ("```json ... ```" or "``` ... ```") around the JSON object.
+fn parse_summary(reply: &str) -> Result<Summary> {
+    let mut s = reply.trim();
+    if let Some(rest) = s.strip_prefix("```") {
+        let rest = rest.strip_prefix("json").unwrap_or(rest);
+        s = rest.strip_suffix("```").unwrap_or(rest).trim();
+    }
+    Ok(serde_json::from_str(s)?)
+}
+
+async fn summary_attempt(
+    chat: &ChatClient,
+    language: &str,
+    title: &str,
+    abstract_text: &str,
+    full_text: Option<&str>,
+) -> Result<Summary> {
+    let reply = chat
+        .complete(SYSTEM, &prompt(language, title, abstract_text, full_text))
+        .await?;
+    parse_summary(&reply)
+}
+
+/// Best-effort structured summary: full-text prompt, then abstract-only,
+/// then `None`. A parse failure counts as a call failure. Never propagates
+/// an error — a bad paper must not fail the batch.
+pub async fn generate_summary(
+    chat: &ChatClient,
+    language: &str,
+    title: &str,
+    abstract_text: &str,
+    full_text: Option<&str>,
+) -> Option<Summary> {
+    if full_text.is_some() {
+        match summary_attempt(chat, language, title, abstract_text, full_text).await {
+            Ok(s) => return Some(s),
+            Err(e) => tracing::warn!("full-text summary failed for {title}: {e}"),
+        }
+    }
+    match summary_attempt(chat, language, title, abstract_text, None).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!("abstract summary failed for {title}: {e}");
+            None
+        }
+    }
 }
 
 /// Best-effort TL;DR: full-text prompt, then abstract-only, then `None`.
@@ -267,5 +330,77 @@ mod tests {
             language: "English".into(),
         };
         assert!(ChatClient::from_config(&cfg).is_none());
+    }
+
+    fn summary_json() -> serde_json::Value {
+        json!({
+            "tldr": "One line.",
+            "problem": "Gap.",
+            "approach": "Idea.",
+            "results": "+4.2 on X.",
+            "limitations": "Small data."
+        })
+    }
+
+    #[test]
+    fn parses_plain_and_fenced_summary_json() {
+        let plain = summary_json().to_string();
+        assert_eq!(parse_summary(&plain).unwrap().tldr, "One line.");
+        let fenced = format!("```json\n{plain}\n```");
+        assert_eq!(parse_summary(&fenced).unwrap().problem, "Gap.");
+        let bare_fence = format!("```\n{plain}\n```");
+        assert_eq!(parse_summary(&bare_fence).unwrap().approach, "Idea.");
+        assert!(parse_summary("not json at all").is_err());
+    }
+
+    #[test]
+    fn prompt_names_all_keys_and_language() {
+        let p = prompt("German", "T", "A", None);
+        for key in ["tldr", "problem", "approach", "results", "limitations"] {
+            assert!(p.contains(&format!("\"{key}\"")), "missing key {key}");
+        }
+        assert!(p.contains("German"));
+    }
+
+    #[tokio::test]
+    async fn summary_falls_back_from_full_text_to_abstract() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_string_contains("Preview of main content"))
+            .respond_with(ResponseTemplate::new(400))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(chat_response(&summary_json().to_string())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let c = ChatClient::for_tests(&format!("{}/v1", server.uri()), "m");
+        let out = generate_summary(&c, "English", "Title", "An abstract.", Some("full text")).await;
+        assert_eq!(out.unwrap().tldr, "One line.");
+    }
+
+    #[tokio::test]
+    async fn summary_unparsable_reply_falls_back_then_none() {
+        // 200s with non-JSON content: parse failure on the full-text attempt,
+        // parse failure again on the abstract-only attempt -> None.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(chat_response("free text, no JSON")),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        let c = ChatClient::for_tests(&format!("{}/v1", server.uri()), "m");
+        let out = generate_summary(&c, "English", "T", "A", Some("full text")).await;
+        assert!(out.is_none());
     }
 }
