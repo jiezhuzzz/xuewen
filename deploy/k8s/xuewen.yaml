@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xuewen
+  labels: { app: xuewen }
+spec:
+  replicas: 1            # SQLite + Tantivy are single-writer: never scale this up
+  strategy:
+    type: Recreate       # old pod must release /data before the new one mounts it
+  selector:
+    matchLabels: { app: xuewen }
+  template:
+    metadata:
+      labels: { app: xuewen }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: xuewen
+          image: ghcr.io/jiezhuzzz/xuewen:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - secretRef:
+                name: xuewen-secrets
+                optional: true   # keyword search works without the embedding key
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/xuewen
+          readinessProbe:
+            httpGet: { path: /api/stats, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/stats, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: xuewen-data
+        - name: config
+          configMap:
+            name: xuewen-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: xuewen
+spec:
+  selector: { app: xuewen }
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xuewen-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi

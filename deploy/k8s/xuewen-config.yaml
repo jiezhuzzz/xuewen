@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xuewen-config
+data:
+  xuewen.toml: |
+    inbox_dir     = "/data/inbox"
+    library_root  = "/data/library"
+    database_url  = "sqlite:/data/library.db"
+
+    [search]
+    index_dir         = "/data/search-index"
+    qdrant_url        = "http://xuewen-qdrant:6333"
+    qdrant_collection = "xuewen"
+
+    [search.embedding]
+    base_url    = "https://api.openai.com/v1"
+    model       = "text-embedding-3-small"
+    dims        = 1536
+    api_key_env = "OPENAI_API_KEY"
