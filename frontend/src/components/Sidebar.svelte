@@ -7,8 +7,13 @@
     loadPapers,
     openProjects,
     projects,
+    searchMeta,
+    searchOpts,
+    semanticBlocked,
     setProjectFilter,
     setSearch,
+    toggleSearchEngine,
+    toggleSearchField,
   } from '../lib/state.svelte';
   import { exportUrl } from '../lib/api';
   import type { Sort, StatusFilter } from '../lib/types';
@@ -34,12 +39,60 @@
       <input
         type="search"
         aria-label="Search papers"
-        placeholder="Search title or author…"
+        placeholder="Search library…"
         value={filters.q}
         oninput={(e) => setSearch((e.currentTarget as HTMLInputElement).value)}
         class="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800"
       />
     </div>
+    <div class="flex flex-wrap gap-1 text-[11px]">
+      {#each [['title', 'Title'], ['authors', 'Authors'], ['abstract', 'Abstract'], ['body', 'Body']] as [key, label] (key)}
+        <button
+          type="button"
+          aria-pressed={searchOpts[key as 'title' | 'authors' | 'abstract' | 'body']}
+          onclick={() => toggleSearchField(key as 'title' | 'authors' | 'abstract' | 'body')}
+          class={`rounded-full border px-2 py-0.5 ${
+            searchOpts[key as 'title' | 'authors' | 'abstract' | 'body']
+              ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+              : 'border-slate-200 text-slate-400 dark:border-slate-700 dark:text-slate-500'
+          }`}
+        >
+          {label}
+        </button>
+      {/each}
+      <span class="mx-1 border-l border-slate-200 dark:border-slate-700"></span>
+      <button
+        type="button"
+        aria-pressed={searchOpts.keyword}
+        onclick={() => toggleSearchEngine('keyword')}
+        class={`rounded-full border px-2 py-0.5 ${
+          searchOpts.keyword
+            ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+            : 'border-slate-200 text-slate-400 dark:border-slate-700 dark:text-slate-500'
+        }`}
+      >
+        Keyword
+      </button>
+      <button
+        type="button"
+        aria-pressed={searchOpts.semantic && !semanticBlocked()}
+        disabled={semanticBlocked()}
+        title={searchMeta.semantic.reason ?? undefined}
+        onclick={() => toggleSearchEngine('semantic')}
+        class={`rounded-full border px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-40 ${
+          searchOpts.semantic && !semanticBlocked()
+            ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+            : 'border-slate-200 text-slate-400 dark:border-slate-700 dark:text-slate-500'
+        }`}
+      >
+        Semantic
+      </button>
+    </div>
+    {#if searchMeta.pending > 0}
+      <p class="text-[11px] text-slate-400 dark:text-slate-500">
+        indexing {searchMeta.pending} paper{searchMeta.pending === 1 ? '' : 's'}…
+      </p>
+    {/if}
     <div class="flex gap-2">
       <select
         value={filters.status}

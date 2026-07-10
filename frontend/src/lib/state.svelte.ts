@@ -5,6 +5,7 @@ import {
   deleteProject,
   exportPaper,
   getPaper,
+  getSearchStatus,
   getStats,
   identifyPaper,
   identifySearch,
@@ -13,6 +14,7 @@ import {
   listPapers,
   listProjects,
   removePaperFromProject,
+  searchPapers,
   updateProject,
 } from './api';
 import type {
@@ -23,10 +25,64 @@ import type {
   PaperDetail,
   PaperSummary,
   Project,
+  SearchMatch,
+  SearchOpts,
   Stats,
 } from './types';
 
 export const filters = $state<Filters>({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
+
+export const searchOpts = $state<SearchOpts>({
+  title: true,
+  authors: true,
+  abstract: true,
+  body: true,
+  keyword: true,
+  semantic: true,
+});
+
+/// Match info per paper id for the current search, plus the semantic tier's
+/// availability (from the last response or /api/search/status).
+export const searchMeta = $state<{
+  byId: Record<string, SearchMatch>;
+  semantic: { available: boolean; reason: string | null };
+  /// Papers still waiting for a tier to index (drives "indexing N papers…").
+  pending: number;
+}>({ byId: {}, semantic: { available: true, reason: null }, pending: 0 });
+
+/// Semantic chip is disabled when the backend can't serve it or the field
+/// selection makes it meaningless (authors-only).
+export function semanticBlocked(): boolean {
+  const authorsOnly =
+    searchOpts.authors && !searchOpts.title && !searchOpts.abstract && !searchOpts.body;
+  return authorsOnly || !searchMeta.semantic.available;
+}
+
+export function toggleSearchField(k: 'title' | 'authors' | 'abstract' | 'body'): void {
+  const on = ['title', 'authors', 'abstract', 'body'].filter(
+    (f) => searchOpts[f as keyof SearchOpts],
+  );
+  if (searchOpts[k] && on.length === 1) return; // keep at least one field
+  searchOpts[k] = !searchOpts[k];
+  if (filters.q.trim()) void loadPapers();
+}
+
+export function toggleSearchEngine(k: 'keyword' | 'semantic'): void {
+  const other = k === 'keyword' ? 'semantic' : 'keyword';
+  if (searchOpts[k] && !searchOpts[other]) return; // keep at least one engine
+  searchOpts[k] = !searchOpts[k];
+  if (filters.q.trim()) void loadPapers();
+}
+
+export async function loadSearchStatus(): Promise<void> {
+  try {
+    const st = await getSearchStatus();
+    searchMeta.semantic = { available: st.semantic_available, reason: st.reason };
+    searchMeta.pending = Math.max(st.fts.pending, st.vectors.pending);
+  } catch (e) {
+    console.error(e); // e.g. 503 search not configured -> leave defaults
+  }
+}
 
 export const projects = $state<{ items: Project[] }>({ items: [] });
 
@@ -123,14 +179,25 @@ export async function loadStats(): Promise<void> {
 }
 
 let seq = 0;
-export async function loadPapers(): Promise<void> {
+export async function loadPapers(opts?: { keywordOnly?: boolean }): Promise<void> {
   const my = ++seq;
   library.loading = true;
   library.error = null;
   try {
-    const papers = await listPapers({ ...filters });
-    if (my !== seq) return; // a newer request superseded this one
-    library.papers = papers;
+    const q = filters.q.trim();
+    if (!q) {
+      const papers = await listPapers({ ...filters });
+      if (my !== seq) return; // a newer request superseded this one
+      library.papers = papers;
+      searchMeta.byId = {};
+    } else {
+      const keywordOnly = Boolean(opts?.keywordOnly) || !searchOpts.semantic;
+      const resp = await searchPapers(q, { ...searchOpts }, { ...filters }, keywordOnly);
+      if (my !== seq) return;
+      library.papers = resp.results.map((r) => r.paper);
+      searchMeta.byId = Object.fromEntries(resp.results.map((r) => [r.paper.id, r.match]));
+      searchMeta.semantic = { available: resp.semantic.available, reason: resp.semantic.reason };
+    }
   } catch (e) {
     if (my === seq) library.error = (e as Error).message;
   } finally {
@@ -188,11 +255,25 @@ export async function removeFromProject(paperId: string, projectId: string): Pro
   if (filters.project === projectId) await loadPapers();
 }
 
-let debounce: ReturnType<typeof setTimeout> | undefined;
+let kwDebounce: ReturnType<typeof setTimeout> | undefined;
+let fullDebounce: ReturnType<typeof setTimeout> | undefined;
 export function setSearch(q: string): void {
   filters.q = q;
-  clearTimeout(debounce);
-  debounce = setTimeout(loadPapers, 200);
+  clearTimeout(kwDebounce);
+  clearTimeout(fullDebounce);
+  if (!q.trim()) {
+    void loadPapers();
+    return;
+  }
+  // Fast keyword-only pass while typing; the full (semantic) pass once settled.
+  if (searchOpts.keyword) {
+    kwDebounce = setTimeout(() => void loadPapers({ keywordOnly: true }), 150);
+  }
+  if (searchOpts.semantic && !semanticBlocked()) {
+    fullDebounce = setTimeout(() => void loadPapers(), 600);
+  } else if (!searchOpts.keyword) {
+    fullDebounce = setTimeout(() => void loadPapers(), 600);
+  }
 }
 
 export function openTab(p: PaperSummary): void {

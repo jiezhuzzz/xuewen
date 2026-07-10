@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PaperSummary } from '../lib/types';
-  import { openTab, viewer } from '../lib/state.svelte';
+  import { openTab, searchMeta, viewer } from '../lib/state.svelte';
   import StatusPill from './StatusPill.svelte';
 
   let { paper }: { paper: PaperSummary } = $props();
@@ -24,6 +24,18 @@
   </div>
   {#if authors}
     <div class="mt-0.5 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">{authors}</div>
+  {/if}
+  {#if searchMeta.byId[paper.id]}
+    {@const m = searchMeta.byId[paper.id]}
+    <div class="mt-1 text-xs text-slate-600 dark:text-slate-300">
+      <span class="mr-1 rounded bg-slate-100 px-1 py-px text-[10px] uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+        {m.field}{#if m.page != null}&nbsp;p.{m.page}{/if}
+      </span>
+      <!-- Server contract: snippet text is HTML-escaped; only <mark> tags. -->
+      <span class="[&_mark]:rounded [&_mark]:bg-amber-200 [&_mark]:px-0.5 dark:[&_mark]:bg-amber-500/40">
+        {@html m.snippet}
+      </span>
+    </div>
   {/if}
   <div class="mt-1.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
     {#if paper.year}<span>{paper.year}</span>{/if}

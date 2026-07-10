@@ -9,13 +9,23 @@
   import Sidebar from './components/Sidebar.svelte';
   import TabBar from './components/TabBar.svelte';
   import TopBar from './components/TopBar.svelte';
-  import { identifyState, initTheme, loadPapers, loadProjects, loadStats, ui, viewer } from './lib/state.svelte';
+  import {
+    identifyState,
+    initTheme,
+    loadPapers,
+    loadProjects,
+    loadSearchStatus,
+    loadStats,
+    ui,
+    viewer,
+  } from './lib/state.svelte';
 
   onMount(() => {
     initTheme();
     loadStats();
     loadProjects();
     loadPapers();
+    loadSearchStatus();
   });
 </script>
 
