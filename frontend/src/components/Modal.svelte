@@ -22,12 +22,13 @@
 
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      // The dialog owns Esc — global shortcuts (zen exit) must not also fire.
+      // Close on Esc. stopPropagation shields DOM-level handlers; the global
+      // shortcut handler independently ignores keys while a modal is open.
       e.stopPropagation();
       onclose();
     } else if (e.key === 'Tab' && panel) {
       const focusables = panel.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        'a[href], button:not([disabled]), input, select, textarea, summary, [tabindex]:not([tabindex="-1"])',
       );
       if (focusables.length === 0) return;
       const first = focusables[0];

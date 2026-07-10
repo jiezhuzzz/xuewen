@@ -82,7 +82,17 @@
   });
 </script>
 
-<Modal title="Import papers" onclose={closeImport}>
+{#snippet importFooter()}
+  <p class="text-xs text-stone-500 dark:text-stone-400">
+    {summary.ingested} ingested, {summary.skipped} skipped, {summary.failed} failed
+  </p>
+{/snippet}
+
+<Modal
+  title="Import papers"
+  onclose={closeImport}
+  footer={importState.items.length ? importFooter : undefined}
+>
   <form
     class="mb-3 flex gap-2"
     onsubmit={(e) => {
@@ -212,11 +222,4 @@
       {/if}
     </div>
   </details>
-  {#snippet footer()}
-    {#if importState.items.length}
-      <p class="text-xs text-stone-500 dark:text-stone-400">
-        {summary.ingested} ingested, {summary.skipped} skipped, {summary.failed} failed
-      </p>
-    {/if}
-  {/snippet}
 </Modal>

@@ -20,7 +20,28 @@
   );
 </script>
 
-<Modal title="Identify paper" onclose={closeIdentify}>
+{#snippet identifyFooter()}
+  {#if dropsIdentifier(identifyState)}
+    <p class="mb-2 text-xs text-yellow-700 dark:text-yellow-400">
+      Applying this match will drop an identifier the paper currently has
+      (DOI/arXiv id not present in the selected record).
+    </p>
+  {/if}
+  <button
+    type="button"
+    onclick={() => void applyIdentify()}
+    disabled={identifyState.busy}
+    class="inline-flex items-center gap-1.5 rounded-lg bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50 dark:bg-amber-600 dark:hover:bg-amber-500"
+  >
+    <Check size={14} /> Apply match
+  </button>
+{/snippet}
+
+<Modal
+  title="Identify paper"
+  onclose={closeIdentify}
+  footer={identifyState.selected || identifyState.direct ? identifyFooter : undefined}
+>
   <form
     class="flex gap-2"
     onsubmit={(e) => {
@@ -82,22 +103,4 @@
       {/each}
     </ul>
   {/if}
-  {#snippet footer()}
-    {#if identifyState.selected || identifyState.direct}
-      {#if dropsIdentifier(identifyState)}
-        <p class="mb-2 text-xs text-yellow-700 dark:text-yellow-400">
-          Applying this match will drop an identifier the paper currently has
-          (DOI/arXiv id not present in the selected record).
-        </p>
-      {/if}
-      <button
-        type="button"
-        onclick={() => void applyIdentify()}
-        disabled={identifyState.busy}
-        class="inline-flex items-center gap-1.5 rounded-lg bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50 dark:bg-amber-600 dark:hover:bg-amber-500"
-      >
-        <Check size={14} /> Apply match
-      </button>
-    {/if}
-  {/snippet}
 </Modal>
