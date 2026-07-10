@@ -34,6 +34,8 @@ spec:
               mountPath: /data
             - name: config
               mountPath: /etc/xuewen
+            - name: tmp
+              mountPath: /tmp   # image has no /tmp; daily TL;DR stages PDFs here
           readinessProbe:
             httpGet: { path: /api/stats, port: http }
             initialDelaySeconds: 3
@@ -54,6 +56,8 @@ spec:
         - name: config
           configMap:
             name: xuewen-config
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
