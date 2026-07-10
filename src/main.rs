@@ -10,6 +10,8 @@ use xuewen::refresh::{self, RefreshTarget};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::http::RetryPolicy;
 use xuewen::resolve::Resolver;
+use xuewen::search::fts::FieldSel;
+use xuewen::search::{indexer, SearchService};
 use xuewen::web;
 
 /// Ask a yes/no question on the terminal; returns true only on an explicit yes.
@@ -32,6 +34,17 @@ fn author_line(authors: &[String]) -> String {
     } else {
         authors.join(", ")
     }
+}
+
+/// Terminal output: drop <mark> tags and undo the snippet's HTML escaping.
+fn strip_snippet_html(s: &str) -> String {
+    s.replace("<mark>", "")
+        .replace("</mark>", "")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
 }
 
 #[derive(Parser)]
@@ -156,6 +169,24 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Search the library from the terminal.
+    Search {
+        query: String,
+        /// Comma-separated fields: title,authors,abstract,body (default all).
+        #[arg(long)]
+        fields: Option<String>,
+        /// Keyword (BM25) engine only.
+        #[arg(long, conflicts_with = "semantic_only")]
+        keyword_only: bool,
+        /// Semantic (embedding) engine only.
+        #[arg(long)]
+        semantic_only: bool,
+    },
+    /// Inspect or rebuild the search indexes.
+    Index {
+        #[command(subcommand)]
+        cmd: IndexCmd,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -196,6 +227,21 @@ enum ProjectCmd {
     Remove { project: String, paper: String },
     /// List the papers in a project.
     Show { project: String },
+}
+
+#[derive(Subcommand)]
+enum IndexCmd {
+    /// Show per-tier indexing counts.
+    Status,
+    /// Drop and re-derive the search indexes from SQLite + PDFs.
+    Rebuild {
+        /// Rebuild only the Tantivy full-text index.
+        #[arg(long, conflicts_with = "vectors_only")]
+        fts_only: bool,
+        /// Rebuild only the Qdrant vectors (recreates the collection).
+        #[arg(long)]
+        vectors_only: bool,
+    },
 }
 
 #[tokio::main]
@@ -301,6 +347,16 @@ async fn main() -> Result<()> {
             }
         }
         Command::Watch => {
+            match SearchService::open(pool.clone(), &cfg.search).await {
+                Ok(s) => {
+                    tokio::spawn(indexer::run(
+                        s,
+                        cfg.library_root.clone(),
+                        std::time::Duration::from_secs(30),
+                    ));
+                }
+                Err(e) => tracing::warn!("search indexing disabled: {e}"),
+            }
             xuewen::watcher::run(&ctx, &cfg.inbox_dir).await?;
         }
         Command::Refresh { id, all } => {
@@ -424,6 +480,20 @@ async fn main() -> Result<()> {
                 ctx,
                 staging_dir: cfg.inbox_dir.join("_uploads"),
             });
+            let search = match SearchService::open(pool.clone(), &cfg.search).await {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!("search disabled: {e}");
+                    None
+                }
+            };
+            if let Some(s) = &search {
+                tokio::spawn(indexer::run(
+                    s.clone(),
+                    cfg.library_root.clone(),
+                    std::time::Duration::from_secs(30),
+                ));
+            }
             web::serve(
                 &host,
                 port,
@@ -431,7 +501,7 @@ async fn main() -> Result<()> {
                 cfg.library_root.clone(),
                 ingest,
                 cfg.proxy.as_ref().map(|p| p.login_url.clone()),
-                None,
+                search,
             )
             .await?;
         }
@@ -597,6 +667,88 @@ async fn main() -> Result<()> {
                 None => print!("{text}"),
             }
         }
+        Command::Search {
+            query,
+            fields,
+            keyword_only,
+            semantic_only,
+        } => {
+            let svc = SearchService::open(pool.clone(), &cfg.search).await?;
+            let req = xuewen::search::SearchRequest {
+                q: query,
+                fields: FieldSel::parse(fields.as_deref()),
+                keyword: !semantic_only,
+                semantic: !keyword_only,
+                status: None,
+                project: None,
+            };
+            let out = svc.search(&req).await?;
+            if let Some(reason) = &out.semantic.reason {
+                if !keyword_only {
+                    eprintln!("note: semantic search unavailable — {reason}");
+                }
+            }
+            if out.results.is_empty() {
+                println!("no matches");
+            }
+            for (i, (p, m)) in out.results.iter().enumerate() {
+                let label = p.cite_key.as_deref().unwrap_or(&p.id);
+                println!(
+                    "{:2}. {}  {}",
+                    i + 1,
+                    label,
+                    p.meta.title.as_deref().unwrap_or("(untitled)")
+                );
+                let loc = match m.page {
+                    Some(pg) => format!("{} p.{pg}", m.field),
+                    None => m.field.clone(),
+                };
+                println!("      [{loc}] {}", strip_snippet_html(&m.snippet));
+            }
+        }
+        Command::Index { cmd } => match cmd {
+            IndexCmd::Status => {
+                let svc = SearchService::open(pool.clone(), &cfg.search).await?;
+                let st = svc.status().await?;
+                println!(
+                    "full-text: {} indexed, {} pending, {} failed",
+                    st.fts.indexed, st.fts.pending, st.fts.failed
+                );
+                println!(
+                    "vectors:   {} indexed, {} pending, {} failed",
+                    st.vectors.indexed, st.vectors.pending, st.vectors.failed
+                );
+                match st.reason {
+                    None => println!("semantic search: available"),
+                    Some(r) => println!("semantic search: unavailable — {r}"),
+                }
+            }
+            IndexCmd::Rebuild {
+                fts_only,
+                vectors_only,
+            } => {
+                let do_fts = !vectors_only;
+                let do_vectors = !fts_only;
+                if do_fts {
+                    // Wipe before opening: SearchService::open detects the
+                    // fresh directory and clears the FTS stamps itself.
+                    let _ = std::fs::remove_dir_all(&cfg.search.index_dir);
+                }
+                let svc = SearchService::open(pool.clone(), &cfg.search).await?;
+                xuewen::search::store::clear_stamps(&pool, do_fts, do_vectors).await?;
+                if do_vectors && svc.embedder.is_some() {
+                    svc.vectors.recreate_collection().await?;
+                }
+                let s = indexer::sweep(&svc, &cfg.library_root).await?;
+                println!(
+                    "rebuild: {} indexed, {} removed, {} failed",
+                    s.indexed, s.deindexed, s.failed
+                );
+                if s.failed > 0 {
+                    anyhow::bail!("some papers failed to index — see the log; re-run to retry");
+                }
+            }
+        },
     }
     Ok(())
 }
