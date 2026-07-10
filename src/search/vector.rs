@@ -174,6 +174,53 @@ impl QdrantStore {
         Ok(hits)
     }
 
+    /// All seq-0 (title+abstract) points as (paper_id, vector), paging
+    /// through the scroll API. Feeds the daily-recommendation profile.
+    pub async fn scroll_summaries(&self) -> Result<Vec<(String, Vec<f32>)>> {
+        let mut out = Vec::new();
+        let mut offset: Option<serde_json::Value> = None;
+        loop {
+            let mut body = json!({
+                "filter": {"must": [{"key": "seq", "match": {"value": 0}}]},
+                "with_payload": true,
+                "with_vector": true,
+                "limit": 256,
+            });
+            if let Some(o) = &offset {
+                body["offset"] = o.clone();
+            }
+            let resp = self
+                .http
+                .post(self.url("/points/scroll"))
+                .json(&body)
+                .send()
+                .await?;
+            if !resp.status().is_success() {
+                bail!("qdrant scroll: {}", resp.status());
+            }
+            let body: serde_json::Value = resp.json().await?;
+            if let Some(points) = body["result"]["points"].as_array() {
+                for p in points {
+                    let Some(paper_id) = p["payload"]["paper_id"].as_str() else {
+                        continue;
+                    };
+                    let Some(vec) = p["vector"].as_array() else { continue };
+                    let v: Vec<f32> =
+                        vec.iter().filter_map(|x| x.as_f64()).map(|x| x as f32).collect();
+                    out.push((paper_id.to_string(), v));
+                }
+            }
+            offset = match &body["result"]["next_page_offset"] {
+                serde_json::Value::Null => None,
+                o => Some(o.clone()),
+            };
+            if offset.is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn delete_paper(&self, paper_id: &str) -> Result<()> {
         let resp = self
             .http
@@ -342,5 +389,50 @@ mod tests {
             })
             .collect();
         store(&server).upsert(&points).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn scroll_summaries_pages_until_offset_is_null() {
+        let server = MockServer::start().await;
+        // Page 2 (has "offset" in the body) — mount FIRST so it wins when it matches.
+        Mock::given(method("POST"))
+            .and(path("/collections/xuewen/points/scroll"))
+            .and(body_partial_json(json!({"offset": "cursor-1"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {
+                    "points": [
+                        {"id": "b", "payload": {"paper_id": "p2", "seq": 0}, "vector": [0.0, 1.0, 0.0, 0.0]}
+                    ],
+                    "next_page_offset": null
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // Page 1: filters seq=0, requests vectors.
+        Mock::given(method("POST"))
+            .and(path("/collections/xuewen/points/scroll"))
+            .and(body_partial_json(json!({
+                "filter": {"must": [{"key": "seq", "match": {"value": 0}}]},
+                "with_vector": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {
+                    "points": [
+                        {"id": "a", "payload": {"paper_id": "p1", "seq": 0}, "vector": [1.0, 0.0, 0.0, 0.0]}
+                    ],
+                    "next_page_offset": "cursor-1"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let s = store(&server);
+        let out = s.scroll_summaries().await.unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, "p1");
+        assert_eq!(out[0].1, vec![1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(out[1].0, "p2");
     }
 }
