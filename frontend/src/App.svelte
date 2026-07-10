@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { Spring } from 'svelte/motion';
+  import { fly } from 'svelte/transition';
   import DetailView from './components/DetailView.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
@@ -10,6 +12,7 @@
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
+  import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import {
     identifyState,
     initTheme,
@@ -28,12 +31,44 @@
     loadPapers();
     loadSearchStatus();
   });
+
+  const PANE_W = 304;
+  const paneW = new Spring(PANE_W, SPRINGS.pane);
+  let peek = $state(false);
+  const paneHidden = $derived(!ui.sidebarOpen || ui.zen);
+  $effect(() => {
+    const target = paneHidden ? 0 : PANE_W;
+    if (import.meta.env.MODE === 'test' || prefersReducedMotion()) {
+      paneW.set(target, { instant: true });
+    } else {
+      paneW.target = target;
+    }
+  });
+  $effect(() => {
+    if (!paneHidden) peek = false;
+  });
 </script>
 
 <div class="flex h-full flex-col bg-paper text-ink dark:bg-night dark:text-stone-100">
   <TopBar />
-  <div class="flex min-h-0 flex-1">
-    {#if ui.sidebarOpen}<LibraryPane />{/if}
+  <div class="relative flex min-h-0 flex-1">
+    <div class="relative min-h-0 shrink-0 overflow-hidden" style={`width:${paneW.current}px`}>
+      <div class="absolute inset-y-0 left-0 w-[304px]"><LibraryPane /></div>
+    </div>
+    {#if paneHidden}
+      <!-- Edge peek: hover the left edge to overlay the list without expanding it. -->
+      <div class="absolute inset-y-0 left-0 z-30 w-2" onmouseenter={() => (peek = true)} role="presentation"></div>
+      {#if peek}
+        <div
+          transition:fly={{ x: -24, duration: dur(DUR.base) }}
+          onmouseleave={() => (peek = false)}
+          role="presentation"
+          class="absolute inset-y-0 left-0 z-40 shadow-2xl"
+        >
+          <LibraryPane />
+        </div>
+      {/if}
+    {/if}
     <main class="flex min-h-0 min-w-0 flex-1 flex-col">
       <TabBar />
       <div class="flex min-h-0 flex-1">

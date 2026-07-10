@@ -1,37 +1,46 @@
 <script lang="ts">
-  import { Library, Monitor, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
-  import { openImport, stats, theme, toggleSidebar, toggleTheme } from '../lib/state.svelte';
+  import { Monitor, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
+  import { openImport, stats, theme, toggleSidebar, toggleTheme, ui } from '../lib/state.svelte';
+  import SealMark from './SealMark.svelte';
 
   const themeLabel = $derived(
     theme.mode === 'light' ? 'Light' : theme.mode === 'dark' ? 'Dark' : 'System',
   );
 </script>
 
-<header class="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
+<header class="flex h-14 shrink-0 items-center justify-between border-b border-stone-200 bg-paper px-4 dark:border-stone-800 dark:bg-night">
   <div class="flex items-center gap-2">
     <button
       type="button"
       onclick={toggleSidebar}
-      aria-label="Toggle sidebar"
-      class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+      aria-label="Toggle list pane"
+      title="Toggle list pane ([)"
+      class="rounded-lg p-2 text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
     >
       <PanelLeft size={18} />
     </button>
-    <Library size={20} class="text-indigo-500" />
-    <span class="text-lg font-semibold tracking-tight">Xuewen</span>
+    <SealMark size={22} />
+    <span class="font-serif text-lg font-semibold tracking-tight">Xuewen</span>
   </div>
-  <div class="flex items-center gap-4">
+  <div class="flex items-center gap-3">
     {#if stats.value}
-      <div class="hidden items-center gap-3 text-xs text-slate-500 sm:flex dark:text-slate-400">
+      <div class="hidden items-center gap-3 text-xs text-stone-500 sm:flex dark:text-stone-400">
         <span>{stats.value.total} papers</span>
-        <span class="text-emerald-600 dark:text-emerald-400">{stats.value.resolved} resolved</span>
-        <span class="text-amber-600 dark:text-amber-400">{stats.value.needs_review} to review</span>
+        <span class="text-lime-700 dark:text-lime-400">{stats.value.resolved} resolved</span>
+        <span class="text-yellow-700 dark:text-yellow-400">{stats.value.needs_review} to review</span>
       </div>
     {/if}
     <button
       type="button"
+      onclick={() => (ui.paletteOpen = true)}
+      class="hidden items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-xs text-stone-400 hover:bg-parchment sm:inline-flex dark:border-stone-700 dark:hover:bg-stone-800"
+    >
+      <kbd>⌘K</kbd>
+    </button>
+    <button
+      type="button"
       onclick={openImport}
-      class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+      class="inline-flex items-center gap-1.5 rounded-lg bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 dark:bg-amber-600 dark:hover:bg-amber-500"
     >
       <Upload size={16} /> Import
     </button>
@@ -40,7 +49,7 @@
       onclick={toggleTheme}
       aria-label={`Theme: ${themeLabel} (click to change)`}
       title={`Theme: ${themeLabel}`}
-      class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+      class="rounded-lg p-2 text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
     >
       {#if theme.mode === 'light'}<Sun size={18} />{:else if theme.mode === 'dark'}<Moon size={18} />{:else}<Monitor size={18} />{/if}
     </button>
