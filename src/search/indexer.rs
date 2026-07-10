@@ -303,6 +303,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn extraction_failure_on_new_paper_records_error_and_backs_off() {
+        let f = fixture(None).await;
+        // A paper row whose PDF was never written (missing/corrupt file):
+        // extraction fails before replace_chunks ever creates a search_index
+        // row, so record_error must upsert one rather than no-op.
+        let p = Paper {
+            id: "p1".into(),
+            content_hash: "hash-p1".into(),
+            rel_path: "does-not-exist.pdf".into(),
+            cite_key: None,
+            added_at: "2026-07-09T00:00:00Z".into(),
+            deleted_at: None,
+            meta: PaperMeta {
+                title: Some("Fuzzing Firmware".into()),
+                abstract_text: Some("An abstract.".into()),
+                authors: Authors(vec!["Ada Lovelace".into()]),
+                venue: None,
+                year: Some(2026),
+                doi: None,
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
+                status: PaperStatus::Resolved,
+            },
+        };
+        crate::db::insert_paper(&f.svc.pool, &p).await.unwrap();
+
+        let s = sweep_in(&f).await.unwrap();
+        assert_eq!(s.failed, 1);
+        let rows = store::all_index_rows(&f.svc.pool).await.unwrap();
+        assert_eq!(rows.len(), 1, "record_error must create the missing row");
+        assert_eq!(rows[0].attempts, 1);
+        assert!(rows[0].last_error.is_some());
+        assert_eq!(f.svc.status().await.unwrap().fts.failed, 1);
+
+        // Second sweep right away: backoff suppresses the retry.
+        let s = sweep_in(&f).await.unwrap();
+        assert_eq!(s.indexed + s.deindexed + s.failed, 0, "backoff should suppress an immediate retry");
+    }
+
+    #[tokio::test]
     async fn trashed_paper_is_deindexed_everywhere() {
         let f = fixture(None).await;
         insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "body words").await;

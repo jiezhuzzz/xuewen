@@ -134,14 +134,23 @@ pub async fn mark_vectors_done(pool: &SqlitePool, paper_id: &str, model: &str) -
     Ok(())
 }
 
+/// Record an indexing failure, upserting the row if one doesn't exist yet
+/// (e.g. a brand-new paper whose PDF extraction fails before `replace_chunks`
+/// ever runs). The placeholder empty hashes never match a real paper's
+/// content/meta hash, so the planner still schedules the work once backoff
+/// elapses.
 pub async fn record_error(pool: &SqlitePool, paper_id: &str, msg: &str) -> Result<()> {
     sqlx::query(
-        "UPDATE search_index SET last_error = ?, attempts = attempts + 1, last_attempt_at = ? \
-         WHERE paper_id = ?",
+        "INSERT INTO search_index (paper_id, content_hash, meta_hash, last_error, attempts, last_attempt_at) \
+         VALUES (?, '', '', ?, 1, ?) \
+         ON CONFLICT(paper_id) DO UPDATE SET \
+           last_error = excluded.last_error, \
+           attempts = search_index.attempts + 1, \
+           last_attempt_at = excluded.last_attempt_at",
     )
+    .bind(paper_id)
     .bind(msg)
     .bind(chrono::Utc::now().to_rfc3339())
-    .bind(paper_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -312,6 +321,30 @@ mod tests {
         let row = &all_index_rows(&pool).await.unwrap()[0];
         assert_eq!(row.attempts, 0);
         assert!(row.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_error_without_prior_row_creates_one() {
+        let pool = pool().await;
+        let p = paper("p1", "h1", "T");
+        crate::db::insert_paper(&pool, &p).await.unwrap();
+        // No replace_chunks call: no search_index row exists yet (mirrors a
+        // brand-new paper whose PDF extraction fails before chunking).
+        assert!(all_index_rows(&pool).await.unwrap().is_empty());
+
+        record_error(&pool, "p1", "extraction failed").await.unwrap();
+        let rows = all_index_rows(&pool).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].attempts, 1);
+        assert_eq!(rows[0].last_error.as_deref(), Some("extraction failed"));
+        assert_eq!(rows[0].content_hash, "");
+        assert_eq!(rows[0].meta_hash, "");
+
+        record_error(&pool, "p1", "extraction failed again").await.unwrap();
+        let rows = all_index_rows(&pool).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].attempts, 2);
+        assert_eq!(rows[0].last_error.as_deref(), Some("extraction failed again"));
     }
 
     #[tokio::test]
