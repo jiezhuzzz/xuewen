@@ -175,3 +175,43 @@ pub struct SearchStatus {
     pub semantic_available: bool,
     pub reason: Option<String>,
 }
+
+/// One paper in the daily-recommendations response (Glance widget input).
+#[derive(Serialize)]
+pub struct DailyPaperDto {
+    pub rank: i64,
+    pub arxiv_id: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    #[serde(rename = "abstract")]
+    pub abstract_text: String,
+    pub categories: Vec<String>,
+    pub score: f64,
+    pub tldr: Option<String>,
+    pub abs_url: String,
+    pub pdf_url: String,
+}
+
+impl From<&crate::daily::store::DailyPaper> for DailyPaperDto {
+    fn from(p: &crate::daily::store::DailyPaper) -> Self {
+        Self {
+            rank: p.rank,
+            arxiv_id: p.arxiv_id.clone(),
+            title: p.title.clone(),
+            authors: p.authors.clone(),
+            abstract_text: p.abstract_text.clone(),
+            categories: p.categories.clone(),
+            score: p.score,
+            tldr: p.tldr.clone(),
+            abs_url: p.abs_url.clone(),
+            pdf_url: p.pdf_url.clone(),
+        }
+    }
+}
+
+/// `date` is `None` until the first non-empty batch exists.
+#[derive(Serialize)]
+pub struct DailyResponse {
+    pub date: Option<String>,
+    pub papers: Vec<DailyPaperDto>,
+}

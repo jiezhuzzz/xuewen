@@ -34,6 +34,9 @@ pub struct AppState {
     /// Present when a search index/service was opened (serve). `None` in
     /// read-only test routers -> /api/search answers 503.
     pub search: Option<Arc<crate::search::SearchService>>,
+    /// Present when daily arXiv recommendations are configured (`serve`).
+    /// `None` -> /api/daily answers 503.
+    pub daily: Option<Arc<crate::daily::DailyService>>,
 }
 
 impl AppState {
@@ -53,6 +56,7 @@ pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
         ingest: None,
         proxy_login_url: None,
         search: None,
+        daily: None,
     })
 }
 
@@ -68,6 +72,7 @@ pub fn build_router_with_ingest(
         ingest: Some(ingest),
         proxy_login_url: None,
         search: None,
+        daily: None,
     })
 }
 
@@ -84,6 +89,7 @@ pub fn build_router_with_ingest_proxy(
         ingest: Some(ingest),
         proxy_login_url,
         search: None,
+        daily: None,
     })
 }
 
@@ -99,6 +105,23 @@ pub fn build_router_with_search(
         ingest: None,
         proxy_login_url: None,
         search: Some(search),
+        daily: None,
+    })
+}
+
+/// Read-only router plus a daily-recommendations service. Used by tests.
+pub fn build_router_with_daily(
+    pool: SqlitePool,
+    library_root: PathBuf,
+    daily: Arc<crate::daily::DailyService>,
+) -> Router {
+    router_with(AppState {
+        pool,
+        library_root,
+        ingest: None,
+        proxy_login_url: None,
+        search: None,
+        daily: Some(daily),
     })
 }
 
@@ -143,6 +166,8 @@ fn router_with(state: AppState) -> Router {
         )
         .route("/api/search", get(api::search_papers))
         .route("/api/search/status", get(api::search_status))
+        .route("/api/daily", get(api::daily_papers))
+        .route("/api/daily/run", axum::routing::post(api::run_daily))
         .fallback(assets::static_handler)
         .with_state(state)
 }
@@ -156,6 +181,7 @@ pub async fn serve(
     ingest: Arc<Ingest>,
     proxy_login_url: Option<String>,
     search: Option<Arc<crate::search::SearchService>>,
+    daily: Option<Arc<crate::daily::DailyService>>,
 ) -> Result<()> {
     let app = router_with(AppState {
         pool,
@@ -163,6 +189,7 @@ pub async fn serve(
         ingest: Some(ingest),
         proxy_login_url,
         search,
+        daily,
     });
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;

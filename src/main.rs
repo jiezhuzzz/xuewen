@@ -502,6 +502,7 @@ async fn main() -> Result<()> {
                 ingest,
                 cfg.proxy.as_ref().map(|p| p.login_url.clone()),
                 search,
+                None,
             )
             .await?;
         }

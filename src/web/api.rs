@@ -9,8 +9,8 @@ use tower_http::services::ServeFile;
 use uuid::Uuid;
 
 use super::dto::{
-    Candidate, PaperDetail, PaperSummary, SearchMatch, SearchResponse, SearchResult,
-    SearchStatus, SemanticAvailability, Stats, TierCounts,
+    Candidate, DailyPaperDto, DailyResponse, PaperDetail, PaperSummary, SearchMatch,
+    SearchResponse, SearchResult, SearchStatus, SemanticAvailability, Stats, TierCounts,
 };
 use super::AppState;
 use crate::db;
@@ -847,4 +847,52 @@ fn multipart_error(e: MultipartError) -> Response {
         })),
     )
         .into_response()
+}
+
+/// GET /api/daily — the latest non-empty daily batch for the Glance widget.
+pub async fn daily_papers(State(app): State<AppState>) -> Response {
+    if app.daily.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "daily papers not configured"})),
+        )
+            .into_response();
+    }
+    match crate::daily::store::latest_batch(&app.pool).await {
+        Ok(Some((date, papers))) => Json(DailyResponse {
+            date: Some(date),
+            papers: papers.iter().map(DailyPaperDto::from).collect(),
+        })
+        .into_response(),
+        Ok(None) => Json(DailyResponse { date: None, papers: Vec::new() }).into_response(),
+        Err(e) => {
+            tracing::error!("daily papers: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// POST /api/daily/run — manual trigger; 202 started, 409 already running.
+pub async fn run_daily(State(app): State<AppState>) -> Response {
+    let Some(svc) = &app.daily else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "daily papers not configured"})),
+        )
+            .into_response();
+    };
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    if svc.spawn_run(today) {
+        (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({"status": "started"})),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "a daily run is already in flight"})),
+        )
+            .into_response()
+    }
 }
