@@ -3,7 +3,7 @@
   import { viewer } from '../lib/state.svelte';
 </script>
 
-<div class="relative min-h-0 flex-1 bg-slate-100 dark:bg-slate-950">
+<div class="relative min-h-0 flex-1 bg-stone-100 dark:bg-stone-950">
   {#each viewer.tabs as tab (tab.id)}
     <iframe
       title={tab.title}

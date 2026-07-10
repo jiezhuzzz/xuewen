@@ -121,6 +121,7 @@
         aria-expanded="true"
         aria-controls="palette-list"
         aria-label="Search papers and actions"
+        aria-activedescendant={items[active] ? `palette-opt-${active}` : undefined}
         placeholder="Type a paper title or a command…"
         class="w-full bg-transparent py-3 text-sm text-ink outline-none dark:text-stone-100"
       />
@@ -132,9 +133,10 @@
         </li>
       {/if}
       {#each items as item, i (item.id)}
-        <li role="option" aria-selected={i === active}>
+        <li id={`palette-opt-${i}`} role="option" aria-selected={i === active}>
           <button
             type="button"
+            tabindex="-1"
             onclick={() => run(item)}
             onmouseenter={() => (active = i)}
             class={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${

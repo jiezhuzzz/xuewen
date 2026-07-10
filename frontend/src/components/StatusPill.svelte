@@ -6,8 +6,8 @@
 <span
   class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
     resolved
-      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400'
-      : 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'
+      ? 'bg-lime-100 text-lime-800 dark:bg-lime-500/15 dark:text-lime-300'
+      : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-300'
   }`}
 >
   {resolved ? 'resolved' : 'needs review'}

@@ -17,6 +17,7 @@ import {
   searchPapers,
   updateProject,
 } from './api';
+import { dur } from './motion';
 import type {
   BibFormat,
   Candidate,
@@ -367,7 +368,14 @@ const THEME_CYCLE: ThemeMode[] = ['light', 'dark', 'system'];
 export function toggleTheme(): void {
   theme.mode = THEME_CYCLE[(THEME_CYCLE.indexOf(theme.mode) + 1) % THEME_CYCLE.length];
   localStorage.setItem('xuewen-theme', theme.mode);
-  applyTheme();
+  // Crossfade the whole page where the View Transitions API exists; fall
+  // back to an instant swap (also under reduced motion / tests via dur).
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown };
+  if (doc.startViewTransition && dur(1) > 0) {
+    doc.startViewTransition(() => applyTheme());
+  } else {
+    applyTheme();
+  }
 }
 
 export interface ImportItem {
