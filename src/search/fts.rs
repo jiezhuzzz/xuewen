@@ -334,6 +334,19 @@ mod tests {
     }
 
     #[test]
+    fn second_writer_on_same_dir_is_refused() {
+        // Tantivy's writer lock is per-directory and enforced even within one
+        // process, so this stands in for a `rebuild` run while `serve` is
+        // still holding the lock on the same index dir.
+        let dir = tempfile::tempdir().unwrap();
+        let (idx1, _created) = FtsIndex::open(dir.path()).unwrap();
+        idx1.upsert(&doc("p1", "A Title", "body")).unwrap(); // forces writer creation, lock held
+
+        let (idx2, _created2) = FtsIndex::open(dir.path()).unwrap(); // open is lazy, succeeds
+        assert!(idx2.delete("x").is_err(), "second writer on a locked dir must fail");
+    }
+
+    #[test]
     fn zero_limit_returns_empty_instead_of_panicking() {
         let (idx, _dir) = open_tmp();
         idx.upsert(&doc("p1", "AntiFuzz: Impeding Fuzzing Audits", "fuzzing resistance")).unwrap();

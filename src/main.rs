@@ -233,7 +233,7 @@ enum ProjectCmd {
 enum IndexCmd {
     /// Show per-tier indexing counts.
     Status,
-    /// Drop and re-derive the search indexes from SQLite + PDFs.
+    /// Drop and re-derive the search indexes from SQLite + PDFs (stop `xuewen serve` first).
     Rebuild {
         /// Rebuild only the Tantivy full-text index.
         #[arg(long, conflicts_with = "vectors_only")]
@@ -730,9 +730,28 @@ async fn main() -> Result<()> {
                 let do_fts = !vectors_only;
                 let do_vectors = !fts_only;
                 if do_fts {
+                    // Refuse to wipe an index another process is writing
+                    // (tantivy's writer lock, e.g. a running `xuewen serve`).
+                    if cfg.search.index_dir.join("meta.json").exists() {
+                        let (probe, _) = xuewen::search::fts::FtsIndex::open(&cfg.search.index_dir)?;
+                        probe.delete("__rebuild_lock_probe__").map_err(|e| {
+                            anyhow::anyhow!(
+                                "search index at {} is in use (is `xuewen serve` running?) — stop it and retry ({e})",
+                                cfg.search.index_dir.display()
+                            )
+                        })?;
+                        drop(probe);
+                    }
                     // Wipe before opening: SearchService::open detects the
                     // fresh directory and clears the FTS stamps itself.
-                    let _ = std::fs::remove_dir_all(&cfg.search.index_dir);
+                    match std::fs::remove_dir_all(&cfg.search.index_dir) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => anyhow::bail!(
+                            "could not clear search index dir {}: {e}",
+                            cfg.search.index_dir.display()
+                        ),
+                    }
                 }
                 let svc = SearchService::open(pool.clone(), &cfg.search).await?;
                 xuewen::search::store::clear_stamps(&pool, do_fts, do_vectors).await?;
