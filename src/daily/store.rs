@@ -19,6 +19,10 @@ pub struct DailyPaper {
     pub tldr: Option<String>,
     pub abs_url: String,
     pub pdf_url: String,
+    /// Structured five-part summary; `None` for old rows or failed generation.
+    pub summary: Option<super::tldr::Summary>,
+    /// First GitHub repository URL found in the paper text.
+    pub code_url: Option<String>,
 }
 
 /// Outcome row for one day's run. Columns match `daily_runs`.
@@ -83,8 +87,8 @@ pub async fn replace_batch(
         sqlx::query(
             "INSERT INTO daily_papers
                (batch_date, rank, arxiv_id, title, authors, abstract,
-                categories, score, tldr, abs_url, pdf_url)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                categories, score, tldr, abs_url, pdf_url, summary, code_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(batch_date)
         .bind(p.rank)
@@ -97,6 +101,8 @@ pub async fn replace_batch(
         .bind(&p.tldr)
         .bind(&p.abs_url)
         .bind(&p.pdf_url)
+        .bind(p.summary.as_ref().map(serde_json::to_string).transpose()?)
+        .bind(&p.code_url)
         .execute(&mut *tx)
         .await?;
     }
@@ -123,10 +129,12 @@ pub async fn latest_batch(pool: &SqlitePool) -> Result<Option<(String, Vec<Daily
         Option<String>,
         String,
         String,
+        Option<String>,
+        Option<String>,
     );
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT batch_date, rank, arxiv_id, title, authors, abstract,
-                categories, score, tldr, abs_url, pdf_url
+                categories, score, tldr, abs_url, pdf_url, summary, code_url
          FROM daily_papers WHERE batch_date = ? ORDER BY rank",
     )
     .bind(&date)
@@ -135,6 +143,7 @@ pub async fn latest_batch(pool: &SqlitePool) -> Result<Option<(String, Vec<Daily
     let papers = rows
         .into_iter()
         .map(|r| -> Result<DailyPaper> {
+            let arxiv_id = r.2.clone();
             Ok(DailyPaper {
                 batch_date: r.0,
                 rank: r.1,
@@ -147,6 +156,14 @@ pub async fn latest_batch(pool: &SqlitePool) -> Result<Option<(String, Vec<Daily
                 tldr: r.8,
                 abs_url: r.9,
                 pdf_url: r.10,
+                summary: r.11.as_deref().and_then(|s| match serde_json::from_str(s) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("unparsable stored summary for {}: {e}", arxiv_id);
+                        None
+                    }
+                }),
+                code_url: r.12,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -206,6 +223,8 @@ mod tests {
             tldr: Some("Short.".into()),
             abs_url: format!("https://arxiv.org/abs/{id}"),
             pdf_url: format!("https://arxiv.org/pdf/{id}"),
+            summary: None,
+            code_url: None,
         }
     }
 
@@ -371,5 +390,30 @@ mod tests {
         let ids = library_arxiv_ids(&pool).await.unwrap();
         assert!(ids.contains("2401.00003"));
         assert!(!ids.contains("2401.00003v5"));
+    }
+
+    #[tokio::test]
+    async fn summary_and_code_url_roundtrip() {
+        let pool = pool().await;
+        let mut p = paper("2026-07-10", 1, "2507.00001");
+        p.summary = Some(crate::daily::tldr::Summary {
+            tldr: "One line.".into(),
+            problem: "Gap.".into(),
+            approach: "Idea.".into(),
+            results: "+4.2 on X.".into(),
+            limitations: "Small data.".into(),
+        });
+        p.code_url = Some("https://github.com/acme/widget".into());
+        replace_batch(&pool, "2026-07-10", std::slice::from_ref(&p)).await.unwrap();
+        let (_, papers) = latest_batch(&pool).await.unwrap().unwrap();
+        assert_eq!(papers[0].summary, p.summary);
+        assert_eq!(papers[0].code_url, p.code_url);
+
+        // Unset stays None on read (same path old NULL rows take).
+        let bare = paper("2026-07-11", 1, "2507.00002");
+        replace_batch(&pool, "2026-07-11", &[bare]).await.unwrap();
+        let (_, papers) = latest_batch(&pool).await.unwrap().unwrap();
+        assert!(papers[0].summary.is_none());
+        assert!(papers[0].code_url.is_none());
     }
 }

@@ -107,6 +107,8 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
             tldr,
             abs_url: format!("{ARXIV_ABS_BASE}/{}", c.arxiv_id),
             pdf_url: format!("{ARXIV_PDF_BASE}/{}", c.arxiv_id),
+            summary: None,
+            code_url: None,
         });
     }
     store::replace_batch(&svc.pool, batch_date, &rows).await?;

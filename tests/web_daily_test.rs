@@ -59,6 +59,8 @@ fn batch_paper(date: &str, rank: i64, id: &str, tldr: Option<&str>) -> store::Da
         tldr: tldr.map(String::from),
         abs_url: format!("https://arxiv.org/abs/{id}"),
         pdf_url: format!("https://arxiv.org/pdf/{id}"),
+        summary: None,
+        code_url: None,
     }
 }
 
