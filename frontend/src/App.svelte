@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import EmptyState from './components/EmptyState.svelte';
+  import DetailView from './components/DetailView.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
@@ -30,16 +30,16 @@
   });
 </script>
 
-<div class="flex h-full flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+<div class="flex h-full flex-col bg-paper text-ink dark:bg-night dark:text-stone-100">
   <TopBar />
   <div class="flex min-h-0 flex-1">
     {#if ui.sidebarOpen}<LibraryPane />{/if}
-    <main class="flex min-h-0 flex-1 flex-col">
-      {#if viewer.tabs.length === 0}
-        <EmptyState />
-      {:else}
-        <TabBar />
-        <div class="flex min-h-0 flex-1">
+    <main class="flex min-h-0 min-w-0 flex-1 flex-col">
+      <TabBar />
+      <div class="flex min-h-0 flex-1">
+        <!-- PdfViewer stays mounted while home is active so iframe scroll
+             positions survive a trip to the Library. -->
+        <div class={`min-h-0 min-w-0 flex-1 ${viewer.activeId === null ? 'hidden' : 'flex'}`}>
           <PdfViewer />
           {#if viewer.infoOpen && viewer.activeId}
             {#key viewer.activeId}
@@ -47,7 +47,10 @@
             {/key}
           {/if}
         </div>
-      {/if}
+        {#if viewer.activeId === null}
+          <DetailView />
+        {/if}
+      </div>
     </main>
   </div>
 </div>
