@@ -1,9 +1,9 @@
-/// Page-aware chunking of `pdftotext` output for indexing and embedding.
-///
-/// `seq 0` is a synthetic title+abstract chunk (strong paper-level semantic
-/// target); body chunks are packed per page (never spanning a page, so
-/// snippets can cite an exact page) to ~TARGET_CHARS with OVERLAP_CHARS of
-/// carry-over between adjacent chunks.
+//! Page-aware chunking of `pdftotext` output for indexing and embedding.
+//!
+//! `seq 0` is a synthetic title+abstract chunk (strong paper-level semantic
+//! target); body chunks are packed per page (never spanning a page, so
+//! snippets can cite an exact page) to ~TARGET_CHARS with OVERLAP_CHARS of
+//! carry-over between adjacent chunks.
 
 pub const TARGET_CHARS: usize = 1200;
 pub const OVERLAP_CHARS: usize = 200;
