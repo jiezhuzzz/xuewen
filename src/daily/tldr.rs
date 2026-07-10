@@ -36,7 +36,10 @@ impl ChatClient {
             return None;
         };
         Some(Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(120))
+                .build()
+                .expect("building chat HTTP client"),
             base_url: cfg.base_url.trim_end_matches('/').to_string(),
             model: cfg.model.clone(),
             api_key: Some(key),

@@ -33,7 +33,7 @@ fn collapse_ws(s: &str) -> String {
 }
 
 /// "2507.01234v2" -> "2507.01234"; ids without a version pass through.
-fn strip_version(id: &str) -> String {
+pub(crate) fn strip_version(id: &str) -> String {
     match id.rfind('v') {
         Some(i) if i + 1 < id.len() && id[i + 1..].chars().all(|c| c.is_ascii_digit()) => {
             id[..i].to_string()

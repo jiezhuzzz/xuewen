@@ -168,13 +168,17 @@ pub async fn prune(pool: &SqlitePool, cutoff: &str) -> Result<()> {
 }
 
 /// Every arXiv id in the library, INCLUDING trashed papers: a deleted
-/// paper was a deliberate removal, so we never recommend it again.
+/// paper was a deliberate removal, so we never recommend it again. Ids are
+/// normalized to versionless form so they compare equal to feed candidates.
 pub async fn library_arxiv_ids(pool: &SqlitePool) -> Result<HashSet<String>> {
     let rows: Vec<(String,)> =
         sqlx::query_as("SELECT arxiv_id FROM papers WHERE arxiv_id IS NOT NULL")
             .fetch_all(pool)
             .await?;
-    Ok(rows.into_iter().map(|(id,)| id).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(id,)| super::feed::strip_version(&id))
+        .collect())
 }
 
 #[cfg(test)]
@@ -336,5 +340,36 @@ mod tests {
         assert!(ids.contains("2401.00001"));
         assert!(ids.contains("2401.00002"), "trashed papers still dedupe");
         assert_eq!(ids.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn library_arxiv_ids_strips_versions() {
+        let pool = pool().await;
+        let p = crate::models::Paper {
+            id: "p1".into(),
+            content_hash: "h1".into(),
+            rel_path: "p1.pdf".into(),
+            cite_key: None,
+            added_at: "2026-07-01T00:00:00Z".into(),
+            deleted_at: None,
+            meta: crate::models::PaperMeta {
+                title: Some("T".into()),
+                abstract_text: None,
+                authors: crate::models::Authors(vec![]),
+                venue: None,
+                year: None,
+                doi: None,
+                arxiv_id: Some("2401.00003v5".into()),
+                dblp_key: None,
+                url: None,
+                source: None,
+                status: crate::models::PaperStatus::Resolved,
+            },
+        };
+        crate::db::insert_paper(&pool, &p).await.unwrap();
+
+        let ids = library_arxiv_ids(&pool).await.unwrap();
+        assert!(ids.contains("2401.00003"));
+        assert!(!ids.contains("2401.00003v5"));
     }
 }

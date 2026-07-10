@@ -64,7 +64,12 @@ impl DailyService {
         Ok(Some(Arc::new(Self {
             cfg: daily.clone(),
             pool,
-            http: HttpClient::new(reqwest::Client::new(), RetryPolicy::production()),
+            http: HttpClient::new(
+                reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()?,
+                RetryPolicy::production(),
+            ),
             plain_http: reqwest::Client::new(),
             embedder,
             vectors,

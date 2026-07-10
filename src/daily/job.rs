@@ -126,13 +126,21 @@ async fn fetch_pdf_text(svc: &DailyService, arxiv_id: &str) -> Result<String> {
         bail!("PDF too large: {} bytes", bytes.len());
     }
     let path = std::env::temp_dir().join(format!("xuewen-daily-{}.pdf", uuid::Uuid::now_v7()));
-    let result = (|| -> Result<String> {
-        std::fs::write(&path, &bytes)?;
-        let text = crate::pdf::extract_text(&path, TLDR_PDF_PAGES)?;
-        Ok(text.chars().take(tldr::FULL_TEXT_CAP).collect())
-    })();
-    let _ = std::fs::remove_file(&path);
-    result
+    // The image may lack /tmp entirely; pdftotext is a blocking subprocess —
+    // both belong on the blocking pool, not an async worker.
+    tokio::task::spawn_blocking(move || -> Result<String> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let result = (|| -> Result<String> {
+            std::fs::write(&path, &bytes)?;
+            let text = crate::pdf::extract_text(&path, TLDR_PDF_PAGES)?;
+            Ok(text.chars().take(tldr::FULL_TEXT_CAP).collect())
+        })();
+        let _ = std::fs::remove_file(&path);
+        result
+    })
+    .await?
 }
 
 async fn prune_old(svc: &DailyService, batch_date: &str) -> Result<()> {
