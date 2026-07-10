@@ -28,7 +28,7 @@ data:
     #max_papers         = 20        # ranked papers kept per day
     #run_at             = "09:00"   # daily run, UTC wall time
     #retention_days     = 14
-    #
+
     #[daily.llm]                    # chat-completions API for TL;DRs
     #base_url    = "https://api.openai.com/v1"
     #model       = "gpt-4o-mini"

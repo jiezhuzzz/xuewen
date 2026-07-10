@@ -45,7 +45,7 @@ Add a `custom-api` widget to your Glance dashboard's `glance.yml`:
 - type: custom-api
   title: Daily arXiv
   cache: 1h
-  url: http://xuewen.<namespace>.svc.cluster.local/api/daily
+  url: http://xuewen.<namespace>.svc.cluster.local:8080/api/daily
   template: |
     {{ if .JSON.Array "papers" }}
     <p class="size-h6 color-subdue">{{ .JSON.String "date" }}</p>
@@ -66,9 +66,14 @@ Add a `custom-api` widget to your Glance dashboard's `glance.yml`:
     {{ end }}
 ```
 
+The template targets Glance's `custom-api` widget — check it against your
+installed Glance version's documentation and adjust if the template API
+differs.
+
 Trigger a run without waiting for the schedule:
 
-    kubectl exec deploy/xuewen -- curl -s -X POST localhost:8000/api/daily/run
+    kubectl port-forward svc/xuewen 8080:8080
+    curl -X POST localhost:8080/api/daily/run
 
 ## Notes
 
