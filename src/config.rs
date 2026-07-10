@@ -15,6 +15,9 @@ pub struct Config {
     pub proxy: Option<ProxyConfig>,
     #[serde(default)]
     pub search: SearchConfig,
+    /// Daily arXiv recommendations. Absent ⇒ the feature is off.
+    #[serde(default)]
+    pub daily: Option<DailyConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +76,55 @@ fn default_embed_dims() -> usize {
 }
 fn default_api_key_env() -> String {
     "OPENAI_API_KEY".to_string()
+}
+
+/// Daily arXiv recommendations (`[daily]`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DailyConfig {
+    /// arXiv category codes, e.g. ["cs.AI", "cs.LG"].
+    pub categories: Vec<String>,
+    /// Also keep cross-listed announcements.
+    #[serde(default)]
+    pub include_cross_list: bool,
+    /// Ranked papers kept per day.
+    #[serde(default = "default_daily_max_papers")]
+    pub max_papers: usize,
+    /// Daily run time, UTC wall clock "HH:MM".
+    #[serde(default = "default_daily_run_at")]
+    pub run_at: String,
+    /// Batches older than this many days are pruned.
+    #[serde(default = "default_daily_retention_days")]
+    pub retention_days: u32,
+    pub llm: DailyLlmConfig,
+}
+
+/// Chat-completions API used for TL;DRs (`[daily.llm]`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DailyLlmConfig {
+    #[serde(default = "default_embed_base_url")]
+    pub base_url: String,
+    pub model: String,
+    /// Inline key; when absent the key is read from `api_key_env`.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default = "default_api_key_env")]
+    pub api_key_env: String,
+    /// Language the TL;DRs are written in.
+    #[serde(default = "default_daily_language")]
+    pub language: String,
+}
+
+fn default_daily_max_papers() -> usize {
+    20
+}
+fn default_daily_run_at() -> String {
+    "09:00".to_string()
+}
+fn default_daily_retention_days() -> u32 {
+    14
+}
+fn default_daily_language() -> String {
+    "English".to_string()
 }
 
 impl Config {
@@ -229,5 +281,51 @@ api_key = "sk-test"
         assert_eq!(e.dims, 1536);
         assert_eq!(e.api_key.as_deref(), Some("sk-test"));
         assert_eq!(e.api_key_env, "OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn daily_defaults_to_none() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"
+inbox_dir = "/data/inbox"
+library_root = "/data/library"
+database_url = "sqlite:/data/library.db"
+"#
+        )
+        .unwrap();
+        assert!(Config::load(f.path()).unwrap().daily.is_none());
+    }
+
+    #[test]
+    fn loads_daily_section_with_defaults() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"
+inbox_dir = "/data/inbox"
+library_root = "/data/library"
+database_url = "sqlite:/data/library.db"
+
+[daily]
+categories = ["cs.AI", "cs.LG"]
+
+[daily.llm]
+model = "gpt-4o-mini"
+"#
+        )
+        .unwrap();
+        let d = Config::load(f.path()).unwrap().daily.unwrap();
+        assert_eq!(d.categories, vec!["cs.AI", "cs.LG"]);
+        assert!(!d.include_cross_list);
+        assert_eq!(d.max_papers, 20);
+        assert_eq!(d.run_at, "09:00");
+        assert_eq!(d.retention_days, 14);
+        assert_eq!(d.llm.base_url, "https://api.openai.com/v1");
+        assert_eq!(d.llm.model, "gpt-4o-mini");
+        assert_eq!(d.llm.api_key, None);
+        assert_eq!(d.llm.api_key_env, "OPENAI_API_KEY");
+        assert_eq!(d.llm.language, "English");
     }
 }
