@@ -47,6 +47,9 @@ export const chat = $state<{
 // identifySession in state.svelte.ts).
 let session = 0;
 let aborter: AbortController | null = null;
+// Client-assigned ids for optimistic turns: negative and descending, so they
+// never collide with server row ids or with each other in keyed eaches.
+let localId = -1;
 
 export async function loadChatModels(): Promise<void> {
   try {
@@ -105,17 +108,18 @@ export async function sendChatMessage(): Promise<void> {
   chat.busy = true;
   chat.error = null;
   chat.streaming = '';
-  aborter = new AbortController();
+  const myAborter = new AbortController();
+  aborter = myAborter;
+  let failure: string | null = null;
+  let completed = false;
   try {
     const resp = await fetch(`/api/papers/${encodeURIComponent(chat.paperId)}/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model_id: chat.modelId, message: text }),
-      signal: aborter.signal,
+      signal: myAborter.signal,
     });
     if (!resp.ok || !resp.body) throw new Error(`request failed (${resp.status})`);
-    let failure: string | null = null;
-    let completed = false;
     await readSse(resp.body, (e) => {
       if (my !== session) return;
       if (e.event === 'delta') {
@@ -125,9 +129,16 @@ export async function sendChatMessage(): Promise<void> {
       } else if (e.event === 'done') {
         completed = true;
         const label = chat.models.find((m) => m.id === chat.modelId)?.label ?? null;
-        chat.messages.push({ id: -1, role: 'user', content: text, model: null, created_at: '' });
+        const doneId: unknown = JSON.parse(e.data).id;
         chat.messages.push({
-          id: Number(JSON.parse(e.data).id ?? -1),
+          id: localId--,
+          role: 'user',
+          content: text,
+          model: null,
+          created_at: '',
+        });
+        chat.messages.push({
+          id: doneId == null ? localId-- : Number(doneId),
           role: 'assistant',
           content: chat.streaming ?? '',
           model: label,
@@ -141,7 +152,10 @@ export async function sendChatMessage(): Promise<void> {
     if (failure) throw new Error(failure);
     if (!completed) throw new Error('the connection closed before the reply finished');
   } catch (err) {
-    if (my !== session) return;
+    // Once the exchange folded on `done`, a trailing read rejection (e.g. a
+    // Stop clicked in the post-done window) must not repopulate the draft or
+    // report a spurious error over a successful exchange.
+    if (my !== session || completed) return;
     const aborted = err instanceof DOMException && err.name === 'AbortError';
     chat.pending = null;
     chat.streaming = null;
@@ -151,7 +165,7 @@ export async function sendChatMessage(): Promise<void> {
       : `The model request failed: ${(err as Error).message} Send again to retry.`;
   } finally {
     if (my === session) chat.busy = false;
-    aborter = null;
+    if (aborter === myAborter) aborter = null; // never null a newer send's controller
   }
 }
 

@@ -131,6 +131,25 @@ describe('sendChatMessage', () => {
     expect(chat.draft).toBe('hi');
   });
 
+  it('a late abort after done does not disturb the folded exchange', async () => {
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(enc.encode('event: delta\ndata: {"text":"Hi"}\n\nevent: done\ndata: {"id":3}\n\n'));
+      },
+      pull() {
+        return Promise.reject(new DOMException('aborted', 'AbortError'));
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200 })));
+    chat.draft = 'q';
+    await sendChatMessage();
+    expect(chat.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(chat.draft).toBe('');
+    expect(chat.error).toBe(null);
+    expect(chat.busy).toBe(false);
+  });
+
   it('abort restores the draft without an error', async () => {
     vi.stubGlobal('fetch', vi.fn((_url: unknown, init?: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
