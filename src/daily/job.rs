@@ -1,5 +1,7 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
+use regex::Regex;
+use std::sync::LazyLock;
 
 use super::{feed, score, store, tldr, DailyService, ARXIV_ABS_BASE, ARXIV_PDF_BASE};
 
@@ -7,6 +9,17 @@ use super::{feed, score, store, tldr, DailyService, ARXIV_ABS_BASE, ARXIV_PDF_BA
 const TLDR_PDF_PAGES: u32 = 12;
 const PDF_MAX_BYTES: usize = 30 * 1024 * 1024;
 const PDF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+static GITHUB_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").unwrap()
+});
+
+/// First GitHub repository URL in the text; trailing sentence punctuation
+/// the PDF extraction glues on is trimmed.
+fn find_code_url(text: &str) -> Option<String> {
+    let m = GITHUB_RE.find(text)?;
+    Some(m.as_str().trim_end_matches('.').to_string())
+}
 
 /// One full daily run. Never fails: the outcome (ok/empty/failed) is
 /// recorded in `daily_runs` and returned. Old batches are pruned after.
@@ -87,7 +100,8 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
                 None
             }
         };
-        let tldr = tldr::generate_tldr(
+        let code_url = full_text.as_deref().and_then(find_code_url);
+        let summary = tldr::generate_summary(
             &svc.chat,
             &svc.cfg.llm.language,
             &c.title,
@@ -104,11 +118,11 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
             abstract_text: c.abstract_text,
             categories: c.categories,
             score: s as f64,
-            tldr,
+            tldr: summary.as_ref().map(|s| s.tldr.clone()),
+            summary,
+            code_url,
             abs_url: format!("{ARXIV_ABS_BASE}/{}", c.arxiv_id),
             pdf_url: format!("{ARXIV_PDF_BASE}/{}", c.arxiv_id),
-            summary: None,
-            code_url: None,
         });
     }
     store::replace_batch(&svc.pool, batch_date, &rows).await?;
@@ -308,7 +322,8 @@ Abstract: Very similar to the library.</summary>
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "choices": [{"message": {"role": "assistant", "content": "A TLDR."}}]
+                "choices": [{"message": {"role": "assistant",
+                    "content": "{\"tldr\":\"A TLDR.\",\"problem\":\"Gap.\",\"approach\":\"Idea.\",\"results\":\"+1.\",\"limitations\":\"Few.\"}"}}]
             })))
             .mount(&server)
             .await;
@@ -325,6 +340,10 @@ Abstract: Very similar to the library.</summary>
         assert_eq!(papers[0].rank, 1);
         assert!(papers[0].score > papers[1].score);
         assert_eq!(papers[0].tldr.as_deref(), Some("A TLDR."));
+        let s = papers[0].summary.as_ref().expect("summary stored");
+        assert_eq!(s.tldr, "A TLDR.");
+        assert_eq!(s.problem, "Gap.");
+        assert!(papers[0].code_url.is_none(), "PDFs 404 -> no text -> no code link");
         assert_eq!(papers[0].abs_url, "https://arxiv.org/abs/2507.00003");
         assert_eq!(papers[0].pdf_url, "https://arxiv.org/pdf/2507.00003");
         let recorded = store::get_run(&pool, "2026-07-10").await.unwrap().unwrap();
@@ -426,5 +445,19 @@ Abstract: Very similar to the library.</summary>
         assert!(!svc.is_running(), "dropped run must clear the flag");
         // A new run can start immediately afterwards.
         assert!(svc.run_guarded("2026-07-10").await.is_some());
+    }
+
+    #[test]
+    fn finds_github_url_and_trims_punctuation() {
+        assert_eq!(
+            find_code_url("Code at https://github.com/acme/widget. More text"),
+            Some("https://github.com/acme/widget".to_string())
+        );
+        assert_eq!(
+            find_code_url("(https://github.com/a-b/c_d)"),
+            Some("https://github.com/a-b/c_d".to_string())
+        );
+        assert_eq!(find_code_url("no links here"), None);
+        assert_eq!(find_code_url("see https://gitlab.com/x/y"), None);
     }
 }

@@ -185,36 +185,6 @@ pub async fn generate_summary(
     }
 }
 
-/// Best-effort TL;DR: full-text prompt, then abstract-only, then `None`.
-/// Never propagates an error — a bad paper must not fail the batch.
-pub async fn generate_tldr(
-    chat: &ChatClient,
-    language: &str,
-    title: &str,
-    abstract_text: &str,
-    full_text: Option<&str>,
-) -> Option<String> {
-    if full_text.is_some() {
-        match chat
-            .complete(SYSTEM, &prompt(language, title, abstract_text, full_text))
-            .await
-        {
-            Ok(t) => return Some(t),
-            Err(e) => tracing::warn!("full-text TL;DR failed for {title}: {e}"),
-        }
-    }
-    match chat
-        .complete(SYSTEM, &prompt(language, title, abstract_text, None))
-        .await
-    {
-        Ok(t) => Some(t),
-        Err(e) => {
-            tracing::warn!("abstract TL;DR failed for {title}: {e}");
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,43 +251,6 @@ mod tests {
             .await;
         let c = ChatClient::for_tests(&format!("{}/v1", server.uri()), "m");
         assert!(c.complete("s", "u").await.is_err());
-    }
-
-    #[tokio::test]
-    async fn tldr_falls_back_from_full_text_to_abstract() {
-        let server = MockServer::start().await;
-        // Full-text prompts fail non-retriably…
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
-            .and(body_string_contains("Preview of main content"))
-            .respond_with(ResponseTemplate::new(400))
-            .expect(1)
-            .mount(&server)
-            .await;
-        // …the abstract-only prompt succeeds.
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(chat_response("Short TLDR.")))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let c = ChatClient::for_tests(&format!("{}/v1", server.uri()), "m");
-        let out = generate_tldr(&c, "English", "Title", "An abstract.", Some("full text")).await;
-        assert_eq!(out.as_deref(), Some("Short TLDR."));
-    }
-
-    #[tokio::test]
-    async fn tldr_gives_none_when_all_prompts_fail() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(400))
-            .expect(2) // full-text, then abstract-only
-            .mount(&server)
-            .await;
-        let c = ChatClient::for_tests(&format!("{}/v1", server.uri()), "m");
-        let out = generate_tldr(&c, "English", "Title", "An abstract.", Some("full text")).await;
-        assert!(out.is_none());
     }
 
     #[test]
