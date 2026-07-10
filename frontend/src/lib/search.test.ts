@@ -42,4 +42,18 @@ describe('searchParams', () => {
     expect(p.get('status')).toBe('resolved');
     expect(p.get('project')).toBe('proj1');
   });
+
+  it('treats an empty selection the same as all (UI enforces at least one)', () => {
+    const none: SearchOpts = {
+      title: false,
+      authors: false,
+      abstract: false,
+      body: false,
+      keyword: false,
+      semantic: false,
+    };
+    const p = searchParams('x', none, filters);
+    expect(p.get('fields')).toBeNull();
+    expect(p.get('engines')).toBeNull();
+  });
 });

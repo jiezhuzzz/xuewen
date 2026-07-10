@@ -206,6 +206,8 @@ export function exportUrl(f: Filters, fmt: BibFormat): string {
 
 /// Query string for /api/search. Omits fields/engines when everything is
 /// selected (the server default), so URLs stay short and cacheable.
+/// Callers keep at least one field and one engine selected (the UI toggles
+/// enforce this); an empty selection is treated the same as "all" by design.
 export function searchParams(
   q: string,
   opts: SearchOpts,
