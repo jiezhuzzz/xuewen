@@ -1,5 +1,6 @@
 pub mod config;
 pub mod db;
+pub mod daily;
 pub mod export;
 pub mod hash;
 pub mod identify;
