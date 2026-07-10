@@ -1,9 +1,7 @@
-use anyhow::{anyhow, Result};
-use std::time::Duration;
+use anyhow::Result;
 
 use crate::config::DailyLlmConfig;
 
-const ATTEMPTS: u32 = 3;
 /// Chars of extracted PDF text included in the full-text prompt.
 pub const FULL_TEXT_CAP: usize = 40_000;
 
@@ -20,13 +18,10 @@ pub struct Summary {
     pub limitations: String,
 }
 
-/// Minimal OpenAI-compatible /chat/completions client. Retry behavior
-/// mirrors `search::embedder::Embedder` (429/5xx/network, backoff).
+/// Chat client for the daily TL;DR — a thin wrapper that keeps this module's
+/// config-driven construction while the HTTP logic lives in `crate::llm`.
 pub struct ChatClient {
-    http: reqwest::Client,
-    base_url: String,
-    model: String,
-    api_key: Option<String>,
+    inner: crate::llm::LlmClient,
 }
 
 impl ChatClient {
@@ -46,74 +41,19 @@ impl ChatClient {
             return None;
         };
         Some(Self {
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
-                .build()
-                .expect("building chat HTTP client"),
-            base_url: cfg.base_url.trim_end_matches('/').to_string(),
-            model: cfg.model.clone(),
-            api_key: Some(key),
+            inner: crate::llm::LlmClient::new(&cfg.base_url, &cfg.model, Some(key)),
         })
     }
 
     /// Keyless client pointed at a mock server. Test support only.
     pub fn for_tests(base_url: &str, model: &str) -> Self {
         Self {
-            http: reqwest::Client::new(),
-            base_url: base_url.trim_end_matches('/').to_string(),
-            model: model.to_string(),
-            api_key: None,
+            inner: crate::llm::LlmClient::new(base_url, model, None),
         }
     }
 
     pub async fn complete(&self, system: &str, user: &str) -> Result<String> {
-        let url = format!("{}/chat/completions", self.base_url);
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        });
-        let mut delay = Duration::from_millis(500);
-        let mut last_err = None;
-        for attempt in 1..=ATTEMPTS {
-            let mut req = self.http.post(&url).json(&body);
-            if let Some(k) = &self.api_key {
-                req = req.bearer_auth(k);
-            }
-            match req.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    let v: serde_json::Value = resp.json().await?;
-                    let text = v["choices"][0]["message"]["content"]
-                        .as_str()
-                        .ok_or_else(|| anyhow!("chat API response has no message content"))?;
-                    return Ok(text.trim().to_string());
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    let retriable = status.as_u16() == 429 || status.is_server_error();
-                    let text = resp.text().await.unwrap_or_default();
-                    let err = anyhow!(
-                        "chat API {status}: {}",
-                        text.chars().take(200).collect::<String>()
-                    );
-                    if !retriable || attempt == ATTEMPTS {
-                        return Err(err);
-                    }
-                    last_err = Some(err);
-                }
-                Err(e) => {
-                    if attempt == ATTEMPTS {
-                        return Err(e.into());
-                    }
-                    last_err = Some(e.into());
-                }
-            }
-            tokio::time::sleep(delay).await;
-            delay *= 2;
-        }
-        Err(last_err.expect("loop ran at least once"))
+        self.inner.complete(system, user).await
     }
 }
 

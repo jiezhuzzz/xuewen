@@ -5,6 +5,7 @@ pub mod export;
 pub mod hash;
 pub mod identify;
 pub mod import;
+pub mod llm;
 pub mod matching;
 pub mod models;
 pub mod naming;
