@@ -11,7 +11,9 @@ use crate::models::{Paper, Project, ProjectSummary};
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(database_url)?
         .create_if_missing(true)
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(std::time::Duration::from_secs(10));
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(opts)
@@ -515,6 +517,16 @@ mod tests {
         assert_eq!(escape_like("a_b"), r"a\_b");
         assert_eq!(escape_like(r"back\slash"), r"back\\slash");
         assert_eq!(escape_like("%_\\"), r"\%\_\\");
+    }
+
+    #[tokio::test]
+    async fn connect_uses_wal_journal_mode() {
+        let (_dir, pool) = temp_pool().await;
+        let (mode,): (String,) = sqlx::query_as("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
     }
 
     #[tokio::test]
