@@ -563,6 +563,7 @@ async fn main() -> Result<()> {
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                         Err(e) => tracing::warn!("could not remove {}: {e}", path.display()),
                     }
+                    xuewen::chat::store::clear(&pool, &p.id).await?;
                     db::delete_row(&pool, &p.id).await?;
                 }
                 println!("purged {} paper(s)", targets.len());

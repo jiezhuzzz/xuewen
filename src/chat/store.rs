@@ -1,0 +1,125 @@
+//! SQLite persistence for chat threads. Writes are all-or-nothing per
+//! exchange: nothing is stored for aborted or failed generations, so the
+//! thread only ever contains completed exchanges.
+
+use anyhow::Result;
+use sqlx::SqlitePool;
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct ChatMessageRow {
+    pub id: i64,
+    pub role: String,
+    pub content: String,
+    pub model: Option<String>,
+    pub created_at: String,
+}
+
+pub async fn list(pool: &SqlitePool, paper_id: &str) -> Result<Vec<ChatMessageRow>> {
+    Ok(sqlx::query_as::<_, ChatMessageRow>(
+        "SELECT id, role, content, model, created_at
+         FROM chat_messages WHERE paper_id = ? ORDER BY id",
+    )
+    .bind(paper_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Persist one completed exchange atomically; returns the assistant row id.
+pub async fn insert_exchange(
+    pool: &SqlitePool,
+    paper_id: &str,
+    user_content: &str,
+    assistant_content: &str,
+    model_label: &str,
+) -> Result<i64> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO chat_messages (paper_id, role, content) VALUES (?, 'user', ?)")
+        .bind(paper_id)
+        .bind(user_content)
+        .execute(&mut *tx)
+        .await?;
+    let res = sqlx::query(
+        "INSERT INTO chat_messages (paper_id, role, content, model) VALUES (?, 'assistant', ?, ?)",
+    )
+    .bind(paper_id)
+    .bind(assistant_content)
+    .bind(model_label)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(res.last_insert_rowid())
+}
+
+pub async fn clear(pool: &SqlitePool, paper_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM chat_messages WHERE paper_id = ?")
+        .bind(paper_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::SqlitePool;
+
+    async fn pool_with_paper(id: &str) -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        // Minimal parent row for the FK; mirror src/db.rs test seeding.
+        sqlx::query(
+            "INSERT INTO papers (id, content_hash, rel_path, added_at, status)
+             VALUES (?, 'hash', 'p.pdf', datetime('now'), 'resolved')",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn exchange_roundtrip_in_order() {
+        let pool = pool_with_paper("p1").await;
+        let aid = insert_exchange(&pool, "p1", "what is this?", "a paper.", "GPT-5 Mini")
+            .await
+            .unwrap();
+        assert!(aid > 0);
+        insert_exchange(
+            &pool,
+            "p1",
+            "and the method?",
+            "transformers.",
+            "Local Qwen",
+        )
+        .await
+        .unwrap();
+
+        let rows = list(&pool, "p1").await.unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].role, "user");
+        assert_eq!(rows[0].content, "what is this?");
+        assert_eq!(rows[0].model, None);
+        assert_eq!(rows[1].role, "assistant");
+        assert_eq!(rows[1].model.as_deref(), Some("GPT-5 Mini"));
+        assert_eq!(rows[3].model.as_deref(), Some("Local Qwen"));
+    }
+
+    #[tokio::test]
+    async fn clear_empties_one_thread_only() {
+        let pool = pool_with_paper("p1").await;
+        sqlx::query(
+            "INSERT INTO papers (id, content_hash, rel_path, added_at, status)
+             VALUES ('p2', 'hash2', 'q.pdf', datetime('now'), 'resolved')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_exchange(&pool, "p1", "q", "a", "M").await.unwrap();
+        insert_exchange(&pool, "p2", "q", "a", "M").await.unwrap();
+
+        clear(&pool, "p1").await.unwrap();
+        assert!(list(&pool, "p1").await.unwrap().is_empty());
+        assert_eq!(list(&pool, "p2").await.unwrap().len(), 2);
+    }
+}
