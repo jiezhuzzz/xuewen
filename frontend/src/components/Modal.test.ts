@@ -22,6 +22,12 @@ describe('Modal', () => {
     expect(onclose).toHaveBeenCalled();
   });
 
+  it('renders no footer region when footer is omitted', () => {
+    render(Modal, { props: { title: 'Test dialog', onclose: () => {}, children: body() } });
+    const dialog = screen.getByRole('dialog', { name: 'Test dialog' });
+    expect(dialog.lastElementChild?.className).not.toContain('border-t');
+  });
+
   it('closes on backdrop click but not on panel click', async () => {
     const onclose = vi.fn();
     render(Modal, { props: { title: 'Test dialog', onclose, children: body() } });

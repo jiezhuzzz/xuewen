@@ -27,9 +27,11 @@
       e.stopPropagation();
       onclose();
     } else if (e.key === 'Tab' && panel) {
-      const focusables = panel.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input, select, textarea, summary, [tabindex]:not([tabindex="-1"])',
-      );
+      const focusables = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input, select, textarea, summary, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => el.checkVisibility?.() ?? el.offsetParent !== null);
       if (focusables.length === 0) return;
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
