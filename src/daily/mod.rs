@@ -112,9 +112,8 @@ impl DailyService {
         if !self.try_begin() {
             return None;
         }
-        let run = job::run_once(self, batch_date).await;
-        self.running.store(false, Ordering::SeqCst);
-        Some(run)
+        let _guard = RunFlagGuard(&self.running);
+        Some(job::run_once(self, batch_date).await)
     }
 
     /// Guarded run on a background task; `false` if one was in flight.
@@ -126,6 +125,7 @@ impl DailyService {
         }
         let svc = self.clone();
         tokio::spawn(async move {
+            let _guard = RunFlagGuard(&svc.running);
             let run = job::run_once(&svc, &batch_date).await;
             tracing::info!(
                 "daily run {}: {} ({} candidates)",
@@ -133,8 +133,17 @@ impl DailyService {
                 run.status,
                 run.papers_found
             );
-            svc.running.store(false, Ordering::SeqCst);
         });
         true
+    }
+}
+
+/// Clears the running flag on scope exit — including panics and
+/// cancellation — so a wedged run can never permanently refuse new runs.
+struct RunFlagGuard<'a>(&'a AtomicBool);
+
+impl Drop for RunFlagGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }

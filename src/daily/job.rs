@@ -390,4 +390,31 @@ Abstract: Very similar to the library.</summary>
         assert!(svc.is_running());
         assert!(svc.run_guarded("2026-07-10").await.is_none());
     }
+
+    #[tokio::test]
+    async fn run_flag_clears_when_run_future_is_dropped() {
+        let pool = pool_with_library_paper().await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/atom/cs.AI+cs.LG"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(EMPTY_FEED)
+                    .set_delay(std::time::Duration::from_millis(500)),
+            )
+            .mount(&server)
+            .await;
+        let svc = service(&server, pool);
+        {
+            let fut = svc.run_guarded("2026-07-10");
+            tokio::pin!(fut);
+            tokio::select! {
+                _ = &mut fut => panic!("slow run should not finish before the timeout"),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            }
+        } // fut dropped here, mid-await
+        assert!(!svc.is_running(), "dropped run must clear the flag");
+        // A new run can start immediately afterwards.
+        assert!(svc.run_guarded("2026-07-10").await.is_some());
+    }
 }
