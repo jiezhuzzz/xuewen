@@ -52,10 +52,10 @@
           src = pkgs.lib.cleanSourceWith {
             src = self;
             filter = path: _type:
-              let rel = pkgs.lib.removePrefix (toString self + "/") (toString path);
-              in !(pkgs.lib.hasPrefix "frontend" rel
-                || pkgs.lib.hasPrefix "docs" rel
-                || pkgs.lib.hasPrefix "deploy" rel);
+              let
+                rel = pkgs.lib.removePrefix (toString self + "/") (toString path);
+                under = dir: rel == dir || pkgs.lib.hasPrefix (dir + "/") rel;
+              in !(under "frontend" || under "docs" || under "deploy");
           };
           cargoLock.lockFile = ./Cargo.lock;
           # rust-embed reads frontend/dist at compile time; build.rs would
