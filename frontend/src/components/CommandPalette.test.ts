@@ -44,4 +44,12 @@ describe('CommandPalette', () => {
     await userEvent.keyboard('{Escape}');
     expect(ui.paletteOpen).toBe(false);
   });
+
+  it('keeps focus on the input when Tab is pressed', async () => {
+    render(CommandPalette);
+    const input = screen.getByRole('combobox');
+    (input as HTMLElement).focus();
+    await userEvent.keyboard('{Tab}');
+    expect(document.activeElement).toBe(input);
+  });
 });

@@ -82,6 +82,10 @@
     if (e.key === 'Escape') {
       e.stopPropagation();
       close();
+    } else if (e.key === 'Tab') {
+      // Single-focus surface: options are tabindex="-1" and the page
+      // beneath is not inert, so Tab must not carry focus out.
+      e.preventDefault();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       active = Math.min(items.length - 1, active + 1);

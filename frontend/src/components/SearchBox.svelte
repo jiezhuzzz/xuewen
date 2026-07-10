@@ -13,6 +13,7 @@
   } from '../lib/state.svelte';
 
   let optionsOpen = $state(false);
+  let root = $state<HTMLElement | null>(null);
   const FIELDS = [
     ['title', 'Title'],
     ['authors', 'Authors'],
@@ -24,9 +25,30 @@
       Number(searchOpts.keyword) +
       Number(searchOpts.semantic && !semanticBlocked()),
   );
+  // Options the user can actually turn on right now — a server-blocked
+  // semantic engine doesn't count, or the "narrowed" hint would never clear.
+  const availableCount = $derived(FIELDS.length + 1 + (semanticBlocked() ? 0 : 1));
+
+  function onPointerdownOutside(e: PointerEvent) {
+    if (optionsOpen && root && !root.contains(e.target as Node)) optionsOpen = false;
+  }
+  function onRootKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && optionsOpen) {
+      // The popover owns this Esc — it must not also reach the global
+      // shortcut handler (which would exit zen or close the palette).
+      e.stopPropagation();
+      optionsOpen = false;
+    }
+  }
 </script>
 
-<div class="relative">
+<svelte:window onpointerdown={onPointerdownOutside} />
+
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -- the div is
+     not an interaction target; it only delegates Esc bubbling up from the
+     focused input/chips so the popover can close without the global
+     shortcut handler also firing. -->
+<div class="relative" role="search" bind:this={root} onkeydown={onRootKeydown}>
   <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
   <input
     data-search-input
@@ -106,6 +128,8 @@
     </div>
   {/if}
 </div>
-{#if activeCount < 6 && !optionsOpen}
-  <p class="mt-1 text-[10px] text-stone-400">Search options narrowed — open ⚙ to review.</p>
+{#if activeCount < availableCount && !optionsOpen}
+  <p class="mt-1 text-[10px] text-stone-400">
+    Search options narrowed — review them with the sliders button.
+  </p>
 {/if}
