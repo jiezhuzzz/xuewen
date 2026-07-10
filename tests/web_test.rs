@@ -1071,3 +1071,98 @@ async fn exports_bibtex_and_biblatex() {
     assert!(scoped.contains("aaaa1111"));
     assert!(!scoped.contains("bbbb2222"));
 }
+
+mod search_api {
+    use super::*; // reuse the file's pool/server helpers
+    use xuewen::search::{fts, vector, SearchService};
+
+    // This file's pool/paper helpers are named `temp_pool`/`paper` (not
+    // `test_pool`/`insert_sample_paper` as in the brief); these two small
+    // wrappers adapt to that existing local style.
+    async fn test_pool() -> sqlx::SqlitePool {
+        let (dir, pool) = temp_pool().await;
+        std::mem::forget(dir); // keep the sqlite file alive for the test's duration
+        pool
+    }
+
+    async fn insert_sample_paper(pool: &sqlx::SqlitePool, id: &str, title: &str) {
+        db::insert_paper(pool, &paper(id, title, PaperStatus::Resolved))
+            .await
+            .unwrap();
+    }
+
+    async fn server_with_search(pool: sqlx::SqlitePool) -> axum_test::TestServer {
+        let idx = tempfile::tempdir().unwrap();
+        let (fts_idx, _) = fts::FtsIndex::open(idx.path()).unwrap();
+        std::mem::forget(idx);
+        let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
+        let svc = SearchService::open_with(pool.clone(), fts_idx, vectors, None);
+        svc.fts
+            .upsert(&fts::PaperDoc {
+                id: "p1".into(),
+                title: "Fuzzing Firmware".into(),
+                authors: "Ada Lovelace".into(),
+                venue: String::new(),
+                abstract_text: String::new(),
+                body: "router dictionaries".into(),
+            })
+            .unwrap();
+        let router = xuewen::web::build_router_with_search(
+            pool,
+            std::path::PathBuf::from("/nonexistent"),
+            svc,
+        );
+        axum_test::TestServer::new(router).unwrap()
+    }
+
+    #[tokio::test]
+    async fn search_returns_papers_with_match_info() {
+        let pool = test_pool().await; // the file's existing helper
+        insert_sample_paper(&pool, "p1", "Fuzzing Firmware").await; // existing helper or add one
+        let server = server_with_search(pool).await;
+
+        let resp = server.get("/api/search").add_query_param("q", "fuzzing").await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["semantic"]["available"], false);
+        assert_eq!(body["results"][0]["paper"]["id"], "p1");
+        assert_eq!(body["results"][0]["match"]["engine"], "keyword");
+        assert!(body["results"][0]["match"]["snippet"].as_str().unwrap().contains("<mark>"));
+    }
+
+    #[tokio::test]
+    async fn fields_param_restricts_search() {
+        let pool = test_pool().await;
+        insert_sample_paper(&pool, "p1", "Fuzzing Firmware").await;
+        let server = server_with_search(pool).await;
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "dictionaries")
+            .add_query_param("fields", "title")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["results"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn status_reports_tiers() {
+        let pool = test_pool().await;
+        insert_sample_paper(&pool, "p1", "Fuzzing Firmware").await;
+        let server = server_with_search(pool).await;
+        let resp = server.get("/api/search/status").await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        assert!(body["fts"]["pending"].as_i64().unwrap() >= 1);
+        assert_eq!(body["semantic_available"], false);
+    }
+
+    #[tokio::test]
+    async fn search_without_service_is_503() {
+        let pool = test_pool().await;
+        let router = xuewen::web::build_router(pool, std::path::PathBuf::from("/nonexistent"));
+        let server = axum_test::TestServer::new(router).unwrap();
+        let resp = server.get("/api/search").add_query_param("q", "x").await;
+        resp.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    }
+}

@@ -8,13 +8,17 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 use uuid::Uuid;
 
-use super::dto::{Candidate, PaperDetail, PaperSummary, Stats};
+use super::dto::{
+    Candidate, PaperDetail, PaperSummary, SearchMatch, SearchResponse, SearchResult,
+    SearchStatus, SemanticAvailability, Stats, TierCounts,
+};
 use super::AppState;
 use crate::db;
 use crate::export;
 use crate::import::{self, ImportError};
 use crate::models::Identifier;
 use crate::pipeline::{IdentifyOutcome, Outcome};
+use crate::search::fts::FieldSel;
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -66,7 +70,10 @@ pub async fn get_paper(State(app): State<AppState>, Path(id): Path<String>) -> R
 pub async fn delete_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
     match db::get_by_id(&app.pool, &id).await {
         Ok(Some(_)) => match db::soft_delete(&app.pool, &id).await {
-            Ok(_) => Json(serde_json::json!({ "deleted": true })).into_response(),
+            Ok(_) => {
+                app.wake_search();
+                Json(serde_json::json!({ "deleted": true })).into_response()
+            }
             Err(e) => {
                 tracing::error!("delete_paper: {e}");
                 internal_error()
@@ -113,7 +120,9 @@ pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart)
             return bad_request("not a PDF");
         }
 
-        return stage_and_ingest(&ingest, data.as_ref(), &filename, None).await;
+        let resp = stage_and_ingest(&ingest, data.as_ref(), &filename, None).await;
+        app.wake_search();
+        return resp;
     }
 }
 
@@ -319,6 +328,7 @@ pub async fn identify_paper(
     let (md_doi, md_arxiv) = (md.doi.clone(), md.arxiv_id.clone());
     match ingest.ctx.apply_match(&mut paper, md).await {
         Ok(IdentifyOutcome::Applied) => {
+            app.wake_search();
             let ids = db::project_ids_for_paper(&ingest.ctx.pool, &paper.id)
                 .await
                 .unwrap_or_default();
@@ -391,7 +401,11 @@ pub async fn import_url(State(app): State<AppState>, Json(body): Json<ImportUrlB
     )
     .await
     {
-        Ok(fetched) => stage_and_ingest(&ingest, &fetched.bytes, "import.pdf", fetched.hint).await,
+        Ok(fetched) => {
+            let resp = stage_and_ingest(&ingest, &fetched.bytes, "import.pdf", fetched.hint).await;
+            app.wake_search();
+            resp
+        }
         Err(ImportError::Unsupported) => bad_request("unsupported input"),
         Err(ImportError::CookieExpired) => (
             StatusCode::BAD_GATEWAY,
@@ -687,6 +701,112 @@ pub async fn export_papers(State(app): State<AppState>, Query(p): Query<ExportPa
         }
         Err(e) => {
             tracing::error!("export_papers: {e}");
+            internal_error()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SearchParams {
+    pub q: Option<String>,
+    pub fields: Option<String>,
+    pub engines: Option<String>,
+    pub status: Option<String>,
+    pub project: Option<String>,
+}
+
+/// Hybrid search. `fields`/`engines` are CSV lists; absent or unknown-only
+/// values fall back to "all" (mirrors the whitelisting style elsewhere).
+pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchParams>) -> Response {
+    let Some(svc) = &app.search else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "search not configured"})),
+        )
+            .into_response();
+    };
+    let (keyword, semantic) = parse_engines(p.engines.as_deref());
+    let req = crate::search::SearchRequest {
+        q: p.q.unwrap_or_default(),
+        fields: FieldSel::parse(p.fields.as_deref()),
+        keyword,
+        semantic,
+        status: p.status,
+        project: p.project,
+    };
+    match svc.search(&req).await {
+        Ok(out) => {
+            let results: Vec<SearchResult> = out
+                .results
+                .iter()
+                .map(|(paper, m)| SearchResult {
+                    paper: PaperSummary::from(paper),
+                    match_info: SearchMatch {
+                        engine: m.engine.clone(),
+                        field: m.field.clone(),
+                        snippet: m.snippet.clone(),
+                        page: m.page,
+                    },
+                })
+                .collect();
+            Json(SearchResponse {
+                semantic: SemanticAvailability {
+                    available: out.semantic.available,
+                    reason: out.semantic.reason,
+                },
+                results,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!("search: {e}");
+            internal_error()
+        }
+    }
+}
+
+fn parse_engines(csv: Option<&str>) -> (bool, bool) {
+    let (mut keyword, mut semantic) = (false, false);
+    for part in csv.unwrap_or("").split(',').map(str::trim) {
+        match part {
+            "keyword" => keyword = true,
+            "semantic" => semantic = true,
+            _ => {}
+        }
+    }
+    if keyword || semantic {
+        (keyword, semantic)
+    } else {
+        (true, true) // absent/unknown-only -> both
+    }
+}
+
+pub async fn search_status(State(app): State<AppState>) -> Response {
+    let Some(svc) = &app.search else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "search not configured"})),
+        )
+            .into_response();
+    };
+    match svc.status().await {
+        Ok(st) => Json(SearchStatus {
+            fts: TierCounts {
+                indexed: st.fts.indexed,
+                pending: st.fts.pending,
+                failed: st.fts.failed,
+            },
+            vectors: TierCounts {
+                indexed: st.vectors.indexed,
+                pending: st.vectors.pending,
+                failed: st.vectors.failed,
+            },
+            semantic_available: st.semantic_available,
+            reason: st.reason,
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!("search status: {e}");
             internal_error()
         }
     }

@@ -131,3 +131,47 @@ impl Candidate {
         }
     }
 }
+
+/// Why a paper matched a search query.
+#[derive(Serialize)]
+pub struct SearchMatch {
+    pub engine: String,
+    pub field: String,
+    /// HTML-safe: escaped text with <mark> highlights only.
+    pub snippet: String,
+    pub page: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct SearchResult {
+    pub paper: PaperSummary,
+    #[serde(rename = "match")]
+    pub match_info: SearchMatch,
+}
+
+#[derive(Serialize)]
+pub struct SemanticAvailability {
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SearchResponse {
+    pub semantic: SemanticAvailability,
+    pub results: Vec<SearchResult>,
+}
+
+#[derive(Serialize)]
+pub struct TierCounts {
+    pub indexed: i64,
+    pub pending: i64,
+    pub failed: i64,
+}
+
+#[derive(Serialize)]
+pub struct SearchStatus {
+    pub fts: TierCounts,
+    pub vectors: TierCounts,
+    pub semantic_available: bool,
+    pub reason: Option<String>,
+}

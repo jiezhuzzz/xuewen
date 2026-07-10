@@ -431,6 +431,7 @@ async fn main() -> Result<()> {
                 cfg.library_root.clone(),
                 ingest,
                 cfg.proxy.as_ref().map(|p| p.login_url.clone()),
+                None,
             )
             .await?;
         }

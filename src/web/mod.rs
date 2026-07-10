@@ -31,6 +31,18 @@ pub struct AppState {
     pub ingest: Option<Arc<Ingest>>,
     /// EZproxy login prefix (from `[proxy].login_url`); `None` disables proxy fetch.
     pub proxy_login_url: Option<String>,
+    /// Present when a search index/service was opened (serve). `None` in
+    /// read-only test routers -> /api/search answers 503.
+    pub search: Option<Arc<crate::search::SearchService>>,
+}
+
+impl AppState {
+    /// Nudge the background indexer after a mutation. No-op without search.
+    pub fn wake_search(&self) {
+        if let Some(s) = &self.search {
+            s.wake();
+        }
+    }
 }
 
 /// Assemble the read-only web router (no import). Used directly by tests.
@@ -40,6 +52,7 @@ pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
         library_root,
         ingest: None,
         proxy_login_url: None,
+        search: None,
     })
 }
 
@@ -54,6 +67,7 @@ pub fn build_router_with_ingest(
         library_root,
         ingest: Some(ingest),
         proxy_login_url: None,
+        search: None,
     })
 }
 
@@ -69,6 +83,22 @@ pub fn build_router_with_ingest_proxy(
         library_root,
         ingest: Some(ingest),
         proxy_login_url,
+        search: None,
+    })
+}
+
+/// Read-only router plus a live search service. Used by tests.
+pub fn build_router_with_search(
+    pool: SqlitePool,
+    library_root: PathBuf,
+    search: Arc<crate::search::SearchService>,
+) -> Router {
+    router_with(AppState {
+        pool,
+        library_root,
+        ingest: None,
+        proxy_login_url: None,
+        search: Some(search),
     })
 }
 
@@ -111,6 +141,8 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{paper_id}/projects/{project_id}",
             axum::routing::put(api::add_paper_to_project).delete(api::remove_paper_from_project),
         )
+        .route("/api/search", get(api::search_papers))
+        .route("/api/search/status", get(api::search_status))
         .fallback(assets::static_handler)
         .with_state(state)
 }
@@ -123,8 +155,15 @@ pub async fn serve(
     library_root: PathBuf,
     ingest: Arc<Ingest>,
     proxy_login_url: Option<String>,
+    search: Option<Arc<crate::search::SearchService>>,
 ) -> Result<()> {
-    let app = build_router_with_ingest_proxy(pool, library_root, ingest, proxy_login_url);
+    let app = router_with(AppState {
+        pool,
+        library_root,
+        ingest: Some(ingest),
+        proxy_login_url,
+        search,
+    });
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("xuewen serving on http://{addr}");
