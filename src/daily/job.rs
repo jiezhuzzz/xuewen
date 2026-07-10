@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 
 use super::{feed, score, store, tldr, DailyService, ARXIV_ABS_BASE, ARXIV_PDF_BASE};
 
-/// Pages of the PDF fed to the TL;DR prompt.
-const TLDR_PDF_PAGES: u32 = 12;
+/// Pages of the PDF fed to the summary prompt.
+const SUMMARY_PDF_PAGES: u32 = 12;
 const PDF_MAX_BYTES: usize = 30 * 1024 * 1024;
 const PDF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -48,7 +48,7 @@ pub async fn run_once(svc: &DailyService, batch_date: &str) -> store::DailyRun {
     run
 }
 
-/// Fetch → dedup → score → TL;DR → store. Returns the candidate count
+/// Fetch → dedup → score → summarize → store. Returns the candidate count
 /// after dedup (0 ⇒ the caller records an "empty" run).
 async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
     let xml = feed::fetch_feed(&svc.http, &svc.feed_base, &svc.cfg.categories)
@@ -118,7 +118,7 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<i64> {
             abstract_text: c.abstract_text,
             categories: c.categories,
             score: s as f64,
-            tldr: summary.as_ref().map(|s| s.tldr.clone()),
+            tldr: summary.as_ref().map(|sum| sum.tldr.clone()),
             summary,
             code_url,
             abs_url: format!("{ARXIV_ABS_BASE}/{}", c.arxiv_id),
@@ -150,7 +150,7 @@ async fn fetch_pdf_text(svc: &DailyService, arxiv_id: &str) -> Result<String> {
         }
         let result = (|| -> Result<String> {
             std::fs::write(&path, &bytes)?;
-            let text = crate::pdf::extract_text(&path, TLDR_PDF_PAGES)?;
+            let text = crate::pdf::extract_text(&path, SUMMARY_PDF_PAGES)?;
             Ok(text.chars().take(tldr::FULL_TEXT_CAP).collect())
         })();
         let _ = std::fs::remove_file(&path);
@@ -313,7 +313,7 @@ Abstract: Very similar to the library.</summary>
             })))
             .mount(&server)
             .await;
-        // PDFs 404 -> TL;DR falls back to abstract-only, which succeeds.
+        // PDFs 404 -> summary falls back to abstract-only, which succeeds.
         Mock::given(method("GET"))
             .and(wiremock::matchers::path_regex("^/pdf/.*"))
             .respond_with(ResponseTemplate::new(404))

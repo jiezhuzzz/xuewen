@@ -37,7 +37,7 @@ No Ingress manifest ships here because it is cluster-specific.
 `xuewen serve` exposes daily arXiv recommendations at `GET /api/daily`
 when the ConfigMap's `xuewen.toml` has a `[daily]` section (see
 `xuewen.example.toml`; requires `[search.embedding]` and the
-`OPENAI_API_KEY` secret, which the TL;DR generation shares by default).
+`OPENAI_API_KEY` secret, which the summary generation shares by default).
 
 Add a `custom-api` widget to your Glance dashboard's `glance.yml`:
 

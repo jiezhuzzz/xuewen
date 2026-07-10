@@ -98,7 +98,7 @@ pub struct DailyConfig {
     pub llm: DailyLlmConfig,
 }
 
-/// Chat-completions API used for TL;DRs (`[daily.llm]`).
+/// Chat-completions API used for the structured summaries (`[daily.llm]`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct DailyLlmConfig {
     #[serde(default = "default_embed_base_url")]
@@ -109,7 +109,7 @@ pub struct DailyLlmConfig {
     pub api_key: Option<String>,
     #[serde(default = "default_api_key_env")]
     pub api_key_env: String,
-    /// Language the TL;DRs are written in.
+    /// Language the summaries are written in.
     #[serde(default = "default_daily_language")]
     pub language: String,
 }
