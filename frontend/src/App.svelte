@@ -52,7 +52,7 @@
 <div class="flex h-full flex-col bg-paper text-ink dark:bg-night dark:text-stone-100">
   <TopBar />
   <div class="relative flex min-h-0 flex-1">
-    <div class="relative min-h-0 shrink-0 overflow-hidden" style={`width:${paneW.current}px`}>
+    <div class="relative min-h-0 shrink-0 overflow-hidden" style={`width:${paneW.current}px`} inert={paneHidden}>
       <div class="absolute inset-y-0 left-0 w-[304px]"><LibraryPane /></div>
     </div>
     {#if paneHidden}
