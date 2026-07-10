@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { tick } from 'svelte';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { handleKeydown, isEditable } from './shortcuts';
 import { identifyState, library, selection, ui, viewer } from './state.svelte';
 import type { PaperSummary } from './types';
@@ -83,6 +84,20 @@ describe('handleKeydown', () => {
     expect(ui.zen).toBe(true);
     handleKeydown(key('Escape'));
     expect(ui.zen).toBe(false);
+  });
+
+  it('/ opens the pane, exits zen, and focuses the search input', async () => {
+    const input = document.createElement('input');
+    input.setAttribute('data-search-input', '');
+    document.body.appendChild(input);
+    ui.sidebarOpen = false;
+    ui.zen = true;
+    handleKeydown(key('/'));
+    expect(ui.sidebarOpen).toBe(true);
+    expect(ui.zen).toBe(false);
+    await tick();
+    expect(document.activeElement).toBe(input);
+    input.remove();
   });
 
   it('single-key shortcuts are inert while a modal is open', () => {

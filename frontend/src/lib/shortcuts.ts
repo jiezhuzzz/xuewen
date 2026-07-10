@@ -39,9 +39,11 @@ function openSelected(): void {
   if (p) openTab(p);
 }
 
-/// `/` must work even while the pane is collapsed (its subtree is inert):
-/// open the pane first, then focus after the DOM update.
+/// `/` must work even while the pane is collapsed or zen hides it (the
+/// pane subtree is inert in both states): leave zen, open the pane, then
+/// focus after the DOM update.
 function focusSearch(): void {
+  ui.zen = false;
   ui.sidebarOpen = true;
   void tick().then(() => {
     document.querySelector<HTMLInputElement>('[data-search-input]')?.focus();
