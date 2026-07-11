@@ -5,7 +5,6 @@
   import ChatBubble from './components/ChatBubble.svelte';
   import ChatPanel from './components/ChatPanel.svelte';
   import CommandPalette from './components/CommandPalette.svelte';
-  import DetailView from './components/DetailView.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
@@ -15,12 +14,14 @@
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
+  import Welcome from './components/Welcome.svelte';
   import ZenPill from './components/ZenPill.svelte';
   import { chat, loadChatModels, loadThread } from './lib/chat.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
   import {
     identifyState,
+    initInfo,
     initTheme,
     loadPapers,
     loadProjects,
@@ -32,6 +33,7 @@
 
   onMount(() => {
     initTheme();
+    initInfo();
     loadStats();
     loadProjects();
     loadPapers();
@@ -98,6 +100,8 @@
         <div class={`relative min-h-0 min-w-0 flex-1 ${viewer.activeId === null ? 'hidden' : 'flex'}`}>
           <PdfViewer />
           {#if viewer.infoOpen && viewer.activeId}
+            <!-- Non-interactive recede veil: the PDF stays scrollable underneath. -->
+            <div class="pointer-events-none absolute inset-0 z-10 bg-ink/5 dark:bg-black/25" aria-hidden="true"></div>
             {#key viewer.activeId}
               <InfoPanel id={viewer.activeId} />
             {/key}
@@ -106,7 +110,7 @@
           {#if chat.open}<ChatPanel />{/if}
         </div>
         {#if viewer.activeId === null}
-          <DetailView />
+          <Welcome />
         {/if}
       </div>
     </main>

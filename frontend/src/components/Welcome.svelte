@@ -20,7 +20,7 @@
     </button>
   {:else}
     <p class="max-w-sm text-sm text-stone-500 dark:text-stone-400">
-      Select a paper to see its details. Double-click to read it.
+      Click a paper to read it. Press <kbd class="rounded border border-stone-300 px-1 dark:border-stone-700">i</kbd> for its details.
     </p>
     <dl class="grid grid-cols-[auto_auto] gap-x-3 gap-y-1 text-xs text-stone-400 dark:text-stone-500">
       <dt><kbd class="rounded border border-stone-300 px-1 dark:border-stone-700">/</kbd></dt>
