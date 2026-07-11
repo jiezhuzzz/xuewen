@@ -27,7 +27,6 @@
 
 <aside
   transition:fly={{ x: 24, duration: dur(DUR.base) }}
-  role="complementary"
   aria-label="Paper details"
   class="absolute inset-y-3 right-3 z-20 flex w-80 max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-paper shadow-2xl dark:border-stone-800 dark:bg-soot"
 >
@@ -85,7 +84,6 @@
         </section>
 
         <section class={divider}>
-          <h3 class={`mb-2 ${label}`}>Projects</h3>
           <ProjectTags {d} />
         </section>
 
