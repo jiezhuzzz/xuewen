@@ -80,7 +80,7 @@
               </button>
               <button
                 type="button"
-                onclick={() => (confirming = false)}
+                onclick={() => { confirming = false; error = null; }}
                 class="rounded px-2 py-1 text-xs text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
               >
                 Cancel
