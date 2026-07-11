@@ -151,6 +151,23 @@ export function selectPaper(id: string | null): void {
   selection.id = id;
 }
 
+const INFO_KEY = 'xuewen-info-open';
+
+/// Load the remembered info-panel state (default closed). Call once at startup.
+export function initInfo(): void {
+  viewer.infoOpen = localStorage.getItem(INFO_KEY) === '1';
+}
+
+/// Set the info panel open/closed and remember the choice.
+export function setInfoOpen(open: boolean): void {
+  viewer.infoOpen = open;
+  localStorage.setItem(INFO_KEY, open ? '1' : '0');
+}
+
+export function toggleInfo(): void {
+  setInfoOpen(!viewer.infoOpen);
+}
+
 /// Activate the Library home tab (keeps PDF tabs open). Leaving the reader
 /// always leaves zen too — zen without a PDF is a blank screen.
 export function goHome(): void {
