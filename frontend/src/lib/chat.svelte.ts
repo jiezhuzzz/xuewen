@@ -94,8 +94,10 @@ export async function loadThread(paperId: string): Promise<void> {
     const rows = (await resp.json()) as ChatTurn[];
     if (my === session) chat.messages = rows;
   } catch {
-    if (my === session)
+    if (my === session) {
+      chat.paperId = null; // un-latch so reopening the panel retries the load
       chat.error = 'Could not load this conversation. Close and reopen the chat to retry.';
+    }
   }
 }
 

@@ -182,4 +182,19 @@ describe('thread', () => {
     await clearChatThread();
     expect(chat.messages).toEqual([]);
   });
+
+  it('a failed history load can be retried', async () => {
+    let calls = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      calls++;
+      if (calls === 1) return new Response('boom', { status: 500 });
+      return json([{ id: 1, role: 'user', content: 'q', model: null, created_at: '' }]);
+    }));
+    await loadThread('p1');
+    expect(chat.error).toContain('reopen');
+    expect(chat.paperId).toBe(null);
+    await loadThread('p1'); // reopening the panel re-fires loadThread
+    expect(chat.messages).toHaveLength(1);
+    expect(chat.error).toBe(null);
+  });
 });

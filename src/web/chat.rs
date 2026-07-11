@@ -166,6 +166,13 @@ pub async fn send(
                 }
             }
         }
+        if full.is_empty() {
+            yield sse_event(
+                "error",
+                json!({ "message": "the model returned an empty reply" }),
+            );
+            return;
+        }
         // Client disconnects drop this stream before we get here, so
         // nothing is persisted for aborted generations.
         match store::insert_exchange(&pool, &paper_id, &user_msg, &full, &label).await {

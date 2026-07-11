@@ -140,3 +140,37 @@ async fn history_roundtrip_and_clear() {
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn send_with_empty_reply_errors_and_persists_nothing() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"),
+        )
+        .mount(&upstream)
+        .await;
+
+    let (pool, root) = common::pool_and_root_with_paper("p1").await;
+    let chat = xuewen::chat::ChatService::from_config(&chat_cfg(&upstream.uri())).unwrap();
+    let server = TestServer::new(xuewen::web::build_router_with_chat(
+        pool.clone(),
+        root,
+        chat,
+    ))
+    .unwrap();
+
+    let resp = server
+        .post("/api/papers/p1/chat")
+        .json(&serde_json::json!({"model_id": "0", "message": "hi"}))
+        .await;
+    resp.assert_status_ok();
+    let body = resp.text();
+    assert!(body.contains("event: error"), "body: {body}");
+    assert!(body.contains("empty reply"));
+    assert!(!body.contains("event: done"));
+
+    let rows = xuewen::chat::store::list(&pool, "p1").await.unwrap();
+    assert!(rows.is_empty(), "nothing may persist for an empty reply");
+}
