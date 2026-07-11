@@ -7,6 +7,8 @@ import {
   openTab,
   selection,
   selectPaper,
+  setInfoOpen,
+  toggleInfo,
   toggleSidebar,
   toggleZen,
   ui,
@@ -65,6 +67,7 @@ export function handleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
     if (ui.paletteOpen) ui.paletteOpen = false;
     else if (chat.open) chat.open = false;
+    else if (viewer.infoOpen) setInfoOpen(false);
     else if (ui.zen) ui.zen = false;
     return;
   }
@@ -80,6 +83,9 @@ export function handleKeydown(e: KeyboardEvent): void {
       break;
     case 'c':
       toggleChat();
+      break;
+    case 'i':
+      if (viewer.activeId) toggleInfo();
       break;
     case 'z':
       toggleZen();

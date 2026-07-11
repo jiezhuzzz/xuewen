@@ -23,6 +23,7 @@ beforeEach(() => {
   library.papers = [paper('a'), paper('b'), paper('c')];
   viewer.tabs = [];
   viewer.activeId = null;
+  viewer.infoOpen = false;
   selection.id = null;
   ui.zen = false;
   ui.paletteOpen = false;
@@ -111,6 +112,30 @@ describe('handleKeydown', () => {
     expect(chat.open).toBe(true);
     handleKeydown(key('Escape'));
     expect(chat.open).toBe(false);
+    expect(ui.zen).toBe(true);
+    handleKeydown(key('Escape'));
+    expect(ui.zen).toBe(false);
+  });
+
+  it('i toggles the info panel only with an active tab', () => {
+    handleKeydown(key('i'));
+    expect(viewer.infoOpen).toBe(false); // no active paper
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    handleKeydown(key('i'));
+    expect(viewer.infoOpen).toBe(true);
+    handleKeydown(key('i'));
+    expect(viewer.infoOpen).toBe(false);
+  });
+
+  it('Escape closes the info panel before exiting zen', () => {
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    handleKeydown(key('z'));
+    viewer.infoOpen = true;
+    expect(ui.zen).toBe(true);
+    handleKeydown(key('Escape'));
+    expect(viewer.infoOpen).toBe(false);
     expect(ui.zen).toBe(true);
     handleKeydown(key('Escape'));
     expect(ui.zen).toBe(false);

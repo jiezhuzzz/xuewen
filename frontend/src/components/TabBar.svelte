@@ -3,7 +3,7 @@
   import { flip } from 'svelte/animate';
   import { crossfade, fade } from 'svelte/transition';
   import { DUR, dur } from '../lib/motion';
-  import { closeTab, goHome, toggleZen, viewer } from '../lib/state.svelte';
+  import { closeTab, goHome, toggleInfo, toggleZen, viewer } from '../lib/state.svelte';
 
   // The active-tab underline crossfades between tabs — a real sliding
   // indicator with no measurement code.
@@ -84,7 +84,8 @@
     <button
       type="button"
       aria-label="Toggle info"
-      onclick={() => (viewer.infoOpen = !viewer.infoOpen)}
+      aria-expanded={viewer.infoOpen}
+      onclick={toggleInfo}
       class={`mr-2 shrink-0 rounded-lg p-2 ${
         viewer.infoOpen
           ? 'bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500'
