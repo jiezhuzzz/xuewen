@@ -1,6 +1,7 @@
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { handleKeydown, isEditable } from './shortcuts';
+import { chat } from './chat.svelte';
 import { identifyState, library, selection, ui, viewer } from './state.svelte';
 import type { PaperSummary } from './types';
 
@@ -29,6 +30,8 @@ beforeEach(() => {
   ui.importOpen = false;
   ui.projectsOpen = false;
   identifyState.open = false;
+  chat.open = false;
+  chat.available = false;
 });
 
 describe('isEditable', () => {
@@ -81,6 +84,33 @@ describe('handleKeydown', () => {
     ui.zen = true;
     handleKeydown(key('Escape'));
     expect(ui.paletteOpen).toBe(false);
+    expect(ui.zen).toBe(true);
+    handleKeydown(key('Escape'));
+    expect(ui.zen).toBe(false);
+  });
+
+  it('c toggles the chat only with an active tab and available chat', () => {
+    handleKeydown(key('c'));
+    expect(chat.open).toBe(false);
+    chat.available = true;
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    handleKeydown(key('c'));
+    expect(chat.open).toBe(true);
+    handleKeydown(key('c'));
+    expect(chat.open).toBe(false);
+  });
+
+  it('Escape closes the chat before exiting zen', () => {
+    chat.available = true;
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    handleKeydown(key('z'));
+    handleKeydown(key('c'));
+    expect(ui.zen).toBe(true);
+    expect(chat.open).toBe(true);
+    handleKeydown(key('Escape'));
+    expect(chat.open).toBe(false);
     expect(ui.zen).toBe(true);
     handleKeydown(key('Escape'));
     expect(ui.zen).toBe(false);

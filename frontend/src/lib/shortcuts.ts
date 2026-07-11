@@ -1,4 +1,5 @@
 import { tick } from 'svelte';
+import { chat, toggleChat } from './chat.svelte';
 import {
   closeTab,
   identifyState,
@@ -63,6 +64,7 @@ export function handleKeydown(e: KeyboardEvent): void {
   if (anyModalOpen()) return;
   if (e.key === 'Escape') {
     if (ui.paletteOpen) ui.paletteOpen = false;
+    else if (chat.open) chat.open = false;
     else if (ui.zen) ui.zen = false;
     return;
   }
@@ -75,6 +77,9 @@ export function handleKeydown(e: KeyboardEvent): void {
       break;
     case '[':
       toggleSidebar();
+      break;
+    case 'c':
+      toggleChat();
       break;
     case 'z':
       toggleZen();
