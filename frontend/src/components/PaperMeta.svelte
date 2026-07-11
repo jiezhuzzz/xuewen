@@ -3,7 +3,7 @@
   import type { PaperDetail } from '../lib/types';
   import StatusPill from './StatusPill.svelte';
 
-  let { d, hero = false }: { d: PaperDetail; hero?: boolean } = $props();
+  let { d }: { d: PaperDetail } = $props();
 
   type Link = { label: string; href: string };
   const links = $derived.by(() => {
@@ -16,43 +16,29 @@
   });
 </script>
 
-{#if d.venue || d.year}
-  <p
-    class={`font-medium uppercase tracking-widest text-stone-500 dark:text-stone-400 ${hero ? 'text-xs' : 'text-[10px]'}`}
-  >
-    {d.venue ?? ''}{d.venue && d.year ? ' · ' : ''}{d.year ?? ''}
-  </p>
-{/if}
-<h2
-  class={`font-serif font-semibold text-ink dark:text-stone-100 ${
-    hero ? 'mt-2 text-3xl leading-tight text-balance' : 'mt-1 text-base leading-snug'
-  }`}
->
+<h2 class="text-balance font-serif text-xl font-semibold leading-snug text-ink dark:text-stone-100">
   {d.title ?? '(untitled)'}
 </h2>
 {#if d.authors.length}
-  <p class="mt-3 text-sm text-stone-600 dark:text-stone-300">{d.authors.join(', ')}</p>
+  <p class="mt-2 text-[13px] leading-relaxed text-stone-600 dark:text-stone-300">{d.authors.join(', ')}</p>
 {/if}
-<div class="mt-3 flex flex-wrap items-center gap-1.5">
+<div class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-stone-500 dark:text-stone-400">
+  {#if d.venue || d.year}
+    <span>{d.venue ?? ''}{d.venue && d.year ? ' · ' : ''}{d.year ?? ''}</span>
+  {/if}
   <StatusPill status={d.status} />
-  {#each links as l (l.label)}
-    <a
-      href={l.href}
-      target="_blank"
-      rel="noreferrer"
-      class="inline-flex items-center gap-1 rounded-full border border-stone-200 px-2 py-0.5 font-mono text-[11px] text-stone-600 hover:border-amber-700 hover:text-amber-700 dark:border-stone-700 dark:text-stone-300 dark:hover:border-amber-500 dark:hover:text-amber-500"
-    >
-      {l.label}<ExternalLink size={10} />
-    </a>
-  {/each}
 </div>
-{#if d.cite_key || d.source}
-  <dl class="mt-3 space-y-0.5 text-xs text-stone-500 dark:text-stone-400">
-    {#if d.cite_key}
-      <div><dt class="inline font-medium">Cite key</dt> <dd class="inline font-mono">{d.cite_key}</dd></div>
-    {/if}
-    {#if d.source}
-      <div><dt class="inline font-medium">Source</dt> <dd class="inline">{d.source}</dd></div>
-    {/if}
-  </dl>
+{#if links.length}
+  <div class="mt-3 flex flex-wrap items-center gap-1.5 border-t border-stone-200 pt-3 dark:border-stone-800">
+    {#each links as l (l.label)}
+      <a
+        href={l.href}
+        target="_blank"
+        rel="noreferrer"
+        class="inline-flex items-center gap-1 rounded-full border border-stone-200 px-2 py-0.5 font-mono text-[11px] text-stone-600 hover:border-amber-700 hover:text-amber-700 dark:border-stone-700 dark:text-stone-300 dark:hover:border-amber-500 dark:hover:text-amber-500"
+      >
+        {l.label}<ExternalLink size={10} />
+      </a>
+    {/each}
+  </div>
 {/if}

@@ -1,6 +1,9 @@
+import { render, screen } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { library, openTab, removePaper, viewer } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
+import InfoPanel from './InfoPanel.svelte';
 
 function paper(id: string): PaperSummary {
   return {
@@ -39,5 +42,51 @@ describe('removePaper', () => {
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]).toMatchObject({
       method: 'DELETE',
     });
+  });
+});
+
+function detail(id: string) {
+  return {
+    id, title: 'Attention', authors: ['Vaswani'], venue: 'NeurIPS', year: 2017,
+    doi: '10.1/x', arxiv_id: '1706.03762', dblp_key: null, cite_key: 'vaswani2017',
+    url: null, source: 'crossref', status: 'resolved', added_at: '2026-07-08T00:00:00Z',
+    abstract: 'The dominant sequence transduction models…', project_ids: [],
+  };
+}
+
+describe('InfoPanel', () => {
+  beforeEach(() => {
+    viewer.infoOpen = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify(detail('info1')), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+  });
+
+  it('renders the title, identifier pills, and abstract', async () => {
+    render(InfoPanel, { props: { id: 'info1' } });
+    expect(await screen.findByText('Attention')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /DOI/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /arXiv/ })).toBeInTheDocument();
+    expect(screen.getByText(/dominant sequence transduction/)).toBeInTheDocument();
+  });
+
+  it('collapses the abstract', async () => {
+    render(InfoPanel, { props: { id: 'info1' } });
+    await screen.findByText('Attention');
+    await userEvent.click(screen.getByRole('button', { name: /Abstract/ }));
+    expect(screen.queryByText(/dominant sequence transduction/)).not.toBeInTheDocument();
+  });
+
+  it('the close button remembers the panel as closed', async () => {
+    render(InfoPanel, { props: { id: 'info1' } });
+    await screen.findByText('Attention');
+    await userEvent.click(screen.getByRole('button', { name: /Close details/ }));
+    expect(viewer.infoOpen).toBe(false);
+    expect(localStorage.getItem('xuewen-info-open')).toBe('0');
   });
 });
