@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PaperSummary } from '../lib/types';
-  import { goHome, openTab, searchMeta, selectPaper, selection, viewer } from '../lib/state.svelte';
+  import { openTab, searchMeta, selection, viewer } from '../lib/state.svelte';
   import StatusPill from './StatusPill.svelte';
 
   let { paper }: { paper: PaperSummary } = $props();
@@ -12,11 +12,7 @@
       : paper.authors.join(', '),
   );
 
-  // Click inspects (Library home shows the detail); double-click reads.
-  function select() {
-    selectPaper(paper.id);
-    if (viewer.activeId !== null) goHome();
-  }
+  // A single click opens the paper's PDF (openTab also highlights the row).
   function open() {
     openTab(paper);
   }
@@ -24,8 +20,7 @@
 
 <button
   type="button"
-  onclick={select}
-  ondblclick={open}
+  onclick={open}
   class={`w-full border-l-2 px-4 py-3 text-left transition-colors hover:bg-parchment dark:hover:bg-stone-800/50 ${
     selected ? 'border-amber-700 bg-parchment dark:border-amber-500 dark:bg-stone-800/50' : 'border-transparent'
   }`}
