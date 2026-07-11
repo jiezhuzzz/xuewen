@@ -73,7 +73,11 @@ export function handleKeydown(e: KeyboardEvent): void {
   }
   if (isEditable(e.target) || ui.paletteOpen) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  switch (e.key) {
+  // Match letters case-insensitively so Caps Lock or a held Shift doesn't
+  // dead-key a shortcut (`Z`/`X` would otherwise miss `z`/`x`). Named keys
+  // (Enter, ArrowUp, …) are longer than one char and keep their exact spelling.
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  switch (key) {
     case '/':
       e.preventDefault();
       focusSearch();

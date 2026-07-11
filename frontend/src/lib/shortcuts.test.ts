@@ -80,6 +80,17 @@ describe('handleKeydown', () => {
     expect(ui.zen).toBe(false);
   });
 
+  it('matches letters case-insensitively (Caps Lock / Shift → uppercase)', () => {
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    expect(viewer.activeId).toBe('a');
+    handleKeydown(key('Z')); // uppercase, e.g. Caps Lock on
+    expect(ui.zen).toBe(true);
+    handleKeydown(key('X')); // uppercase close-tab
+    expect(viewer.tabs).toHaveLength(0);
+    expect(ui.zen).toBe(false);
+  });
+
   it('Escape closes the palette first, then exits zen', () => {
     ui.paletteOpen = true;
     ui.zen = true;
