@@ -141,7 +141,8 @@ pub async fn send(
         content: user_msg.clone(),
     });
 
-    let client = LlmClient::new(&model.base_url, &model.model, model.resolve_key());
+    let client = LlmClient::new(&model.base_url, &model.model, model.resolve_key())
+        .with_reasoning_effort(model.reasoning_effort.clone());
     let (pool, paper_id, label) = (app.pool.clone(), paper.id.clone(), model.label.clone());
 
     let stream = async_stream::stream! {

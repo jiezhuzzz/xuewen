@@ -143,6 +143,11 @@ pub struct ChatModelConfig {
     pub api_key: Option<String>,
     #[serde(default = "default_api_key_env")]
     pub api_key_env: String,
+    /// OpenAI `reasoning_effort` ("minimal" | "low" | "medium" | "high") for
+    /// reasoning models. Absent ⇒ the field is omitted and the model's own
+    /// default effort is used. Ignored by endpoints that don't support it.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 impl ChatModelConfig {
@@ -431,6 +436,7 @@ database_url  = "sqlite:./x.db"
             model: "m".into(),
             api_key: Some("sk-inline".into()),
             api_key_env: "XUEWEN_TEST_UNSET_ENV".into(),
+            reasoning_effort: None,
         };
         assert_eq!(m.resolve_key().as_deref(), Some("sk-inline"));
 

@@ -19,6 +19,7 @@ pub struct LlmClient {
     base_url: String,
     model: String,
     api_key: Option<String>,
+    reasoning_effort: Option<String>,
 }
 
 impl LlmClient {
@@ -31,7 +32,16 @@ impl LlmClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             api_key: api_key.filter(|k| !k.trim().is_empty()),
+            reasoning_effort: None,
         }
+    }
+
+    /// Set the OpenAI `reasoning_effort` ("minimal" | "low" | "medium" |
+    /// "high") sent with every request. `None`/empty omits the field, leaving
+    /// the model's own default; endpoints that don't support it ignore it.
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort.filter(|e| !e.trim().is_empty());
+        self
     }
 
     fn request(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
@@ -48,13 +58,16 @@ impl LlmClient {
     /// Blocking completion with retries — behavior moved verbatim from
     /// `daily::tldr::ChatClient::complete`.
     pub async fn complete(&self, system: &str, user: &str) -> Result<String> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         });
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = serde_json::json!(effort);
+        }
         let mut delay = Duration::from_millis(500);
         let mut last_err = None;
         for attempt in 1..=ATTEMPTS {
@@ -101,11 +114,14 @@ impl LlmClient {
         &self,
         messages: &[ChatMessage],
     ) -> Result<impl Stream<Item = Result<String>> + Send> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "stream": true,
         });
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = serde_json::json!(effort);
+        }
         let resp = self
             .request(&body)
             .timeout(Duration::from_secs(600))
@@ -162,7 +178,7 @@ fn find_double_newline(buf: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
     use futures_util::StreamExt;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -191,6 +207,29 @@ mod tests {
             out.push_str(&item.unwrap());
         }
         assert_eq!(out, "Hello");
+    }
+
+    #[tokio::test]
+    async fn stream_sends_reasoning_effort_when_set() {
+        let server = MockServer::start().await;
+        // The mock only matches when the request body carries the effort, so a
+        // missing/renamed field makes the request 404 and the stream error out.
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("\"reasoning_effort\":\"high\""))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"))
+            .mount(&server)
+            .await;
+
+        let client =
+            LlmClient::new(&server.uri(), "test-model", None).with_reasoning_effort(Some("high".into()));
+        let _stream = client
+            .stream(&[ChatMessage {
+                role: "user",
+                content: "hi".into(),
+            }])
+            .await
+            .expect("body with reasoning_effort must match the mock");
     }
 
     #[tokio::test]
