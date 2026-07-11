@@ -26,8 +26,9 @@
     {#if stats.value}
       <div class="hidden items-center gap-3 text-xs text-stone-500 sm:flex dark:text-stone-400">
         <span>{stats.value.total} papers</span>
-        <span class="text-lime-700 dark:text-lime-400">{stats.value.resolved} resolved</span>
-        <span class="text-yellow-700 dark:text-yellow-400">{stats.value.needs_review} to review</span>
+        {#if stats.value.needs_review > 0}
+          <span class="text-yellow-700 dark:text-yellow-400">{stats.value.needs_review} to review</span>
+        {/if}
       </div>
     {/if}
     <button

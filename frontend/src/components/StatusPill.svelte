@@ -1,14 +1,15 @@
 <script lang="ts">
   let { status }: { status: string } = $props();
-  const resolved = $derived(status === 'resolved');
+  // "resolved" is the normal state, so badging it everywhere is just noise.
+  // Only flag the exception — a paper that still needs review — so unresolved
+  // papers stay easy to spot in the list and the info panel.
+  const needsReview = $derived(status !== 'resolved');
 </script>
 
-<span
-  class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-    resolved
-      ? 'bg-lime-100 text-lime-800 dark:bg-lime-500/15 dark:text-lime-300'
-      : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-300'
-  }`}
->
-  {resolved ? 'resolved' : 'needs review'}
-</span>
+{#if needsReview}
+  <span
+    class="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-300"
+  >
+    Needs review
+  </span>
+{/if}
