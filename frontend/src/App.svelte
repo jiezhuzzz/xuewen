@@ -106,7 +106,7 @@
               <InfoPanel id={viewer.activeId} />
             {/key}
           {/if}
-          {#if chat.available && !chat.open}<ChatBubble />{/if}
+          {#if chat.available && !chat.open && !viewer.infoOpen}<ChatBubble />{/if}
           {#if chat.open}<ChatPanel />{/if}
         </div>
         {#if viewer.activeId === null}

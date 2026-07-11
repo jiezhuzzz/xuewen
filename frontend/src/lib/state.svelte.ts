@@ -135,7 +135,7 @@ export interface Tab {
   title: string;
 }
 /// The content pane's tab strip. `activeId === null` means the permanent
-/// "Library" home tab is active (DetailView of `selection`); a string means
+/// "Library" home tab is active (shows the Welcome panel); a string means
 /// that PDF tab is active. Tabs persist while home is active.
 export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: boolean }>({
   tabs: [],
@@ -143,8 +143,7 @@ export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: b
   infoOpen: false,
 });
 
-/// The browsing selection shown by the Library home's DetailView. Distinct
-/// from viewer.activeId: selecting inspects, opening reads.
+/// The browsing highlight for the Library list (moved by j/k). Distinct from viewer.activeId: the highlight is the list cursor; opening a paper reads it.
 export const selection = $state<{ id: string | null }>({ id: null });
 
 export function selectPaper(id: string | null): void {

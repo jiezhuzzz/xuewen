@@ -51,7 +51,7 @@
 
         {#if d.abstract}
           <section class={divider}>
-            <button type="button" onclick={() => (abstractOpen = !abstractOpen)} class={`flex items-center gap-1.5 ${label}`}>
+            <button type="button" onclick={() => (abstractOpen = !abstractOpen)} aria-expanded={abstractOpen} class={`flex items-center gap-1.5 ${label}`}>
               Abstract
               <svg
                 class={`h-3 w-3 transition-transform ${abstractOpen ? '' : '-rotate-90'}`}
@@ -68,7 +68,7 @@
         {/if}
 
         <section class={divider}>
-          <h3 class={label}>Details</h3>
+          <h3 class={label}>Record</h3>
           <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
             {#if d.cite_key}
               <dt class="text-stone-500 dark:text-stone-400">Cite key</dt>
