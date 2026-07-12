@@ -525,6 +525,7 @@ async fn main() -> Result<()> {
                 search,
                 daily,
                 chat,
+                cfg.ui.clone(),
             )
             .await?;
         }

@@ -50,6 +50,9 @@ pub struct PaperDetail {
     #[serde(rename = "abstract")]
     pub abstract_text: Option<String>,
     pub project_ids: Vec<String>,
+    /// LLM-generated structured summary (JSON key "summary"); absent until generated.
+    #[serde(rename = "summary", skip_serializing_if = "Option::is_none")]
+    pub ai_summary: Option<crate::summary::Summary>,
 }
 
 impl From<&Paper> for PaperDetail {
@@ -58,6 +61,7 @@ impl From<&Paper> for PaperDetail {
             summary: PaperSummary::from(p),
             abstract_text: p.meta.abstract_text.clone(),
             project_ids: Vec::new(),
+            ai_summary: None,
         }
     }
 }

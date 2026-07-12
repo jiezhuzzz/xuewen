@@ -41,6 +41,9 @@ pub struct AppState {
     /// Present when paper chat is configured (`serve`). `None` -> chat
     /// endpoints answer 503 / available:false.
     pub chat: Option<Arc<crate::chat::ChatService>>,
+    /// UI-facing preferences (e.g. abstract folding). Defaulted in
+    /// read-only/test routers; set from config in `serve`.
+    pub ui: crate::config::UiConfig,
 }
 
 impl AppState {
@@ -62,6 +65,7 @@ pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
         search: None,
         daily: None,
         chat: None,
+        ui: crate::config::UiConfig::default(),
     })
 }
 
@@ -79,6 +83,7 @@ pub fn build_router_with_ingest(
         search: None,
         daily: None,
         chat: None,
+        ui: crate::config::UiConfig::default(),
     })
 }
 
@@ -97,6 +102,7 @@ pub fn build_router_with_ingest_proxy(
         search: None,
         daily: None,
         chat: None,
+        ui: crate::config::UiConfig::default(),
     })
 }
 
@@ -114,6 +120,7 @@ pub fn build_router_with_search(
         search: Some(search),
         daily: None,
         chat: None,
+        ui: crate::config::UiConfig::default(),
     })
 }
 
@@ -131,6 +138,7 @@ pub fn build_router_with_daily(
         search: None,
         daily: Some(daily),
         chat: None,
+        ui: crate::config::UiConfig::default(),
     })
 }
 
@@ -148,6 +156,7 @@ pub fn build_router_with_chat(
         search: None,
         daily: None,
         chat: Some(chat),
+        ui: crate::config::UiConfig::default(),
     })
 }
 
@@ -214,6 +223,7 @@ pub async fn serve(
     search: Option<Arc<crate::search::SearchService>>,
     daily: Option<Arc<crate::daily::DailyService>>,
     chat: Option<Arc<crate::chat::ChatService>>,
+    ui: crate::config::UiConfig,
 ) -> Result<()> {
     let app = router_with(AppState {
         pool,
@@ -223,6 +233,7 @@ pub async fn serve(
         search,
         daily,
         chat,
+        ui,
     });
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;

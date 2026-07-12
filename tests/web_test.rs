@@ -840,6 +840,21 @@ async fn settings_report_and_set_proxy_cookie() {
 }
 
 #[tokio::test]
+async fn settings_reports_fold_abstract() {
+    // The read-only test router builds its AppState with `UiConfig::default()`
+    // (fold_abstract: true), so this exercises the default straight through.
+    let (dir, pool) = temp_pool().await;
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    let res = server.get("/api/settings").await;
+    res.assert_status_ok();
+    assert_eq!(
+        res.json::<serde_json::Value>()["fold_abstract"],
+        serde_json::json!(true)
+    );
+}
+
+#[tokio::test]
 async fn import_url_rejects_unsupported_input() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");

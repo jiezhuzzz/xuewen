@@ -55,7 +55,12 @@ pub async fn get_paper(State(app): State<AppState>, Path(id): Path<String>) -> R
             let ids = db::project_ids_for_paper(&app.pool, &p.id)
                 .await
                 .unwrap_or_default();
-            Json(PaperDetail::with_project_ids(&p, ids)).into_response()
+            let mut detail = PaperDetail::with_project_ids(&p, ids);
+            detail.ai_summary = crate::summary::store::get(&app.pool, &p.id)
+                .await
+                .ok()
+                .flatten();
+            Json(detail).into_response()
         }
         Ok(None) => not_found(),
         Err(e) => {
@@ -450,6 +455,7 @@ pub async fn get_settings(State(app): State<AppState>) -> Response {
     Json(serde_json::json!({
         "proxy_cookie_set": set,
         "proxy_cookie_updated_at": updated,
+        "fold_abstract": app.ui.fold_abstract,
     }))
     .into_response()
 }
