@@ -1,4 +1,4 @@
-# Xuewen
+# 學問 · Xuewen
 
 A self-hosted reference manager for research papers. Drop in a PDF (or an
 arXiv id / DOI / URL) and Xuewen fetches the metadata, files the paper under a
@@ -9,6 +9,14 @@ paper's text.
 Single self-contained binary: a Rust backend (Axum + SQLite + Tantivy) with the
 Svelte frontend embedded at compile time. SQLite is the source of truth; the
 search indexes are derived and rebuildable.
+
+## The name
+
+**學問** (xuéwèn, simplified 学问) — "learning / scholarship." The two
+characters double as the interface marks: **學** (xué, *learning*) is the
+cinnabar seal wordmark, and **問** (wèn, *to ask*) is the amber chat launcher —
+the assistant that answers questions about a paper. There's no separate image
+logo; the seal is a styled glyph (`frontend/src/components/SealMark.svelte`).
 
 ## Features
 
