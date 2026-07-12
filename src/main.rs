@@ -183,7 +183,7 @@ enum Command {
         #[arg(long)]
         semantic_only: bool,
     },
-    /// Generate LLM summaries for library papers (needs [summary]).
+    /// Generate LLM summaries for library papers (needs [ai.summary]).
     Summarize {
         /// Paper id (exact) to (re)summarize. Omit to fill gaps for the whole library.
         #[arg(conflicts_with = "all")]
@@ -357,7 +357,7 @@ async fn main() -> Result<()> {
             }
         }
         Command::Watch => {
-            match SearchService::open(pool.clone(), &cfg.search).await {
+            match SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await {
                 Ok(s) => {
                     tokio::spawn(indexer::run(
                         s,
@@ -490,7 +490,7 @@ async fn main() -> Result<()> {
                 ctx,
                 staging_dir: cfg.inbox_dir.join("_uploads"),
             });
-            let search = match SearchService::open(pool.clone(), &cfg.search).await {
+            let search = match SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await {
                 Ok(s) => Some(s),
                 Err(e) => {
                     tracing::warn!("search disabled: {e}");
@@ -511,9 +511,9 @@ async fn main() -> Result<()> {
             if let Some(s) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) {
                 tokio::spawn(xuewen::summary::run(s, std::time::Duration::from_secs(60)));
             }
-            let chat = xuewen::chat::ChatService::from_config(&cfg.chat);
+            let chat = xuewen::chat::ChatService::from_config(&cfg.ai);
             if chat.is_none() {
-                tracing::info!("paper chat disabled (no [[chat.models]] configured)");
+                tracing::info!("paper chat disabled (no [[ai.chat.models]] configured)");
             }
             web::serve(
                 &host,
@@ -702,7 +702,7 @@ async fn main() -> Result<()> {
             keyword_only,
             semantic_only,
         } => {
-            let svc = SearchService::open(pool.clone(), &cfg.search).await?;
+            let svc = SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await?;
             let req = xuewen::search::SearchRequest {
                 q: query,
                 fields: FieldSel::parse(fields.as_deref()),
@@ -737,7 +737,7 @@ async fn main() -> Result<()> {
         }
         Command::Summarize { id, all } => {
             let Some(svc) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) else {
-                anyhow::bail!("[summary] is not configured (or no API key) — nothing to do");
+                anyhow::bail!("[ai.summary] is not configured (or no model/API key) — nothing to do");
             };
             if all {
                 xuewen::summary::store::clear(&pool, None).await?;
@@ -770,7 +770,7 @@ async fn main() -> Result<()> {
         }
         Command::Index { cmd } => match cmd {
             IndexCmd::Status => {
-                let svc = SearchService::open(pool.clone(), &cfg.search).await?;
+                let svc = SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await?;
                 let st = svc.status().await?;
                 println!(
                     "full-text: {} indexed, {} pending, {} failed",
@@ -816,7 +816,7 @@ async fn main() -> Result<()> {
                         ),
                     }
                 }
-                let svc = SearchService::open(pool.clone(), &cfg.search).await?;
+                let svc = SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await?;
                 xuewen::search::store::clear_stamps(&pool, do_fts, do_vectors).await?;
                 if do_vectors && svc.embedder.is_some() {
                     svc.vectors.recreate_collection().await?;

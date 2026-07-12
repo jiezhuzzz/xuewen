@@ -19,10 +19,7 @@ pub struct Config {
     #[serde(default)]
     pub daily: Option<DailyConfig>,
     #[serde(default)]
-    pub chat: ChatConfig,
-    /// Per-paper LLM summaries. Absent ⇒ the feature is off.
-    #[serde(default)]
-    pub summary: Option<SummaryConfig>,
+    pub ai: AiConfig,
     #[serde(default)]
     pub ui: UiConfig,
 }
@@ -42,8 +39,6 @@ pub struct SearchConfig {
     pub index_dir: PathBuf,
     pub qdrant_url: String,
     pub qdrant_collection: String,
-    /// Absent ⇒ semantic search is unavailable (keyword still works).
-    pub embedding: Option<EmbeddingConfig>,
 }
 
 impl Default for SearchConfig {
@@ -52,37 +47,8 @@ impl Default for SearchConfig {
             index_dir: PathBuf::from("./search-index"),
             qdrant_url: "http://localhost:6333".to_string(),
             qdrant_collection: "xuewen".to_string(),
-            embedding: None,
         }
     }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct EmbeddingConfig {
-    #[serde(default = "default_embed_base_url")]
-    pub base_url: String,
-    #[serde(default = "default_embed_model")]
-    pub model: String,
-    #[serde(default = "default_embed_dims")]
-    pub dims: usize,
-    /// Inline key; when absent the key is read from `api_key_env`.
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
-}
-
-fn default_embed_base_url() -> String {
-    "https://api.openai.com/v1".to_string()
-}
-fn default_embed_model() -> String {
-    "text-embedding-3-small".to_string()
-}
-fn default_embed_dims() -> usize {
-    1536
-}
-fn default_api_key_env() -> String {
-    "OPENAI_API_KEY".to_string()
 }
 
 /// Daily arXiv recommendations (`[daily]`).
@@ -102,23 +68,6 @@ pub struct DailyConfig {
     /// Batches older than this many days are pruned.
     #[serde(default = "default_daily_retention_days")]
     pub retention_days: u32,
-    pub llm: DailyLlmConfig,
-}
-
-/// Chat-completions API used for the structured summaries (`[daily.llm]`).
-#[derive(Debug, Clone, Deserialize)]
-pub struct DailyLlmConfig {
-    #[serde(default = "default_embed_base_url")]
-    pub base_url: String,
-    pub model: String,
-    /// Inline key; when absent the key is read from `api_key_env`.
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
-    /// Language the summaries are written in.
-    #[serde(default = "default_daily_language")]
-    pub language: String,
 }
 
 fn default_daily_max_papers() -> usize {
@@ -130,23 +79,93 @@ fn default_daily_run_at() -> String {
 fn default_daily_retention_days() -> u32 {
     14
 }
-fn default_daily_language() -> String {
-    "English".to_string()
+
+/// Endpoint + model overrides shared by every AI use. `#[serde(flatten)]`-ed
+/// into `[ai]` and each use-section so its fields sit at that section's level.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AiDefaults {
+    #[serde(default)] pub base_url: Option<String>,
+    #[serde(default)] pub api_key: Option<String>,
+    #[serde(default)] pub api_key_env: Option<String>,
+    #[serde(default)] pub model: Option<String>,
+    #[serde(default)] pub reasoning_effort: Option<String>,
 }
 
-/// Per-paper summary LLM (`[summary]`): an OpenAI-compatible chat endpoint,
-/// same shape as `[daily.llm]`. Absent ⇒ library summaries are disabled.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SummaryConfig {
-    #[serde(default = "default_embed_base_url")]
+/// A use's endpoint resolved against the `[ai]` defaults + built-ins.
+#[derive(Debug, Clone)]
+pub struct Resolved {
     pub base_url: String,
-    pub model: String,
-    #[serde(default)]
     pub api_key: Option<String>,
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
-    #[serde(default = "default_daily_language")]
-    pub language: String,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+}
+
+/// All AI/LLM config (`[ai]`): shared defaults plus each use.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AiConfig {
+    #[serde(flatten)] pub defaults: AiDefaults,
+    /// Semantic-search embeddings. Absent ⇒ semantic search off.
+    pub embedding: Option<EmbeddingConfig>,
+    /// Paper chat. No models ⇒ chat off.
+    pub chat: ChatConfig,
+    /// Per-paper library summaries. Absent ⇒ off.
+    pub summary: Option<AiDefaults>,
+    /// Daily-feed summaries. Absent ⇒ off.
+    pub daily: Option<AiDefaults>,
+}
+
+impl AiConfig {
+    /// Merge a use's overrides over the `[ai]` defaults and built-ins.
+    pub fn resolve(&self, use_: &AiDefaults) -> Resolved {
+        let pick = |a: &Option<String>, b: &Option<String>| a.clone().or_else(|| b.clone());
+        let base_url =
+            pick(&use_.base_url, &self.defaults.base_url).unwrap_or_else(default_ai_base_url);
+        let api_key_env =
+            pick(&use_.api_key_env, &self.defaults.api_key_env).unwrap_or_else(default_api_key_env);
+        let api_key = resolve_key(pick(&use_.api_key, &self.defaults.api_key), &api_key_env);
+        Resolved {
+            base_url,
+            api_key,
+            model: pick(&use_.model, &self.defaults.model),
+            reasoning_effort: pick(&use_.reasoning_effort, &self.defaults.reasoning_effort),
+        }
+    }
+}
+
+/// Inline key wins; else the named env var; empty ⇒ None.
+pub fn resolve_key(inline: Option<String>, api_key_env: &str) -> Option<String> {
+    inline.or_else(|| std::env::var(api_key_env).ok()).filter(|k| !k.trim().is_empty())
+}
+
+fn default_ai_base_url() -> String { "https://api.openai.com/v1".to_string() }
+fn default_api_key_env() -> String { "OPENAI_API_KEY".to_string() }
+
+/// Semantic-search embeddings (`[ai.embedding]`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingConfig {
+    #[serde(flatten)] pub endpoint: AiDefaults,
+    #[serde(default = "default_embed_dims")] pub dims: usize,
+}
+fn default_embed_dims() -> usize { 1536 }
+
+/// Paper chat (`[ai.chat]`). No models ⇒ feature disabled.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ChatConfig {
+    pub models: Vec<ChatModelConfig>,
+    pub max_context_chars: usize,
+}
+impl Default for ChatConfig {
+    fn default() -> Self { Self { models: Vec::new(), max_context_chars: 60_000 } }
+}
+
+/// One selectable chat model (`[[ai.chat.models]]`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatModelConfig {
+    /// Shown in the UI dropdown; display-only.
+    pub label: String,
+    #[serde(flatten)] pub endpoint: AiDefaults,
 }
 
 /// UI preferences (`[ui]`), surfaced to the frontend via `/api/settings`.
@@ -161,63 +180,6 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self { fold_abstract: true }
     }
-}
-
-/// One selectable chat model (`[[chat.models]]`): an OpenAI-compatible
-/// chat-completions endpoint. Its API id is its position in the config file.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChatModelConfig {
-    /// Shown in the UI dropdown; display-only, need not be unique.
-    pub label: String,
-    #[serde(default = "default_embed_base_url")]
-    pub base_url: String,
-    pub model: String,
-    /// Inline key; when absent the key is read from `api_key_env`.
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
-    /// OpenAI `reasoning_effort` ("minimal" | "low" | "medium" | "high") for
-    /// reasoning models. Absent ⇒ the field is omitted and the model's own
-    /// default effort is used. Ignored by endpoints that don't support it.
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
-}
-
-impl ChatModelConfig {
-    /// Inline key wins; else the env var. Unset/empty -> None: the entry is
-    /// served keyless (no Authorization header) — right for local servers,
-    /// and a forgotten hosted key surfaces as a 401 in the chat's inline
-    /// error rather than silently hiding the model.
-    pub fn resolve_key(&self) -> Option<String> {
-        self.api_key
-            .clone()
-            .or_else(|| std::env::var(&self.api_key_env).ok())
-            .filter(|k| !k.trim().is_empty())
-    }
-}
-
-/// Paper-chat settings (`[chat]`). No models = feature disabled.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChatConfig {
-    #[serde(default)]
-    pub models: Vec<ChatModelConfig>,
-    /// Chars of extracted paper text included in the system prompt.
-    #[serde(default = "default_chat_max_context_chars")]
-    pub max_context_chars: usize,
-}
-
-impl Default for ChatConfig {
-    fn default() -> Self {
-        Self {
-            models: Vec::new(),
-            max_context_chars: default_chat_max_context_chars(),
-        }
-    }
-}
-
-fn default_chat_max_context_chars() -> usize {
-    60_000
 }
 
 impl Config {
@@ -344,11 +306,11 @@ database_url = "sqlite:/data/library.db"
         assert_eq!(cfg.search.index_dir, PathBuf::from("./search-index"));
         assert_eq!(cfg.search.qdrant_url, "http://localhost:6333");
         assert_eq!(cfg.search.qdrant_collection, "xuewen");
-        assert!(cfg.search.embedding.is_none());
+        assert!(cfg.ai.embedding.is_none());
     }
 
     #[test]
-    fn loads_search_section_with_embedding_defaults() {
+    fn loads_ai_embedding_section_with_defaults() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         write!(
             f,
@@ -360,7 +322,7 @@ database_url = "sqlite:/data/library.db"
 [search]
 index_dir = "~/idx"
 
-[search.embedding]
+[ai.embedding]
 api_key = "sk-test"
 "#
         )
@@ -368,12 +330,14 @@ api_key = "sk-test"
         let cfg = Config::load(f.path()).unwrap();
         // tilde expanded like inbox_dir/library_root
         assert!(!cfg.search.index_dir.starts_with("~"));
-        let e = cfg.search.embedding.unwrap();
-        assert_eq!(e.base_url, "https://api.openai.com/v1");
-        assert_eq!(e.model, "text-embedding-3-small");
+        let e = cfg.ai.embedding.as_ref().unwrap();
         assert_eq!(e.dims, 1536);
-        assert_eq!(e.api_key.as_deref(), Some("sk-test"));
-        assert_eq!(e.api_key_env, "OPENAI_API_KEY");
+        assert_eq!(e.endpoint.api_key.as_deref(), Some("sk-test"));
+        // embedding has no model of its own here; base_url/api_key resolve
+        // through [ai] defaults + built-ins.
+        let r = cfg.ai.resolve(&e.endpoint);
+        assert_eq!(r.base_url, "https://api.openai.com/v1");
+        assert_eq!(r.api_key.as_deref(), Some("sk-test"));
     }
 
     #[test]
@@ -403,53 +367,51 @@ database_url = "sqlite:/data/library.db"
 
 [daily]
 categories = ["cs.AI", "cs.LG"]
-
-[daily.llm]
-model = "gpt-4o-mini"
 "#
         )
         .unwrap();
-        let d = Config::load(f.path()).unwrap().daily.unwrap();
+        let cfg = Config::load(f.path()).unwrap();
+        let d = cfg.daily.unwrap();
         assert_eq!(d.categories, vec!["cs.AI", "cs.LG"]);
         assert!(!d.include_cross_list);
         assert_eq!(d.max_papers, 20);
         assert_eq!(d.run_at, "09:00");
         assert_eq!(d.retention_days, 14);
-        assert_eq!(d.llm.base_url, "https://api.openai.com/v1");
-        assert_eq!(d.llm.model, "gpt-4o-mini");
-        assert_eq!(d.llm.api_key, None);
-        assert_eq!(d.llm.api_key_env, "OPENAI_API_KEY");
-        assert_eq!(d.llm.language, "English");
+        // The daily summarizer LLM now lives under [ai.daily], separately.
+        assert!(cfg.ai.daily.is_none());
     }
 
     #[test]
-    fn chat_config_parses_models_with_defaults() {
+    fn ai_chat_config_parses_models_with_defaults() {
         let cfg: Config = toml::from_str(
             r#"
 inbox_dir     = "./inbox"
 library_root  = "./library"
 database_url  = "sqlite:./x.db"
 
-[[chat.models]]
+[[ai.chat.models]]
 label = "GPT-5 Mini"
 model = "gpt-5-mini"
 
-[[chat.models]]
+[[ai.chat.models]]
 label    = "Local Qwen"
 base_url = "http://localhost:11434/v1"
 model    = "qwen3:32b"
 "#,
         )
         .unwrap();
-        assert_eq!(cfg.chat.models.len(), 2);
-        assert_eq!(cfg.chat.models[0].base_url, "https://api.openai.com/v1");
-        assert_eq!(cfg.chat.models[0].api_key_env, "OPENAI_API_KEY");
-        assert_eq!(cfg.chat.models[1].model, "qwen3:32b");
-        assert_eq!(cfg.chat.max_context_chars, 60_000);
+        assert_eq!(cfg.ai.chat.models.len(), 2);
+        assert_eq!(cfg.ai.chat.models[1].endpoint.model.as_deref(), Some("qwen3:32b"));
+        assert_eq!(cfg.ai.chat.max_context_chars, 60_000);
+        // Endpoint fields resolve through [ai] defaults + built-ins.
+        let r0 = cfg.ai.resolve(&cfg.ai.chat.models[0].endpoint);
+        assert_eq!(r0.base_url, "https://api.openai.com/v1");
+        let r1 = cfg.ai.resolve(&cfg.ai.chat.models[1].endpoint);
+        assert_eq!(r1.base_url, "http://localhost:11434/v1");
     }
 
     #[test]
-    fn chat_config_absent_means_disabled() {
+    fn ai_chat_config_absent_means_disabled() {
         let cfg: Config = toml::from_str(
             r#"
 inbox_dir     = "./inbox"
@@ -458,29 +420,22 @@ database_url  = "sqlite:./x.db"
 "#,
         )
         .unwrap();
-        assert!(cfg.chat.models.is_empty());
-        assert_eq!(cfg.chat.max_context_chars, 60_000);
+        assert!(cfg.ai.chat.models.is_empty());
+        assert_eq!(cfg.ai.chat.max_context_chars, 60_000);
     }
 
     #[test]
-    fn chat_model_key_resolution() {
-        let m = ChatModelConfig {
-            label: "x".into(),
-            base_url: "http://localhost".into(),
-            model: "m".into(),
-            api_key: Some("sk-inline".into()),
-            api_key_env: "XUEWEN_TEST_UNSET_ENV".into(),
-            reasoning_effort: None,
-        };
-        assert_eq!(m.resolve_key().as_deref(), Some("sk-inline"));
-
-        let keyless = ChatModelConfig { api_key: None, ..m };
-        // Env var unset -> keyless entry (requests carry no Authorization).
-        assert_eq!(keyless.resolve_key(), None);
+    fn resolve_key_prefers_inline_over_env_and_empty_is_none() {
+        assert_eq!(
+            resolve_key(Some("sk-inline".into()), "XUEWEN_TEST_UNSET_ENV"),
+            Some("sk-inline".into())
+        );
+        // Env var unset -> keyless (requests carry no Authorization).
+        assert_eq!(resolve_key(None, "XUEWEN_TEST_UNSET_ENV"), None);
     }
 
     #[test]
-    fn loads_summary_section_with_defaults() {
+    fn loads_ai_summary_section_with_defaults() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         write!(
             f,
@@ -489,17 +444,17 @@ inbox_dir = "/d/i"
 library_root = "/d/l"
 database_url = "sqlite:/d/x.db"
 
-[summary]
+[ai.summary]
 model = "gpt-4o-mini"
 "#
         )
         .unwrap();
         let cfg = Config::load(f.path()).unwrap();
-        let s = cfg.summary.expect("summary section present");
-        assert_eq!(s.model, "gpt-4o-mini");
-        assert_eq!(s.base_url, "https://api.openai.com/v1");
-        assert_eq!(s.api_key_env, "OPENAI_API_KEY");
-        assert_eq!(s.language, "English");
+        let s = cfg.ai.summary.as_ref().expect("summary section present");
+        assert_eq!(s.model.as_deref(), Some("gpt-4o-mini"));
+        let r = cfg.ai.resolve(&s);
+        assert_eq!(r.base_url, "https://api.openai.com/v1");
+        assert_eq!(r.model.as_deref(), Some("gpt-4o-mini"));
     }
 
     #[test]
@@ -515,7 +470,95 @@ database_url = "sqlite:/d/x.db"
         )
         .unwrap();
         let cfg = Config::load(f.path()).unwrap();
-        assert!(cfg.summary.is_none());
+        assert!(cfg.ai.summary.is_none());
         assert!(cfg.ui.fold_abstract, "fold_abstract defaults to true");
+    }
+
+    #[test]
+    fn ai_resolve_precedence_use_over_ai_over_builtin() {
+        use super::{AiConfig, AiDefaults};
+        let ai = AiConfig {
+            defaults: AiDefaults {
+                base_url: Some("https://ai.example/v1".into()),
+                model: Some("gpt-4o-mini".into()),
+                reasoning_effort: Some("high".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Empty use inherits [ai] defaults.
+        let r = ai.resolve(&AiDefaults::default());
+        assert_eq!(r.base_url, "https://ai.example/v1");
+        assert_eq!(r.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(r.reasoning_effort.as_deref(), Some("high"));
+        // Use override wins.
+        let r2 = ai.resolve(&AiDefaults { model: Some("gpt-5.6-terra".into()), ..Default::default() });
+        assert_eq!(r2.model.as_deref(), Some("gpt-5.6-terra"));
+        // Built-in base_url when [ai] omits it.
+        let bare = AiConfig::default();
+        assert_eq!(bare.resolve(&AiDefaults::default()).base_url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn ai_sections_parse_with_flatten_and_inheritance() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, r#"
+inbox_dir = "/d/i"
+library_root = "/d/l"
+database_url = "sqlite:/d/x.db"
+
+[ai]
+model = "gpt-4o-mini"
+reasoning_effort = "high"
+
+[ai.embedding]
+model = "text-embedding-3-small"
+dims = 1536
+
+[ai.chat]
+[[ai.chat.models]]
+label = "Terra"
+model = "gpt-5.6-terra"
+
+[ai.summary]
+
+[ai.daily]
+"#).unwrap();
+        let cfg = Config::load(f.path()).unwrap();
+        let ai = &cfg.ai;
+        assert_eq!(ai.defaults.model.as_deref(), Some("gpt-4o-mini"));
+        // embedding overrides model, keeps its own model
+        assert_eq!(ai.embedding.as_ref().unwrap().endpoint.model.as_deref(), Some("text-embedding-3-small"));
+        assert_eq!(ai.embedding.as_ref().unwrap().dims, 1536);
+        // chat model present with its own model
+        assert_eq!(ai.chat.models[0].label, "Terra");
+        assert_eq!(ai.chat.models[0].endpoint.model.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(ai.chat.max_context_chars, 60_000);
+        // present-but-empty summary/daily ⇒ Some(defaults), inherit via resolve
+        assert!(ai.summary.is_some());
+        assert_eq!(ai.resolve(ai.summary.as_ref().unwrap()).model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(ai.resolve(ai.summary.as_ref().unwrap()).reasoning_effort.as_deref(), Some("high"));
+        assert!(ai.daily.is_some());
+    }
+
+    #[test]
+    fn ai_absent_means_features_off() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "inbox_dir=\"/d/i\"\nlibrary_root=\"/d/l\"\ndatabase_url=\"sqlite:/d/x.db\"\n").unwrap();
+        let cfg = Config::load(f.path()).unwrap();
+        assert!(cfg.ai.embedding.is_none());
+        assert!(cfg.ai.chat.models.is_empty());
+        assert!(cfg.ai.summary.is_none());
+        assert!(cfg.ai.daily.is_none());
+    }
+
+    #[test]
+    fn example_config_parses() {
+        // The committed example must always load (all sections commented is fine).
+        let cfg = Config::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/xuewen.example.toml"
+        )));
+        assert!(cfg.is_ok(), "xuewen.example.toml must parse: {:?}", cfg.err());
     }
 }

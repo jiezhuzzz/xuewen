@@ -45,7 +45,7 @@ pub struct DailyService {
 
 impl DailyService {
     /// `Ok(None)` when the feature is off: no `[daily]` section, no
-    /// `[search.embedding]`, or a missing API key (each case warns).
+    /// `[ai.embedding]`/`[ai.daily]`, or a missing API key (each case warns).
     /// `Err` only on invalid `[daily]` values.
     pub fn from_config(cfg: &Config, pool: SqlitePool) -> anyhow::Result<Option<Arc<Self>>> {
         let Some(daily) = &cfg.daily else { return Ok(None) };
@@ -53,20 +53,22 @@ impl DailyService {
             anyhow::bail!("[daily].categories must not be empty");
         }
         scheduler::parse_run_at(&daily.run_at)?; // fail fast on typos
-        let Some(embed_cfg) = &cfg.search.embedding else {
-            tracing::warn!("[daily] set but [search.embedding] missing — daily papers disabled");
+        let Some(embed) = &cfg.ai.embedding else {
+            tracing::warn!("[daily] set but [ai.embedding] missing — daily papers disabled");
             return Ok(None);
         };
-        let Some(embedder) = Embedder::from_config(embed_cfg) else {
-            return Ok(None); // warned inside
+        let er = cfg.ai.resolve(&embed.endpoint);
+        let emodel = embed.endpoint.model.clone().unwrap_or_else(|| "text-embedding-3-small".to_string());
+        let Some(embedder) = Embedder::from_resolved(&er, &emodel, embed.dims) else { return Ok(None); };
+        let Some(daily_use) = &cfg.ai.daily else {
+            tracing::warn!("[daily] set but [ai.daily] missing — daily papers disabled");
+            return Ok(None);
         };
-        let Some(chat) = tldr::ChatClient::from_daily_llm(&daily.llm) else {
-            return Ok(None); // warned inside
-        };
+        let Some(chat) = crate::summary::Summarizer::from_resolved(&cfg.ai.resolve(daily_use)) else { return Ok(None); };
         let vectors = QdrantStore::new(
             &cfg.search.qdrant_url,
             &cfg.search.qdrant_collection,
-            embed_cfg.dims,
+            embed.dims,
         )?;
         let ua = user_agent(cfg.contact_email.as_deref());
         Ok(Some(Arc::new(Self {

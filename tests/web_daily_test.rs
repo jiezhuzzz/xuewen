@@ -2,7 +2,7 @@ use axum_test::TestServer;
 use serde_json::Value;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use xuewen::config::{DailyConfig, DailyLlmConfig};
+use xuewen::config::DailyConfig;
 use xuewen::daily::{store, tldr::ChatClient, DailyService};
 use xuewen::db;
 use xuewen::search::{embedder::Embedder, vector::QdrantStore};
@@ -22,13 +22,6 @@ fn daily_cfg() -> DailyConfig {
         max_papers: 20,
         run_at: "09:00".into(),
         retention_days: 14,
-        llm: DailyLlmConfig {
-            base_url: "http://127.0.0.1:1/v1".into(),
-            model: "m".into(),
-            api_key: None,
-            api_key_env: "UNSET".into(),
-            language: "English".into(),
-        },
     }
 }
 

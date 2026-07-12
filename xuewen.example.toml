@@ -16,20 +16,14 @@ database_url  = "sqlite:./library.db"
 
 # Search (optional section; these are the defaults).
 # Keyword full-text search always works. Semantic search additionally needs
-# a running Qdrant server and the [search.embedding] subsection with an API key.
+# a running Qdrant server and the [ai.embedding] subsection with an API key.
 #[search]
 #index_dir         = "./search-index"       # Tantivy index (derived; safe to delete)
 #qdrant_url        = "http://localhost:6333"
 #qdrant_collection = "xuewen"
 
-#[search.embedding]
-#base_url    = "https://api.openai.com/v1"  # any OpenAI-compatible endpoint
-#model       = "text-embedding-3-small"
-#dims        = 1536
-#api_key_env = "OPENAI_API_KEY"             # or: api_key = "sk-..."
-
 # Daily arXiv recommendations, shown on a Glance dashboard via /api/daily
-# (optional). Requires [search.embedding]: the library's title+abstract
+# (optional). Requires [ai.embedding]: the library's title+abstract
 # vectors are the interest profile the new papers are scored against.
 #[daily]
 #categories         = ["cs.AI", "cs.LG"]  # arXiv category codes (required)
@@ -38,8 +32,28 @@ database_url  = "sqlite:./library.db"
 #run_at             = "09:00"   # daily run, UTC wall time
 #retention_days     = 14
 
-#[daily.llm]                    # chat-completions API for summaries
-#base_url    = "https://api.openai.com/v1"
-#model       = "gpt-4o-mini"
-#api_key_env = "OPENAI_API_KEY" # or: api_key = "sk-..."
-#language    = "English"
+# All AI/LLM features share one section. Set the endpoint + key + default model
+# once; each use overrides only what differs. Absent ⇒ that feature is off.
+#[ai]
+#base_url         = "https://api.openai.com/v1"  # default; any OpenAI-compatible endpoint
+#api_key_env      = "OPENAI_API_KEY"             # default; or: api_key = "sk-..."
+#model            = "gpt-4o-mini"                # default model for chat/summary/daily
+#reasoning_effort = "high"                       # optional (reasoning models)
+
+# Semantic search (needs Qdrant). Embeddings use their own model.
+#[ai.embedding]
+#model = "text-embedding-3-small"
+#dims  = 1536
+
+# Paper chat (one entry per selectable model).
+#[ai.chat]
+#max_context_chars = 60000
+#[[ai.chat.models]]
+#label = "GPT-4o mini"
+#model = "gpt-4o-mini"
+
+# Per-paper library summaries. Empty ⇒ inherits [ai] model + reasoning_effort.
+#[ai.summary]
+
+# Daily arXiv feed summaries.
+#[ai.daily]

@@ -141,14 +141,8 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<PipelineOutcom
             }
         };
         let code_url = full_text.as_deref().and_then(find_code_url);
-        let summary = tldr::generate_summary(
-            &svc.chat,
-            &svc.cfg.llm.language,
-            &c.title,
-            &c.abstract_text,
-            full_text.as_deref(),
-        )
-        .await;
+        let summary = tldr::generate_summary(&svc.chat, &c.title, &c.abstract_text, full_text.as_deref())
+            .await;
         if summary.is_none() {
             summaries_failed += 1;
         }
@@ -214,7 +208,7 @@ async fn prune_old(svc: &DailyService, batch_date: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DailyConfig, DailyLlmConfig};
+    use crate::config::DailyConfig;
     use crate::daily::{store, tldr::ChatClient, DailyService};
     use crate::search::{embedder::Embedder, vector::QdrantStore};
     use serde_json::json;
@@ -299,13 +293,6 @@ Abstract: Very similar to the library.</summary>
             max_papers: 20,
             run_at: "09:00".into(),
             retention_days: 14,
-            llm: DailyLlmConfig {
-                base_url: "unused".into(),
-                model: "m".into(),
-                api_key: None,
-                api_key_env: "UNSET".into(),
-                language: "English".into(),
-            },
         }
     }
 

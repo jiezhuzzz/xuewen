@@ -2,8 +2,6 @@ use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use std::time::Duration;
 
-use crate::config::EmbeddingConfig;
-
 const BATCH: usize = 64;
 const ATTEMPTS: u32 = 3;
 
@@ -17,29 +15,18 @@ pub struct Embedder {
 }
 
 impl Embedder {
-    /// `None` when no API key is resolvable — semantic search is then
-    /// unavailable, but nothing fails.
-    pub fn from_config(cfg: &EmbeddingConfig) -> Option<Self> {
-        let key = cfg
-            .api_key
-            .clone()
-            .or_else(|| std::env::var(&cfg.api_key_env).ok())
-            .filter(|k| !k.trim().is_empty());
-        let Some(key) = key else {
-            tracing::warn!(
-                "[search.embedding] configured but no API key (set api_key or ${})  — semantic search disabled",
-                cfg.api_key_env
-            );
+    /// Build from a resolved endpoint + dims. `None` when no key resolves.
+    pub fn from_resolved(r: &crate::config::Resolved, model: &str, dims: usize) -> Option<Self> {
+        let Some(key) = r.api_key.clone() else {
+            tracing::warn!("[ai.embedding] configured but no API key — semantic search disabled");
             return None;
         };
         Some(Self {
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
+            http: reqwest::Client::builder().timeout(Duration::from_secs(60)).build()
                 .expect("building embedding HTTP client"),
-            base_url: cfg.base_url.trim_end_matches('/').to_string(),
-            model: cfg.model.clone(),
-            dims: cfg.dims,
+            base_url: r.base_url.trim_end_matches('/').to_string(),
+            model: model.to_string(),
+            dims,
             api_key: Some(key),
         })
     }
@@ -107,7 +94,7 @@ impl Embedder {
                     for d in &body.data {
                         if d.embedding.len() != self.dims {
                             bail!(
-                                "embedding dims mismatch: API returned {}, config says {} — fix [search.embedding].dims",
+                                "embedding dims mismatch: API returned {}, config says {} — fix [ai.embedding].dims",
                                 d.embedding.len(),
                                 self.dims
                             );
@@ -165,14 +152,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let cfg = crate::config::EmbeddingConfig {
+        let r = crate::config::Resolved {
             base_url: format!("{}/v1", server.uri()),
-            model: "text-embedding-3-small".into(),
-            dims: 4,
             api_key: Some("sk-test".into()),
-            api_key_env: "UNSET_VAR_FOR_TEST".into(),
+            model: Some("text-embedding-3-small".into()),
+            reasoning_effort: None,
         };
-        let e = Embedder::from_config(&cfg).unwrap();
+        let e = Embedder::from_resolved(&r, "text-embedding-3-small", 4).unwrap();
         let out = e.embed(&["a".into(), "b".into()]).await.unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].len(), 4);
@@ -235,14 +221,13 @@ mod tests {
     }
 
     #[test]
-    fn from_config_without_key_is_none() {
-        let cfg = crate::config::EmbeddingConfig {
+    fn from_resolved_without_key_is_none() {
+        let r = crate::config::Resolved {
             base_url: "https://api.openai.com/v1".into(),
-            model: "m".into(),
-            dims: 4,
             api_key: None,
-            api_key_env: "XUEWEN_TEST_KEY_THAT_IS_NOT_SET".into(),
+            model: Some("m".into()),
+            reasoning_effort: None,
         };
-        assert!(Embedder::from_config(&cfg).is_none());
+        assert!(Embedder::from_resolved(&r, "m", 4).is_none());
     }
 }

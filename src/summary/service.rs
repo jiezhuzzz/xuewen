@@ -1,5 +1,5 @@
 //! Background generation of per-paper summaries. A periodic sweep fills the
-//! `paper_summaries` table for library papers that lack one, when `[summary]`
+//! `paper_summaries` table for library papers that lack one, when `[ai.summary]`
 //! is configured. Sibling to the search indexer's sweep loop.
 
 use std::path::PathBuf;
@@ -22,31 +22,20 @@ const RETRY_BACKOFF_MINS: i64 = 30;
 pub struct SummaryService {
     pool: SqlitePool,
     summarizer: Summarizer,
-    language: String,
     library_root: PathBuf,
 }
 
 impl SummaryService {
-    /// `None` when `[summary]` is absent or no API key resolves.
+    /// `None` when `[ai.summary]` is absent or no model/key resolves.
     pub fn from_config(pool: SqlitePool, cfg: &Config) -> Option<Arc<Self>> {
-        let sc = cfg.summary.as_ref()?;
-        let summarizer = Summarizer::from_summary(sc)?; // warns on missing key
-        Some(Arc::new(Self {
-            pool,
-            summarizer,
-            language: sc.language.clone(),
-            library_root: cfg.library_root.clone(),
-        }))
+        let use_ = cfg.ai.summary.as_ref()?;
+        let summarizer = Summarizer::from_resolved(&cfg.ai.resolve(use_))?; // warns handled by caller check
+        Some(Arc::new(Self { pool, summarizer, library_root: cfg.library_root.clone() }))
     }
 
     /// DI constructor for tests.
-    pub fn for_tests(
-        pool: SqlitePool,
-        summarizer: Summarizer,
-        language: String,
-        library_root: PathBuf,
-    ) -> Arc<Self> {
-        Arc::new(Self { pool, summarizer, language, library_root })
+    pub fn for_tests(pool: SqlitePool, summarizer: Summarizer, library_root: PathBuf) -> Arc<Self> {
+        Arc::new(Self { pool, summarizer, library_root })
     }
 
     /// One pass: summarize up to `BATCH` papers that lack a summary. Best-effort
@@ -88,7 +77,7 @@ impl SummaryService {
         };
         let title = paper.meta.title.as_deref().unwrap_or_default();
         let abstract_text = paper.meta.abstract_text.as_deref().unwrap_or_default();
-        match generate_summary(&self.summarizer, &self.language, title, abstract_text, full_text.as_deref()).await {
+        match generate_summary(&self.summarizer, title, abstract_text, full_text.as_deref()).await {
             Some(summary) => {
                 store::upsert(&self.pool, &paper.id, &summary, self.model()).await?;
                 store::clear_failure(&self.pool, Some(&paper.id)).await?;
@@ -182,7 +171,6 @@ mod tests {
         let svc = SummaryService::for_tests(
             pool.clone(),
             Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
-            "English".into(),
             lib.path().to_path_buf(),
         );
 
@@ -237,7 +225,6 @@ mod tests {
         let svc = SummaryService::for_tests(
             pool.clone(),
             Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
-            "English".into(),
             lib.path().to_path_buf(),
         );
 
@@ -284,7 +271,6 @@ mod tests {
         let svc = SummaryService::for_tests(
             pool.clone(),
             Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
-            "English".into(),
             lib.path().to_path_buf(),
         );
 
@@ -356,7 +342,6 @@ mod tests {
         let svc = SummaryService::for_tests(
             pool.clone(),
             Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
-            "English".into(),
             lib.path().to_path_buf(),
         );
 

@@ -4,8 +4,6 @@
 
 use anyhow::Result;
 
-use crate::config::{DailyLlmConfig, SummaryConfig};
-
 mod service;
 pub mod store;
 
@@ -27,45 +25,25 @@ pub struct Summary {
     pub limitations: String,
 }
 
-/// Resolve an API key: inline value wins, else the named env var; empty ⇒ None.
-fn resolve_key(explicit: Option<String>, api_key_env: &str) -> Option<String> {
-    explicit
-        .or_else(|| std::env::var(api_key_env).ok())
-        .filter(|k| !k.trim().is_empty())
-}
-
 /// Config-agnostic summary chat client (was `daily::tldr::ChatClient`).
 pub struct Summarizer {
     inner: crate::llm::LlmClient,
 }
 
 impl Summarizer {
-    fn new(base_url: &str, model: &str, api_key: Option<String>) -> Self {
+    pub fn new(base_url: &str, model: &str, api_key: Option<String>) -> Self {
         Self { inner: crate::llm::LlmClient::new(base_url, model, api_key) }
     }
 
-    /// Build from `[daily.llm]`. `None` when no API key resolves (warns).
-    pub fn from_daily_llm(cfg: &DailyLlmConfig) -> Option<Self> {
-        let Some(key) = resolve_key(cfg.api_key.clone(), &cfg.api_key_env) else {
-            tracing::warn!(
-                "[daily.llm] configured but no API key (set api_key or ${}) — daily papers disabled",
-                cfg.api_key_env
-            );
-            return None;
-        };
-        Some(Self::new(&cfg.base_url, &cfg.model, Some(key)))
-    }
-
-    /// Build from `[summary]`. `None` when no API key resolves (warns).
-    pub fn from_summary(cfg: &SummaryConfig) -> Option<Self> {
-        let Some(key) = resolve_key(cfg.api_key.clone(), &cfg.api_key_env) else {
-            tracing::warn!(
-                "[summary] configured but no API key (set api_key or ${}) — library summaries disabled",
-                cfg.api_key_env
-            );
-            return None;
-        };
-        Some(Self::new(&cfg.base_url, &cfg.model, Some(key)))
+    /// Build a summarizer for a resolved endpoint. `None` when no model OR no
+    /// key resolves (matches the old `from_summary`/`from_daily_llm`, which
+    /// required a key — a keyless summary run would just 401 per paper).
+    pub fn from_resolved(r: &crate::config::Resolved) -> Option<Self> {
+        let model = r.model.clone()?;
+        let key = r.api_key.clone()?;
+        let inner = crate::llm::LlmClient::new(&r.base_url, &model, Some(key))
+            .with_reasoning_effort(r.reasoning_effort.clone());
+        Some(Self { inner })
     }
 
     /// Keyless client pointed at a mock server. Test support only.
@@ -83,11 +61,11 @@ impl Summarizer {
     }
 }
 
-fn prompt(language: &str, title: &str, abstract_text: &str, full_text: Option<&str>) -> String {
+fn prompt(title: &str, abstract_text: &str, full_text: Option<&str>) -> String {
     let mut p = format!(
         "Summarize the following paper as a JSON object with exactly these string \
          keys: \"tldr\", \"problem\", \"approach\", \"results\", \"limitations\". \
-         Write in {language}. Keep \"tldr\" to one sentence and every other field \
+         Write in English. Keep \"tldr\" to one sentence and every other field \
          to 1-2 sentences, about 120 words in total. Prefer concrete numbers in \
          \"results\" (benchmark, metric, delta over baseline). Base \"limitations\" \
          on the paper's own discussion when present. Output ONLY the JSON object.\n\n\
@@ -114,13 +92,12 @@ fn parse_summary(reply: &str) -> Result<Summary> {
 
 async fn summary_attempt(
     chat: &Summarizer,
-    language: &str,
     title: &str,
     abstract_text: &str,
     full_text: Option<&str>,
 ) -> Result<Summary> {
     let reply = chat
-        .complete(SYSTEM, &prompt(language, title, abstract_text, full_text))
+        .complete(SYSTEM, &prompt(title, abstract_text, full_text))
         .await?;
     parse_summary(&reply)
 }
@@ -129,18 +106,17 @@ async fn summary_attempt(
 /// `None`. A parse failure counts as a call failure. Never propagates an error.
 pub async fn generate_summary(
     chat: &Summarizer,
-    language: &str,
     title: &str,
     abstract_text: &str,
     full_text: Option<&str>,
 ) -> Option<Summary> {
     if full_text.is_some() {
-        match summary_attempt(chat, language, title, abstract_text, full_text).await {
+        match summary_attempt(chat, title, abstract_text, full_text).await {
             Ok(s) => return Some(s),
             Err(e) => tracing::warn!("full-text summary failed for {title}: {e}"),
         }
     }
-    match summary_attempt(chat, language, title, abstract_text, None).await {
+    match summary_attempt(chat, title, abstract_text, None).await {
         Ok(s) => Some(s),
         Err(e) => {
             tracing::warn!("abstract summary failed for {title}: {e}");
@@ -173,14 +149,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let cfg = crate::config::DailyLlmConfig {
+        let r = crate::config::Resolved {
             base_url: format!("{}/v1", server.uri()),
-            model: "gpt-4o-mini".into(),
             api_key: Some("sk-test".into()),
-            api_key_env: "UNSET_VAR_FOR_TEST".into(),
-            language: "English".into(),
+            model: Some("gpt-4o-mini".into()),
+            reasoning_effort: None,
         };
-        let c = Summarizer::from_daily_llm(&cfg).unwrap();
+        let c = Summarizer::from_resolved(&r).unwrap();
         assert_eq!(c.complete("sys", "hello user").await.unwrap(), "hi");
     }
 
@@ -218,15 +193,25 @@ mod tests {
     }
 
     #[test]
-    fn from_daily_llm_without_key_is_none() {
-        let cfg = crate::config::DailyLlmConfig {
+    fn from_resolved_without_key_is_none() {
+        let r = crate::config::Resolved {
             base_url: "https://api.openai.com/v1".into(),
-            model: "m".into(),
             api_key: None,
-            api_key_env: "XUEWEN_TEST_KEY_THAT_IS_NOT_SET".into(),
-            language: "English".into(),
+            model: Some("m".into()),
+            reasoning_effort: None,
         };
-        assert!(Summarizer::from_daily_llm(&cfg).is_none());
+        assert!(Summarizer::from_resolved(&r).is_none());
+    }
+
+    #[test]
+    fn from_resolved_without_model_is_none() {
+        let r = crate::config::Resolved {
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: Some("sk-test".into()),
+            model: None,
+            reasoning_effort: None,
+        };
+        assert!(Summarizer::from_resolved(&r).is_none());
     }
 
     fn summary_json() -> serde_json::Value {
@@ -251,12 +236,12 @@ mod tests {
     }
 
     #[test]
-    fn prompt_names_all_keys_and_language() {
-        let p = prompt("German", "T", "A", None);
+    fn prompt_names_all_keys_and_writes_in_english() {
+        let p = prompt("T", "A", None);
         for key in ["tldr", "problem", "approach", "results", "limitations"] {
             assert!(p.contains(&format!("\"{key}\"")), "missing key {key}");
         }
-        assert!(p.contains("German"));
+        assert!(p.contains("Write in English."));
     }
 
     #[tokio::test]
@@ -279,7 +264,7 @@ mod tests {
             .mount(&server)
             .await;
         let c = Summarizer::for_tests(&format!("{}/v1", server.uri()), "m");
-        let out = generate_summary(&c, "English", "Title", "An abstract.", Some("full text")).await;
+        let out = generate_summary(&c, "Title", "An abstract.", Some("full text")).await;
         assert_eq!(out.unwrap().tldr, "One line.");
     }
 
@@ -297,7 +282,7 @@ mod tests {
             .mount(&server)
             .await;
         let c = Summarizer::for_tests(&format!("{}/v1", server.uri()), "m");
-        let out = generate_summary(&c, "English", "T", "A", Some("full text")).await;
+        let out = generate_summary(&c, "T", "A", Some("full text")).await;
         assert!(out.is_none());
     }
 }

@@ -4,19 +4,24 @@ use axum_test::TestServer;
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use xuewen::config::{ChatConfig, ChatModelConfig};
+use xuewen::config::{AiConfig, AiDefaults, ChatConfig, ChatModelConfig};
 
-fn chat_cfg(base_url: &str) -> ChatConfig {
-    ChatConfig {
-        models: vec![ChatModelConfig {
-            label: "Mock Model".into(),
-            base_url: base_url.into(),
-            model: "mock-1".into(),
-            api_key: None,
-            api_key_env: "XUEWEN_TEST_UNSET".into(),
-            reasoning_effort: None,
-        }],
-        max_context_chars: 60_000,
+fn chat_cfg(base_url: &str) -> AiConfig {
+    AiConfig {
+        chat: ChatConfig {
+            models: vec![ChatModelConfig {
+                label: "Mock Model".into(),
+                endpoint: AiDefaults {
+                    base_url: Some(base_url.into()),
+                    api_key: None,
+                    api_key_env: Some("XUEWEN_TEST_UNSET".into()),
+                    model: Some("mock-1".into()),
+                    reasoning_effort: None,
+                },
+            }],
+            max_context_chars: 60_000,
+        },
+        ..Default::default()
     }
 }
 

@@ -76,14 +76,17 @@ pub struct SearchService {
 }
 
 impl SearchService {
-    pub async fn open(pool: SqlitePool, cfg: &SearchConfig) -> Result<Arc<Self>> {
+    pub async fn open(pool: SqlitePool, cfg: &SearchConfig, ai: &crate::config::AiConfig) -> Result<Arc<Self>> {
         let (fts_idx, created) = fts::FtsIndex::open(&cfg.index_dir)?;
-        if created {
-            // Fresh/recreated index: force the sweep to refill it from SQLite.
-            store::clear_stamps(&pool, true, false).await?;
-        }
-        let embedder = cfg.embedding.as_ref().and_then(embedder::Embedder::from_config);
-        let dims = cfg.embedding.as_ref().map(|e| e.dims).unwrap_or(1536);
+        if created { store::clear_stamps(&pool, true, false).await?; }
+        let (embedder, dims) = match &ai.embedding {
+            Some(e) => {
+                let r = ai.resolve(&e.endpoint);
+                let model = e.endpoint.model.clone().unwrap_or_else(|| "text-embedding-3-small".to_string());
+                (embedder::Embedder::from_resolved(&r, &model, e.dims), e.dims)
+            }
+            None => (None, 1536),
+        };
         let vectors = vector::QdrantStore::new(&cfg.qdrant_url, &cfg.qdrant_collection, dims)?;
         Ok(Arc::new(Self { pool, fts: fts_idx, vectors, embedder, notify: tokio::sync::Notify::new() }))
     }
@@ -117,7 +120,7 @@ impl SearchService {
             None => SemanticState {
                 available: false,
                 reason: Some(
-                    "embedding API not configured (set [search.embedding] and an API key)".into(),
+                    "embedding API not configured (set [ai.embedding] and an API key)".into(),
                 ),
             },
         }
