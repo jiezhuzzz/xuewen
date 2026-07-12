@@ -741,18 +741,32 @@ async fn main() -> Result<()> {
             };
             if all {
                 xuewen::summary::store::clear(&pool, None).await?;
+                xuewen::summary::store::clear_failure(&pool, None).await?;
+                let mut total = 0usize;
+                loop {
+                    let n = svc.sweep().await?;
+                    total += n;
+                    if n == 0 {
+                        break;
+                    }
+                }
+                println!("generated {total} summaries");
             } else if let Some(id) = &id {
                 xuewen::summary::store::clear(&pool, Some(id)).await?;
-            }
-            let mut total = 0usize;
-            loop {
-                let n = svc.sweep().await?;
-                total += n;
-                if n == 0 {
-                    break;
+                xuewen::summary::store::clear_failure(&pool, Some(id)).await?;
+                let ok = svc.summarize_one(id).await?;
+                println!("{}", if ok { "summary generated" } else { "no summary generated (see logs)" });
+            } else {
+                let mut total = 0usize;
+                loop {
+                    let n = svc.sweep().await?;
+                    total += n;
+                    if n == 0 {
+                        break;
+                    }
                 }
+                println!("generated {total} summaries");
             }
-            println!("generated {total} summaries");
         }
         Command::Index { cmd } => match cmd {
             IndexCmd::Status => {

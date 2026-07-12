@@ -14,6 +14,10 @@ use crate::summary::{generate_summary, store, Summarizer};
 
 /// How many papers one sweep pass summarizes before yielding.
 const BATCH: i64 = 8;
+/// Give up on a paper after this many failed generations.
+const MAX_ATTEMPTS: i64 = 5;
+/// Wait this long before retrying a failed paper.
+const RETRY_BACKOFF_MINS: i64 = 30;
 
 pub struct SummaryService {
     pool: SqlitePool,
@@ -49,7 +53,8 @@ impl SummaryService {
     /// per paper — one paper's failure is logged and skipped, never aborting the
     /// batch (mirrors the search indexer). Returns the number written.
     pub async fn sweep(&self) -> Result<usize> {
-        let ids = store::missing_ids(&self.pool, BATCH).await?;
+        let retry_before = (chrono::Utc::now() - chrono::Duration::minutes(RETRY_BACKOFF_MINS)).to_rfc3339();
+        let ids = store::due_ids(&self.pool, BATCH, MAX_ATTEMPTS, &retry_before).await?;
         let mut written = 0;
         for id in ids {
             match self.summarize_one(&id).await {
@@ -61,12 +66,13 @@ impl SummaryService {
         Ok(written)
     }
 
-    /// Summarize one paper. `Ok(true)` = stored; `Ok(false)` = skipped (purged,
-    /// or the model returned nothing); `Err` = a hard failure for THIS paper
-    /// (the caller logs it and moves on).
-    async fn summarize_one(&self, id: &str) -> Result<bool> {
+    /// Summarize one paper. `Ok(true)` = stored; `Ok(false)` = skipped (purged)
+    /// or the model produced nothing (a failure was recorded for backoff);
+    /// `Err` = a hard DB failure for THIS paper (caller logs; NOT counted as a
+    /// generation failure, so it isn't backed off).
+    pub async fn summarize_one(&self, id: &str) -> Result<bool> {
         let Some(paper) = crate::db::get_by_id(&self.pool, id).await? else {
-            return Ok(false); // purged since missing_ids ran
+            return Ok(false); // purged since selection ran
         };
         let pdf_path = self.library_root.join(&paper.rel_path);
         let full_text = match tokio::task::spawn_blocking(move || crate::pdf::extract_text_all(&pdf_path)).await {
@@ -85,9 +91,13 @@ impl SummaryService {
         match generate_summary(&self.summarizer, &self.language, title, abstract_text, full_text.as_deref()).await {
             Some(summary) => {
                 store::upsert(&self.pool, &paper.id, &summary, self.model()).await?;
+                store::clear_failure(&self.pool, Some(&paper.id)).await?;
                 Ok(true)
             }
-            None => Ok(false),
+            None => {
+                store::record_failure(&self.pool, &paper.id).await?;
+                Ok(false)
+            }
         }
     }
 
@@ -233,5 +243,65 @@ mod tests {
 
         assert_eq!(svc.sweep().await.unwrap(), 1);
         assert!(crate::summary::store::get(&pool, "p1").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn sweep_backs_off_a_failing_paper() {
+        let server = MockServer::start().await;
+        // Non-JSON 200 body -> parse_summary fails on every attempt, so
+        // generate_summary returns None after the full-text + abstract attempts.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply("not json")))
+            .expect(2) // full-text + abstract attempts, for ONE paper, ONCE
+            .mount(&server)
+            .await;
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}", db_dir.path().join("t.db").display());
+        let pool = crate::db::connect(&url).await.unwrap();
+        let lib = tempfile::tempdir().unwrap();
+
+        let paper = Paper {
+            id: "p1".into(),
+            content_hash: "h".into(),
+            rel_path: "p1.pdf".into(),
+            cite_key: None,
+            added_at: "2026-07-12T00:00:00Z".into(),
+            deleted_at: None,
+            meta: PaperMeta {
+                title: Some("Title".into()),
+                abstract_text: Some("Abstract.".into()),
+                authors: Authors(vec!["Ada".into()]),
+                venue: None, year: Some(2026), doi: None, arxiv_id: None,
+                dblp_key: None, url: None, source: None,
+                status: PaperStatus::Resolved,
+            },
+        };
+        write_pdf(&lib.path().join("p1.pdf"), "the body");
+        crate::db::insert_paper(&pool, &paper).await.unwrap();
+
+        let svc = SummaryService::for_tests(
+            pool.clone(),
+            Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
+            "English".into(),
+            lib.path().to_path_buf(),
+        );
+
+        // First sweep: fails, records the failure.
+        assert_eq!(svc.sweep().await.unwrap(), 0);
+        // Second, immediate sweep: no summary generated, and (enforced by the
+        // .expect(2) mock above) no further chat calls -- the paper was NOT
+        // retried because it's within the 30-minute backoff window.
+        assert_eq!(svc.sweep().await.unwrap(), 0);
+
+        let recent_cutoff =
+            (chrono::Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
+        assert_eq!(
+            crate::summary::store::due_ids(&pool, 10, MAX_ATTEMPTS, &recent_cutoff)
+                .await
+                .unwrap(),
+            Vec::<String>::new()
+        );
     }
 }
