@@ -139,4 +139,41 @@ mod tests {
         clear(&pool, Some("p1")).await.unwrap();
         assert_eq!(get(&pool, "p1").await.unwrap(), None);
     }
+
+    #[tokio::test]
+    async fn missing_ids_excludes_trashed() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("p1")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("p2")).await.unwrap();
+
+        crate::db::soft_delete(&pool, "p2").await.unwrap();
+
+        let missing = missing_ids(&pool, 10).await.unwrap();
+        assert_eq!(missing, vec!["p1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn cascade_delete_removes_summary() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("p1")).await.unwrap();
+        upsert(&pool, "p1", &sample(), "gpt-x").await.unwrap();
+        assert_eq!(get(&pool, "p1").await.unwrap(), Some(sample()));
+
+        crate::db::delete_row(&pool, "p1").await.unwrap();
+        assert_eq!(get(&pool, "p1").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn clear_all_removes_every_row() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("p1")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("p2")).await.unwrap();
+        upsert(&pool, "p1", &sample(), "gpt-x").await.unwrap();
+        upsert(&pool, "p2", &sample(), "gpt-x").await.unwrap();
+
+        clear(&pool, None).await.unwrap();
+
+        assert_eq!(get(&pool, "p1").await.unwrap(), None);
+        assert_eq!(get(&pool, "p2").await.unwrap(), None);
+    }
 }
