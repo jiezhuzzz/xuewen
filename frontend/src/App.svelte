@@ -26,6 +26,7 @@
     loadPapers,
     loadProjects,
     loadSearchStatus,
+    loadSettings,
     loadStats,
     ui,
     viewer,
@@ -38,6 +39,7 @@
     loadProjects();
     loadPapers();
     loadSearchStatus();
+    loadSettings();
     loadChatModels();
   });
 

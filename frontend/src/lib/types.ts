@@ -17,6 +17,15 @@ export interface PaperSummary {
 export interface PaperDetail extends PaperSummary {
   abstract: string | null;
   project_ids: string[];
+  summary: Summary | null;
+}
+
+export interface Summary {
+  tldr: string;
+  problem: string;
+  approach: string;
+  results: string;
+  limitations: string;
 }
 
 export interface Project {
@@ -53,6 +62,7 @@ export type ImportResult =
 export interface Settings {
   proxy_cookie_set: boolean;
   proxy_cookie_updated_at: string | null;
+  fold_abstract: boolean;
 }
 
 export interface Candidate {

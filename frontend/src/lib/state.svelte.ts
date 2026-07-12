@@ -6,6 +6,7 @@ import {
   exportPaper,
   getPaper,
   getSearchStatus,
+  getSettings,
   getStats,
   identifyPaper,
   identifySearch,
@@ -129,6 +130,18 @@ export const library = $state<{
 }>({ papers: [], loading: false, error: null });
 
 export const stats = $state<{ value: Stats | null }>({ value: null });
+
+/// UI preferences from the server (`/api/settings`). Loaded once at startup.
+export const appSettings = $state<{ foldAbstract: boolean }>({ foldAbstract: true });
+
+export async function loadSettings(): Promise<void> {
+  try {
+    const s = await getSettings();
+    appSettings.foldAbstract = s.fold_abstract;
+  } catch (e) {
+    console.error(e); // keep the default on failure
+  }
+}
 
 export interface Tab {
   id: string;

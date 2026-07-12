@@ -8,7 +8,7 @@ import type { PaperDetail } from '../lib/types';
 const d: PaperDetail = {
   id: 'p1', title: 'Attention', authors: [], venue: null, year: null, doi: '10.1/x',
   arxiv_id: null, dblp_key: null, cite_key: null, url: null, source: null,
-  status: 'resolved', added_at: '', abstract: null, project_ids: [],
+  status: 'resolved', added_at: '', abstract: null, project_ids: [], summary: null,
 };
 
 beforeEach(() => {
