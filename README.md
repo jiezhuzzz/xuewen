@@ -1,8 +1,10 @@
-<p align="center">
-  <img src="assets/logo.svg" alt="Xuewen — the 學 seal" width="112" height="112" />
-</p>
+<div align="center">
+
+<img src="assets/logo.svg" width="112" height="112" alt="Xuewen — the 學 seal" />
 
 # 學問 · Xuewen
+
+</div>
 
 A self-hosted reference manager for research papers. Drop in a PDF (or an
 arXiv id / DOI / URL) and Xuewen fetches the metadata, files the paper under a
