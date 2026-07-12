@@ -304,4 +304,70 @@ mod tests {
             Vec::<String>::new()
         );
     }
+
+    #[tokio::test]
+    async fn summarize_one_clears_failure_row_on_success() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}", db_dir.path().join("t.db").display());
+        let pool = crate::db::connect(&url).await.unwrap();
+        let lib = tempfile::tempdir().unwrap();
+
+        let paper = Paper {
+            id: "p1".into(),
+            content_hash: "h".into(),
+            rel_path: "p1.pdf".into(),
+            cite_key: None,
+            added_at: "2026-07-12T00:00:00Z".into(),
+            deleted_at: None,
+            meta: PaperMeta {
+                title: Some("Title".into()),
+                abstract_text: Some("Abstract.".into()),
+                authors: Authors(vec!["Ada".into()]),
+                venue: None, year: Some(2026), doi: None, arxiv_id: None,
+                dblp_key: None, url: None, source: None,
+                status: PaperStatus::Resolved,
+            },
+        };
+        write_pdf(&lib.path().join("p1.pdf"), "the body");
+        crate::db::insert_paper(&pool, &paper).await.unwrap();
+
+        // Simulate a prior failed attempt, without calling the model.
+        crate::summary::store::record_failure(&pool, "p1").await.unwrap();
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM summary_failures WHERE paper_id = ?")
+            .bind("p1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+
+        let server = MockServer::start().await;
+        let summary_json = json!({
+            "tldr": "TL;DR.", "problem": "P.", "approach": "A.",
+            "results": "R.", "limitations": "L."
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(&summary_json)))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let svc = SummaryService::for_tests(
+            pool.clone(),
+            Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
+            "English".into(),
+            lib.path().to_path_buf(),
+        );
+
+        assert!(svc.summarize_one("p1").await.unwrap());
+        assert!(crate::summary::store::get(&pool, "p1").await.unwrap().is_some());
+
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM summary_failures WHERE paper_id = ?")
+            .bind("p1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+    }
 }
