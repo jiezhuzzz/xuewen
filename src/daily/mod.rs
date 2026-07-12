@@ -60,7 +60,7 @@ impl DailyService {
         let Some(embedder) = Embedder::from_config(embed_cfg) else {
             return Ok(None); // warned inside
         };
-        let Some(chat) = tldr::ChatClient::from_config(&daily.llm) else {
+        let Some(chat) = tldr::ChatClient::from_daily_llm(&daily.llm) else {
             return Ok(None); // warned inside
         };
         let vectors = QdrantStore::new(
