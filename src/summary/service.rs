@@ -26,10 +26,17 @@ pub struct SummaryService {
 }
 
 impl SummaryService {
-    /// `None` when `[ai.summary]` is absent or no model/key resolves.
+    /// `None` when `[ai.summary]` is absent (silently) or present but missing
+    /// a model/API key (warns).
     pub fn from_config(pool: SqlitePool, cfg: &Config) -> Option<Arc<Self>> {
         let use_ = cfg.ai.summary.as_ref()?;
-        let summarizer = Summarizer::from_resolved(&cfg.ai.resolve(use_))?; // warns handled by caller check
+        let summarizer = match Summarizer::from_resolved(&cfg.ai.resolve(use_)) {
+            Some(s) => s,
+            None => {
+                tracing::warn!("[ai.summary] has no model or API key — library summaries disabled");
+                return None;
+            }
+        };
         Some(Arc::new(Self { pool, summarizer, library_root: cfg.library_root.clone() }))
     }
 

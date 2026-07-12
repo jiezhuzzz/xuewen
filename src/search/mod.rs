@@ -82,7 +82,7 @@ impl SearchService {
         let (embedder, dims) = match &ai.embedding {
             Some(e) => {
                 let r = ai.resolve(&e.endpoint);
-                let model = e.endpoint.model.clone().unwrap_or_else(|| "text-embedding-3-small".to_string());
+                let model = e.model();
                 (embedder::Embedder::from_resolved(&r, &model, e.dims), e.dims)
             }
             None => (None, 1536),

@@ -58,13 +58,16 @@ impl DailyService {
             return Ok(None);
         };
         let er = cfg.ai.resolve(&embed.endpoint);
-        let emodel = embed.endpoint.model.clone().unwrap_or_else(|| "text-embedding-3-small".to_string());
+        let emodel = embed.model();
         let Some(embedder) = Embedder::from_resolved(&er, &emodel, embed.dims) else { return Ok(None); };
         let Some(daily_use) = &cfg.ai.daily else {
             tracing::warn!("[daily] set but [ai.daily] missing — daily papers disabled");
             return Ok(None);
         };
-        let Some(chat) = crate::summary::Summarizer::from_resolved(&cfg.ai.resolve(daily_use)) else { return Ok(None); };
+        let Some(chat) = crate::summary::Summarizer::from_resolved(&cfg.ai.resolve(daily_use)) else {
+            tracing::warn!("[ai.daily] has no model or API key — daily papers disabled");
+            return Ok(None);
+        };
         let vectors = QdrantStore::new(
             &cfg.search.qdrant_url,
             &cfg.search.qdrant_collection,

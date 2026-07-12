@@ -68,3 +68,38 @@ impl ChatService {
         Some(text)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AiConfig, AiDefaults, ChatConfig, ChatModelConfig};
+
+    #[test]
+    fn from_config_none_when_no_model_resolves_anywhere() {
+        // The only entry has no model of its own, and [ai] has no default
+        // model either -> nothing resolves -> chat is off.
+        let ai = AiConfig {
+            chat: ChatConfig {
+                models: vec![ChatModelConfig { label: "Bare".into(), endpoint: AiDefaults::default() }],
+                ..ChatConfig::default()
+            },
+            ..AiConfig::default()
+        };
+        assert!(ChatService::from_config(&ai).is_none());
+    }
+
+    #[test]
+    fn from_config_some_when_entry_inherits_ai_default_model() {
+        // Same bare entry, but [ai].model is set -> the entry inherits it.
+        let ai = AiConfig {
+            defaults: AiDefaults { model: Some("gpt-5-mini".into()), ..Default::default() },
+            chat: ChatConfig {
+                models: vec![ChatModelConfig { label: "Inherited".into(), endpoint: AiDefaults::default() }],
+                ..ChatConfig::default()
+            },
+            ..AiConfig::default()
+        };
+        let svc = ChatService::from_config(&ai).expect("entry should inherit [ai].model");
+        assert_eq!(svc.models[0].model, "gpt-5-mini");
+    }
+}

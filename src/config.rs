@@ -149,6 +149,18 @@ pub struct EmbeddingConfig {
 }
 fn default_embed_dims() -> usize { 1536 }
 
+impl EmbeddingConfig {
+    /// The embedding model: its own override, or the built-in default.
+    /// Embeddings never inherit `[ai].model` (a chat model is never a valid
+    /// embedding model), which is why this ignores the `[ai]` defaults.
+    pub fn model(&self) -> String {
+        self.endpoint
+            .model
+            .clone()
+            .unwrap_or_else(|| "text-embedding-3-small".to_string())
+    }
+}
+
 /// Paper chat (`[ai.chat]`). No models ⇒ feature disabled.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -550,6 +562,18 @@ model = "gpt-5.6-terra"
         assert!(cfg.ai.chat.models.is_empty());
         assert!(cfg.ai.summary.is_none());
         assert!(cfg.ai.daily.is_none());
+    }
+
+    #[test]
+    fn embedding_model_uses_own_or_builtin_never_ai_default() {
+        use super::{AiDefaults, EmbeddingConfig};
+        let e = EmbeddingConfig { endpoint: AiDefaults::default(), dims: 1536 };
+        assert_eq!(e.model(), "text-embedding-3-small"); // no inherit, built-in
+        let e2 = EmbeddingConfig {
+            endpoint: AiDefaults { model: Some("my-embed".into()), ..Default::default() },
+            dims: 1536,
+        };
+        assert_eq!(e2.model(), "my-embed"); // own override
     }
 
     #[test]
