@@ -585,4 +585,18 @@ model = "gpt-5.6-terra"
         )));
         assert!(cfg.is_ok(), "xuewen.example.toml must parse: {:?}", cfg.err());
     }
+
+    #[test]
+    fn ai_resolve_inherits_shared_inline_api_key() {
+        use super::{AiConfig, AiDefaults};
+        let ai = AiConfig {
+            defaults: AiDefaults { api_key: Some("sk-shared".into()), ..Default::default() },
+            ..Default::default()
+        };
+        // A use with no key of its own inherits the [ai] inline key.
+        assert_eq!(ai.resolve(&AiDefaults::default()).api_key.as_deref(), Some("sk-shared"));
+        // A use's own inline key wins.
+        let own = AiDefaults { api_key: Some("sk-own".into()), ..Default::default() };
+        assert_eq!(ai.resolve(&own).api_key.as_deref(), Some("sk-own"));
+    }
 }

@@ -513,7 +513,7 @@ async fn main() -> Result<()> {
             }
             let chat = xuewen::chat::ChatService::from_config(&cfg.ai);
             if chat.is_none() {
-                tracing::info!("paper chat disabled (no [[ai.chat.models]] configured)");
+                tracing::info!("paper chat disabled (no usable [[ai.chat.models]])");
             }
             web::serve(
                 &host,

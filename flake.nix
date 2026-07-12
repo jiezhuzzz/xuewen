@@ -115,7 +115,7 @@
 
               [ai]
               api_key_env = "OPENAI_API_KEY"
-              model       = "gpt-4o-mini"
+              model       = "gpt-4o-mini"   # default for chat/summary/daily when enabled
 
               [ai.embedding]
               model = "text-embedding-3-small"
