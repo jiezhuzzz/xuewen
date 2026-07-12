@@ -14,6 +14,7 @@ fn chat_cfg(base_url: &str) -> ChatConfig {
             model: "mock-1".into(),
             api_key: None,
             api_key_env: "XUEWEN_TEST_UNSET".into(),
+            reasoning_effort: None,
         }],
         max_context_chars: 60_000,
     }
