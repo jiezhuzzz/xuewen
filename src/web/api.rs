@@ -56,10 +56,13 @@ pub async fn get_paper(State(app): State<AppState>, Path(id): Path<String>) -> R
                 .await
                 .unwrap_or_default();
             let mut detail = PaperDetail::with_project_ids(&p, ids);
-            detail.ai_summary = crate::summary::store::get(&app.pool, &p.id)
-                .await
-                .ok()
-                .flatten();
+            detail.ai_summary = match crate::summary::store::get(&app.pool, &p.id).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("get_paper summary for {}: {e}", p.id);
+                    None
+                }
+            };
             Json(detail).into_response()
         }
         Ok(None) => not_found(),

@@ -103,6 +103,51 @@ async fn lists_and_details_papers() {
 }
 
 #[tokio::test]
+async fn paper_detail_includes_summary_when_present() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(
+        &pool,
+        &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved),
+    )
+    .await
+    .unwrap();
+    db::insert_paper(
+        &pool,
+        &paper("bbbb2222", "Attention Is All You Need", PaperStatus::Resolved),
+    )
+    .await
+    .unwrap();
+
+    let summary = xuewen::summary::Summary {
+        tldr: "A one-line summary.".into(),
+        problem: "The identified gap.".into(),
+        approach: "The proposed method.".into(),
+        results: "+4.2 over baseline.".into(),
+        limitations: "Small dataset.".into(),
+    };
+    xuewen::summary::store::upsert(&pool, "aaaa1111", &summary, "test-model")
+        .await
+        .unwrap();
+
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // Paper with a stored summary: the `summary` key is present with the
+    // expected fields.
+    let resp = server.get("/api/papers/aaaa1111").await;
+    resp.assert_status_ok();
+    let detail: serde_json::Value = resp.json();
+    assert_eq!(detail["summary"]["tldr"], "A one-line summary.");
+    assert_eq!(detail["summary"]["results"], "+4.2 over baseline.");
+
+    // Paper with no summary: the `summary` key is absent entirely (serde
+    // `skip_serializing_if` omits it, rather than serializing `null`).
+    let resp = server.get("/api/papers/bbbb2222").await;
+    resp.assert_status_ok();
+    let detail: serde_json::Value = resp.json();
+    assert!(detail.get("summary").is_none());
+}
+
+#[tokio::test]
 async fn streams_pdf_with_range_and_guards_paths() {
     let (dir, pool) = temp_pool().await;
     let library = dir.path().join("library");
