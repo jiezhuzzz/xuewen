@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { library, openTab, removePaper, viewer } from '../lib/state.svelte';
+import { appSettings, library, openTab, removePaper, viewer } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
 import InfoPanel from './InfoPanel.svelte';
 
@@ -57,6 +57,7 @@ function detail(id: string) {
 describe('InfoPanel', () => {
   beforeEach(() => {
     viewer.infoOpen = true;
+    appSettings.foldAbstract = false;
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -88,5 +89,33 @@ describe('InfoPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: /Close details/ }));
     expect(viewer.infoOpen).toBe(false);
     expect(localStorage.getItem('xuewen-info-open')).toBe('0');
+  });
+
+  it('renders the LLM summary when present', async () => {
+    // Use a fresh id: loadDetail caches by id, and 'info1' is already cached
+    // (without a summary) by earlier tests in this file.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            ...detail('info-summary'),
+            summary: { tldr: 'Short.', problem: 'P', approach: 'A', results: 'R', limitations: 'L' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+
+    render(InfoPanel, { props: { id: 'info-summary' } });
+    expect(await screen.findByText('Short.')).toBeInTheDocument();
+    expect(screen.getByText(/Results/i)).toBeInTheDocument();
+  });
+
+  it('starts the abstract folded when fold_abstract is true', async () => {
+    appSettings.foldAbstract = true;
+    render(InfoPanel, { props: { id: 'info1' } });
+    const toggle = await screen.findByRole('button', { name: /abstract/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 });

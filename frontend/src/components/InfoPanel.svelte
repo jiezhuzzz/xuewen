@@ -3,7 +3,7 @@
   import { fly } from 'svelte/transition';
   import { chat, toggleChat } from '../lib/chat.svelte';
   import { DUR, dur } from '../lib/motion';
-  import { detailRefresh, loadDetail, setInfoOpen } from '../lib/state.svelte';
+  import { appSettings, detailRefresh, loadDetail, setInfoOpen } from '../lib/state.svelte';
   import CiteActions from './CiteActions.svelte';
   import PaperActionsMenu from './PaperActionsMenu.svelte';
   import PaperMeta from './PaperMeta.svelte';
@@ -11,7 +11,7 @@
 
   let { id }: { id: string } = $props();
 
-  let abstractOpen = $state(true);
+  let abstractOpen = $state(!appSettings.foldAbstract);
 
   function fmtDate(s: string): string {
     if (!s) return '—';
@@ -48,6 +48,23 @@
         <p class="text-sm text-stone-500 dark:text-stone-400">Loading…</p>
       {:then d}
         <PaperMeta {d} />
+
+        {#if d.summary}
+          <section class={divider}>
+            <h3 class={label}>Summary</h3>
+            <p class="mt-2 font-serif text-[13.5px] font-medium leading-relaxed text-ink dark:text-stone-100">
+              {d.summary.tldr}
+            </p>
+            <dl class="mt-2 space-y-1.5 text-[12.5px]">
+              {#each [['Problem', d.summary.problem], ['Approach', d.summary.approach], ['Results', d.summary.results], ['Limitations', d.summary.limitations]] as [k, v]}
+                <div>
+                  <dt class="text-[11px] font-semibold uppercase tracking-[.08em] text-stone-500 dark:text-stone-400">{k}</dt>
+                  <dd class="text-stone-700 dark:text-stone-300">{v}</dd>
+                </div>
+              {/each}
+            </dl>
+          </section>
+        {/if}
 
         {#if d.abstract}
           <section class={divider}>
