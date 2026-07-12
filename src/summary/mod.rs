@@ -6,7 +6,10 @@ use anyhow::Result;
 
 use crate::config::{DailyLlmConfig, SummaryConfig};
 
+mod service;
 pub mod store;
+
+pub use service::{run, SummaryService};
 
 /// Chars of extracted PDF text included in the full-text prompt.
 pub const FULL_TEXT_CAP: usize = 40_000;
@@ -72,6 +75,11 @@ impl Summarizer {
 
     pub async fn complete(&self, system: &str, user: &str) -> Result<String> {
         self.inner.complete(system, user).await
+    }
+
+    /// The model id this summarizer uses (for stamping stored summaries).
+    pub fn model(&self) -> &str {
+        self.inner.model()
     }
 }
 

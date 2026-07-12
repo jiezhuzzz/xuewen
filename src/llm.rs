@@ -44,6 +44,11 @@ impl LlmClient {
         self
     }
 
+    /// The chat model id this client targets.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
     fn request(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
         let mut req = self
             .http
