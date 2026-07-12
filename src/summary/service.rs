@@ -46,36 +46,49 @@ impl SummaryService {
     }
 
     /// One pass: summarize up to `BATCH` papers that lack a summary. Best-effort
-    /// per paper (failures are logged and simply retried next sweep). Returns
-    /// the number of summaries written.
+    /// per paper — one paper's failure is logged and skipped, never aborting the
+    /// batch (mirrors the search indexer). Returns the number written.
     pub async fn sweep(&self) -> Result<usize> {
         let ids = store::missing_ids(&self.pool, BATCH).await?;
         let mut written = 0;
         for id in ids {
-            let Some(paper) = crate::db::get_by_id(&self.pool, &id).await? else {
-                continue; // purged since missing_ids ran
-            };
-            let pdf_path = self.library_root.join(&paper.rel_path);
-            let full_text = tokio::task::spawn_blocking(move || crate::pdf::extract_text_all(&pdf_path))
-                .await
-                .ok()
-                .and_then(|r| r.ok());
-            let title = paper.meta.title.clone().unwrap_or_default();
-            let abstract_text = paper.meta.abstract_text.clone().unwrap_or_default();
-            if let Some(summary) = generate_summary(
-                &self.summarizer,
-                &self.language,
-                &title,
-                &abstract_text,
-                full_text.as_deref(),
-            )
-            .await
-            {
-                store::upsert(&self.pool, &paper.id, &summary, self.model()).await?;
-                written += 1;
+            match self.summarize_one(&id).await {
+                Ok(true) => written += 1,
+                Ok(false) => {}
+                Err(e) => tracing::warn!("summary generation for {id}: {e}"),
             }
         }
         Ok(written)
+    }
+
+    /// Summarize one paper. `Ok(true)` = stored; `Ok(false)` = skipped (purged,
+    /// or the model returned nothing); `Err` = a hard failure for THIS paper
+    /// (the caller logs it and moves on).
+    async fn summarize_one(&self, id: &str) -> Result<bool> {
+        let Some(paper) = crate::db::get_by_id(&self.pool, id).await? else {
+            return Ok(false); // purged since missing_ids ran
+        };
+        let pdf_path = self.library_root.join(&paper.rel_path);
+        let full_text = match tokio::task::spawn_blocking(move || crate::pdf::extract_text_all(&pdf_path)).await {
+            Ok(Ok(t)) => Some(t),
+            Ok(Err(e)) => {
+                tracing::warn!("pdf extraction failed for {id}: {e}; summarizing from abstract only");
+                None
+            }
+            Err(e) => {
+                tracing::warn!("pdf extraction task panicked for {id}: {e}; summarizing from abstract only");
+                None
+            }
+        };
+        let title = paper.meta.title.as_deref().unwrap_or_default();
+        let abstract_text = paper.meta.abstract_text.as_deref().unwrap_or_default();
+        match generate_summary(&self.summarizer, &self.language, title, abstract_text, full_text.as_deref()).await {
+            Some(summary) => {
+                store::upsert(&self.pool, &paper.id, &summary, self.model()).await?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     fn model(&self) -> &str {
@@ -170,5 +183,55 @@ mod tests {
         );
         // Nothing left to do -> no more LLM calls (the .expect(1) mock enforces this).
         assert_eq!(svc.sweep().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn sweep_falls_back_to_abstract_when_pdf_missing() {
+        let server = MockServer::start().await;
+        let summary_json = json!({
+            "tldr": "TL;DR.", "problem": "P.", "approach": "A.",
+            "results": "R.", "limitations": "L."
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(&summary_json)))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}", db_dir.path().join("t.db").display());
+        let pool = crate::db::connect(&url).await.unwrap();
+        let lib = tempfile::tempdir().unwrap();
+
+        let paper = Paper {
+            id: "p1".into(),
+            content_hash: "h".into(),
+            rel_path: "missing.pdf".into(),
+            cite_key: None,
+            added_at: "2026-07-12T00:00:00Z".into(),
+            deleted_at: None,
+            meta: PaperMeta {
+                title: Some("Title".into()),
+                abstract_text: Some("Abstract.".into()),
+                authors: Authors(vec!["Ada".into()]),
+                venue: None, year: Some(2026), doi: None, arxiv_id: None,
+                dblp_key: None, url: None, source: None,
+                status: PaperStatus::Resolved,
+            },
+        };
+        // Deliberately do NOT write a PDF at lib/missing.pdf.
+        crate::db::insert_paper(&pool, &paper).await.unwrap();
+
+        let svc = SummaryService::for_tests(
+            pool.clone(),
+            Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
+            "English".into(),
+            lib.path().to_path_buf(),
+        );
+
+        assert_eq!(svc.sweep().await.unwrap(), 1);
+        assert!(crate::summary::store::get(&pool, "p1").await.unwrap().is_some());
     }
 }
