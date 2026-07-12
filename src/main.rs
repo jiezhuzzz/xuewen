@@ -183,6 +183,15 @@ enum Command {
         #[arg(long)]
         semantic_only: bool,
     },
+    /// Generate LLM summaries for library papers (needs [summary]).
+    Summarize {
+        /// Paper id (exact) to (re)summarize. Omit to fill gaps for the whole library.
+        #[arg(conflicts_with = "all")]
+        id: Option<String>,
+        /// Clear and regenerate every paper's summary.
+        #[arg(long)]
+        all: bool,
+    },
     /// Inspect or rebuild the search indexes.
     Index {
         #[command(subcommand)]
@@ -499,6 +508,9 @@ async fn main() -> Result<()> {
             if let Some(d) = &daily {
                 tokio::spawn(daily::scheduler::run(d.clone()));
             }
+            if let Some(s) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) {
+                tokio::spawn(xuewen::summary::run(s, std::time::Duration::from_secs(60)));
+            }
             let chat = xuewen::chat::ChatService::from_config(&cfg.chat);
             if chat.is_none() {
                 tracing::info!("paper chat disabled (no [[chat.models]] configured)");
@@ -721,6 +733,25 @@ async fn main() -> Result<()> {
                 };
                 println!("      [{loc}] {}", strip_snippet_html(&m.snippet));
             }
+        }
+        Command::Summarize { id, all } => {
+            let Some(svc) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) else {
+                anyhow::bail!("[summary] is not configured (or no API key) — nothing to do");
+            };
+            if all {
+                xuewen::summary::store::clear(&pool, None).await?;
+            } else if let Some(id) = &id {
+                xuewen::summary::store::clear(&pool, Some(id)).await?;
+            }
+            let mut total = 0usize;
+            loop {
+                let n = svc.sweep().await?;
+                total += n;
+                if n == 0 {
+                    break;
+                }
+            }
+            println!("generated {total} summaries");
         }
         Command::Index { cmd } => match cmd {
             IndexCmd::Status => {
