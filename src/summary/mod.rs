@@ -6,6 +6,8 @@ use anyhow::Result;
 
 use crate::config::{DailyLlmConfig, SummaryConfig};
 
+pub mod store;
+
 /// Chars of extracted PDF text included in the full-text prompt.
 pub const FULL_TEXT_CAP: usize = 40_000;
 
