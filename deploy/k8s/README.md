@@ -22,7 +22,7 @@ deploy/k8s/secret.yaml.example deploy/k8s/secret.yaml`, fill in
 `OPENAI_API_KEY`, and `kubectl apply -f deploy/k8s/secret.yaml`
 (`secret.yaml` is gitignored, so it's never picked up by `kubectl apply -f
 deploy/k8s/` and never accidentally committed). Any OpenAI-compatible
-endpoint works — edit the ConfigMap's `[search.embedding]` block and
+endpoint works — edit the ConfigMap's `[ai.embedding]` block and
 `kubectl rollout restart deployment/xuewen`.
 
 ## Expose it — read this first
@@ -36,7 +36,7 @@ No Ingress manifest ships here because it is cluster-specific.
 
 `xuewen serve` exposes daily arXiv recommendations at `GET /api/daily`
 when the ConfigMap's `xuewen.toml` has a `[daily]` section (see
-`xuewen.example.toml`; requires `[search.embedding]` and the
+`xuewen.example.toml`; requires `[ai.embedding]` and the
 `OPENAI_API_KEY` secret, which the summary generation shares by default).
 
 Add a `custom-api` widget to your Glance dashboard's `glance.yml`:

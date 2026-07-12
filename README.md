@@ -90,8 +90,8 @@ database_url = "sqlite:./library.db"
 
 Optional sections enable the richer features:
 
-- `[search.embedding]` + `qdrant_url` — semantic search.
-- `[[chat.models]]` — paper chat (one entry per selectable model).
+- `[ai.embedding]` + `[search]` with `qdrant_url` — semantic search.
+- `[[ai.chat.models]]` — paper chat (one entry per selectable model).
 - `[daily]` — daily arXiv recommendations.
 - `[proxy]` — institutional paywall access.
 
