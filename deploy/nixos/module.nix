@@ -87,7 +87,7 @@ in
       description = ''
         A systemd `EnvironmentFile` holding secrets that must stay out of the
         world-readable Nix store — e.g. `OPENAI_API_KEY=sk-…` for the
-        `api_key_env` referenced by `[search.embedding]` / `[[chat.models]]`.
+        `api_key_env` referenced by `[ai.*]`.
       '';
     };
 
@@ -96,16 +96,13 @@ in
       default = { };
       example = lib.literalExpression ''
         {
-          search.embedding = {
-            model = "text-embedding-3-small";
-            dims = 1536;
+          ai = {
             api_key_env = "OPENAI_API_KEY";
-          };
-          chat.models = [{
-            label = "GPT-4o mini";
             model = "gpt-4o-mini";
-            api_key_env = "OPENAI_API_KEY";
-          }];
+            embedding = { model = "text-embedding-3-small"; dims = 1536; };
+            chat.models = [{ label = "GPT-4o mini"; model = "gpt-4o-mini"; }];
+            summary = { };
+          };
         }
       '';
       description = ''

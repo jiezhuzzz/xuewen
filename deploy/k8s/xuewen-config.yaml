@@ -13,14 +13,16 @@ data:
     qdrant_url        = "http://xuewen-qdrant:6333"
     qdrant_collection = "xuewen"
 
-    [search.embedding]
-    base_url    = "https://api.openai.com/v1"
-    model       = "text-embedding-3-small"
-    dims        = 1536
+    [ai]
     api_key_env = "OPENAI_API_KEY"
+    model       = "gpt-4o-mini"
+
+    [ai.embedding]
+    model = "text-embedding-3-small"
+    dims  = 1536
 
     # Daily arXiv recommendations, shown on a Glance dashboard via /api/daily
-    # (optional). Requires [search.embedding]: the library's title+abstract
+    # (optional). Requires [ai.embedding]: the library's title+abstract
     # vectors are the interest profile the new papers are scored against.
     #[daily]
     #categories         = ["cs.AI", "cs.LG"]  # arXiv category codes (required)
@@ -29,8 +31,4 @@ data:
     #run_at             = "09:00"   # daily run, UTC wall time
     #retention_days     = 14
 
-    #[daily.llm]                    # chat-completions API for summaries
-    #base_url    = "https://api.openai.com/v1"
-    #model       = "gpt-4o-mini"
-    #api_key_env = "OPENAI_API_KEY" # or: api_key = "sk-..."
-    #language    = "English"
+    #[ai.daily]

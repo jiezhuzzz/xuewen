@@ -113,11 +113,13 @@
               qdrant_url        = "http://xuewen-qdrant:6333"
               qdrant_collection = "xuewen"
 
-              [search.embedding]
-              base_url    = "https://api.openai.com/v1"
-              model       = "text-embedding-3-small"
-              dims        = 1536
+              [ai]
               api_key_env = "OPENAI_API_KEY"
+              model       = "gpt-4o-mini"
+
+              [ai.embedding]
+              model = "text-embedding-3-small"
+              dims  = 1536
             '';
           };
           # Empty /data owned 1000:1000 baked into the image so Docker's

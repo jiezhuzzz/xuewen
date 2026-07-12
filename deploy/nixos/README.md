@@ -22,17 +22,15 @@ runs `pdftotext` (poppler) in the unit's `PATH`, and applies systemd hardening.
             # host = "127.0.0.1";  # default; non-loopback auto-adds --allow-remote
             # port = 8080;
 
-            settings.search.embedding = {
-              model = "text-embedding-3-small";
-              dims = 1536;
+            settings.ai = {
               api_key_env = "OPENAI_API_KEY";
+              embedding = { model = "text-embedding-3-small"; dims = 1536; };
+              chat.models = [{
+                label = "GPT-4o mini";
+                model = "gpt-4o-mini";
+                # reasoning_effort = "high";  # reasoning models only
+              }];
             };
-            settings.chat.models = [{
-              label = "GPT-4o mini";
-              model = "gpt-4o-mini";
-              api_key_env = "OPENAI_API_KEY";
-              # reasoning_effort = "high";  # reasoning models only
-            }];
 
             # Secrets stay OUT of the Nix store (see below).
             environmentFile = "/run/secrets/xuewen.env";
