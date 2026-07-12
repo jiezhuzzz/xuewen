@@ -6,28 +6,17 @@
 
 </div>
 
-A self-hosted reference manager for research papers. Drop in a PDF (or an
-arXiv id / DOI / URL) and Xuewen fetches the metadata, files the paper under a
-stable cite key, indexes it for keyword **and** semantic search, and serves a
-fast reading-first web UI — with optional per-paper LLM chat grounded in the
-paper's text.
-
-Single self-contained binary: a Rust backend (Axum + SQLite + Tantivy) with the
-Svelte frontend embedded at compile time. SQLite is the source of truth; the
-search indexes are derived and rebuildable.
+A self-hosted reference manager for research papers (currently for computer science only).
 
 ## The name
 
 **學問** (xuéwèn, simplified 学问) — "learning / scholarship." The two
 characters double as the interface marks: **學** (xué, *learning*) is the
 cinnabar seal wordmark, and **問** (wèn, *to ask*) is the amber chat launcher —
-the assistant that answers questions about a paper. There's no separate image
-logo; the seal is a styled glyph (`frontend/src/components/SealMark.svelte`).
+the assistant that answers questions about a paper.
 
 ## Features
 
-- **Ingest anything** — a local PDF, or import by arXiv id, DOI, or URL. New
-  files dropped in the inbox can be auto-ingested (`xuewen watch`).
 - **Automatic metadata** — resolved from arXiv, Crossref and DBLP, with optional
   [GROBID](https://github.com/kermitt2/grobid) header extraction as a fallback.
   Papers are filed under a deterministic cite key (e.g. `vaswani2017attention`).
@@ -40,12 +29,10 @@ logo; the seal is a styled glyph (`frontend/src/components/SealMark.svelte`).
   `reasoning_effort`).
 - **Daily arXiv recommendations** — a ranked, LLM-summarized feed of new papers
   scored against your library's interests (optional).
-- **Projects** — group related papers; filter and export by project.
 - **Citation export** — BibTeX / BibLaTeX for a single paper, a project, or the
   whole library.
 - **Paywall helper** — optional institutional (EZproxy) support for fetching
   PDFs you have access to.
-- **Recoverable deletes** — soft-delete to trash, restore, or purge.
 
 ## Architecture
 
@@ -54,13 +41,6 @@ logo; the seal is a styled glyph (`frontend/src/components/SealMark.svelte`).
 | Backend | Rust — [Axum](https://github.com/tokio-rs/axum), [SQLx](https://github.com/launchbadge/sqlx)/SQLite, [Tantivy](https://github.com/quickwit-oss/tantivy) (keyword), [Qdrant](https://qdrant.tech/) (vectors), reqwest |
 | Frontend | [Svelte 5](https://svelte.dev/) + Vite + Tailwind, embedded via `rust-embed` |
 | Text extraction | `pdftotext` (poppler-utils) |
-
-## Requirements
-
-- Rust (stable) and Node.js — or Nix (a `devShell` is provided).
-- `pdftotext` from **poppler-utils** at runtime.
-- Optional, for semantic search: a running **Qdrant** and an OpenAI-compatible
-  embeddings endpoint.
 
 ## Quick start
 
