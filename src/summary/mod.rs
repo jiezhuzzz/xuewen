@@ -22,6 +22,13 @@ pub struct Summary {
     pub limitations: String,
 }
 
+/// Resolve an API key: inline value wins, else the named env var; empty ⇒ None.
+fn resolve_key(explicit: Option<String>, api_key_env: &str) -> Option<String> {
+    explicit
+        .or_else(|| std::env::var(api_key_env).ok())
+        .filter(|k| !k.trim().is_empty())
+}
+
 /// Config-agnostic summary chat client (was `daily::tldr::ChatClient`).
 pub struct Summarizer {
     inner: crate::llm::LlmClient,
@@ -34,12 +41,7 @@ impl Summarizer {
 
     /// Build from `[daily.llm]`. `None` when no API key resolves (warns).
     pub fn from_daily_llm(cfg: &DailyLlmConfig) -> Option<Self> {
-        let key = cfg
-            .api_key
-            .clone()
-            .or_else(|| std::env::var(&cfg.api_key_env).ok())
-            .filter(|k| !k.trim().is_empty());
-        let Some(key) = key else {
+        let Some(key) = resolve_key(cfg.api_key.clone(), &cfg.api_key_env) else {
             tracing::warn!(
                 "[daily.llm] configured but no API key (set api_key or ${}) — daily papers disabled",
                 cfg.api_key_env
@@ -51,12 +53,7 @@ impl Summarizer {
 
     /// Build from `[summary]`. `None` when no API key resolves (warns).
     pub fn from_summary(cfg: &SummaryConfig) -> Option<Self> {
-        let key = cfg
-            .api_key
-            .clone()
-            .or_else(|| std::env::var(&cfg.api_key_env).ok())
-            .filter(|k| !k.trim().is_empty());
-        let Some(key) = key else {
+        let Some(key) = resolve_key(cfg.api_key.clone(), &cfg.api_key_env) else {
             tracing::warn!(
                 "[summary] configured but no API key (set api_key or ${}) — library summaries disabled",
                 cfg.api_key_env
@@ -211,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn from_config_without_key_is_none() {
+    fn from_daily_llm_without_key_is_none() {
         let cfg = crate::config::DailyLlmConfig {
             base_url: "https://api.openai.com/v1".into(),
             model: "m".into(),
