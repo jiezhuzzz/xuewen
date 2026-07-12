@@ -63,6 +63,22 @@
         default = xuewen;
       });
     in {
+      # Convenience overlay: `pkgs.xuewen` / `pkgs.xuewen-frontend`.
+      overlays.default = final: prev: {
+        xuewen = self.packages.${prev.stdenv.hostPlatform.system}.xuewen;
+        xuewen-frontend = self.packages.${prev.stdenv.hostPlatform.system}.frontend;
+      };
+
+      # `nixosModules.default` is the batteries-included module: it defaults
+      # `services.xuewen.package` to this flake's build for the host system.
+      # `nixosModules.xuewen` is the bare module (set `package` yourself).
+      nixosModules.xuewen = ./deploy/nixos/module.nix;
+      nixosModules.default = { pkgs, lib, ... }: {
+        imports = [ self.nixosModules.xuewen ];
+        services.xuewen.package =
+          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.xuewen;
+      };
+
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           packages = with pkgs; [
@@ -183,7 +199,23 @@
           xuewen = self.packages.${pkgs.stdenv.hostPlatform.system}.xuewen;
         });
       in base // {
-        x86_64-linux = base.x86_64-linux // { image = self.packages.x86_64-linux.image; };
+        x86_64-linux = base.x86_64-linux // {
+          image = self.packages.x86_64-linux.image;
+          # Boots a VM, enables the module, and hits the API. Linux-only
+          # (needs KVM); run with `nix build .#checks.x86_64-linux.nixos-module`.
+          nixos-module = nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest {
+            name = "xuewen-module";
+            nodes.machine = { ... }: {
+              imports = [ self.nixosModules.default ];
+              services.xuewen.enable = true;
+            };
+            testScript = ''
+              machine.wait_for_unit("xuewen.service")
+              machine.wait_for_open_port(8080)
+              machine.succeed("curl -sf http://127.0.0.1:8080/api/stats | grep -q '\"total\"'")
+            '';
+          };
+        };
       };
     };
 }
