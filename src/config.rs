@@ -20,6 +20,11 @@ pub struct Config {
     pub daily: Option<DailyConfig>,
     #[serde(default)]
     pub chat: ChatConfig,
+    /// Per-paper LLM summaries. Absent ⇒ the feature is off.
+    #[serde(default)]
+    pub summary: Option<SummaryConfig>,
+    #[serde(default)]
+    pub ui: UiConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -127,6 +132,35 @@ fn default_daily_retention_days() -> u32 {
 }
 fn default_daily_language() -> String {
     "English".to_string()
+}
+
+/// Per-paper summary LLM (`[summary]`): an OpenAI-compatible chat endpoint,
+/// same shape as `[daily.llm]`. Absent ⇒ library summaries are disabled.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SummaryConfig {
+    #[serde(default = "default_embed_base_url")]
+    pub base_url: String,
+    pub model: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default = "default_api_key_env")]
+    pub api_key_env: String,
+    #[serde(default = "default_daily_language")]
+    pub language: String,
+}
+
+/// UI preferences (`[ui]`), surfaced to the frontend via `/api/settings`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    /// Whether the abstract disclosure starts collapsed in the Details panel.
+    pub fold_abstract: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self { fold_abstract: true }
+    }
 }
 
 /// One selectable chat model (`[[chat.models]]`): an OpenAI-compatible
@@ -443,5 +477,45 @@ database_url  = "sqlite:./x.db"
         let keyless = ChatModelConfig { api_key: None, ..m };
         // Env var unset -> keyless entry (requests carry no Authorization).
         assert_eq!(keyless.resolve_key(), None);
+    }
+
+    #[test]
+    fn loads_summary_section_with_defaults() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"
+inbox_dir = "/d/i"
+library_root = "/d/l"
+database_url = "sqlite:/d/x.db"
+
+[summary]
+model = "gpt-4o-mini"
+"#
+        )
+        .unwrap();
+        let cfg = Config::load(f.path()).unwrap();
+        let s = cfg.summary.expect("summary section present");
+        assert_eq!(s.model, "gpt-4o-mini");
+        assert_eq!(s.base_url, "https://api.openai.com/v1");
+        assert_eq!(s.api_key_env, "OPENAI_API_KEY");
+        assert_eq!(s.language, "English");
+    }
+
+    #[test]
+    fn ui_fold_abstract_defaults_true_and_summary_absent() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"
+inbox_dir = "/d/i"
+library_root = "/d/l"
+database_url = "sqlite:/d/x.db"
+"#
+        )
+        .unwrap();
+        let cfg = Config::load(f.path()).unwrap();
+        assert!(cfg.summary.is_none());
+        assert!(cfg.ui.fold_abstract, "fold_abstract defaults to true");
     }
 }
