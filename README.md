@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Xuewen — the 學 seal" width="112" height="112" />
+</p>
+
 # 學問 · Xuewen
 
 A self-hosted reference manager for research papers. Drop in a PDF (or an
