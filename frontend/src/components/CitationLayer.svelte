@@ -46,7 +46,7 @@
       style:top="{(m.y / pageHeightPt) * 100}%"
       style:width="{(m.width / pageWidthPt) * 100}%"
       style:height="{(m.height / pageHeightPt) * 100}%"
-      class="pointer-events-auto absolute cursor-help rounded-sm bg-amber-400/0 hover:bg-amber-400/25"
+      class="pointer-events-auto absolute cursor-help rounded-sm border-b-2 border-dotted border-amber-600/55 bg-amber-400/0 hover:border-amber-600/0 hover:bg-amber-400/25 dark:border-amber-500/60"
     ></span>
   {/each}
 </div>
