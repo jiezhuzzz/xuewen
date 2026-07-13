@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { appSettings, library, openTab, removePaper, viewer } from '../lib/state.svelte';
+import { chat } from '../lib/chat.svelte';
+import { appSettings, identifyState, library, openTab, removePaper, viewer } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
 import InfoPanel from './InfoPanel.svelte';
 
@@ -58,6 +59,8 @@ describe('InfoPanel', () => {
   beforeEach(() => {
     viewer.infoOpen = true;
     appSettings.foldAbstract = false;
+    identifyState.open = false;
+    identifyState.paperId = null;
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -117,5 +120,31 @@ describe('InfoPanel', () => {
     render(InfoPanel, { props: { id: 'info1' } });
     const toggle = await screen.findByRole('button', { name: /abstract/i });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('does not render a Chat button even when chat is available', async () => {
+    chat.available = true;
+    try {
+      render(InfoPanel, { props: { id: 'info1' } });
+      await screen.findByText('Attention');
+      expect(screen.queryByRole('button', { name: /Chat/ })).not.toBeInTheDocument();
+    } finally {
+      chat.available = false;
+    }
+  });
+
+  it('launches Identify from a direct button in the pane', async () => {
+    render(InfoPanel, { props: { id: 'info1' } });
+    await screen.findByText('Attention');
+    await userEvent.click(screen.getByRole('button', { name: /Identify/ }));
+    expect(identifyState.open).toBe(true);
+    expect(identifyState.paperId).toBe('info1');
+  });
+
+  it('shows a standalone Delete paper button and no overflow menu', async () => {
+    render(InfoPanel, { props: { id: 'info1' } });
+    await screen.findByText('Attention');
+    expect(screen.getByRole('button', { name: /Delete paper/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /More actions/ })).not.toBeInTheDocument();
   });
 });

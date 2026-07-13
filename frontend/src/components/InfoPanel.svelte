@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { MessageSquare, X } from 'lucide-svelte';
+  import { Wand2, X } from 'lucide-svelte';
   import { fly } from 'svelte/transition';
-  import { chat, toggleChat } from '../lib/chat.svelte';
   import { DUR, dur } from '../lib/motion';
-  import { appSettings, detailRefresh, loadDetail, setInfoOpen } from '../lib/state.svelte';
+  import { appSettings, detailRefresh, loadDetail, openIdentify, setInfoOpen } from '../lib/state.svelte';
   import CiteActions from './CiteActions.svelte';
-  import PaperActionsMenu from './PaperActionsMenu.svelte';
+  import DeletePaperButton from './DeletePaperButton.svelte';
   import PaperMeta from './PaperMeta.svelte';
   import ProjectTags from './ProjectTags.svelte';
 
@@ -106,16 +105,13 @@
 
         <div class={`flex flex-wrap items-center gap-2 ${divider}`}>
           <CiteActions id={d.id} citeKey={d.cite_key} />
-          {#if chat.available}
-            <button
-              type="button"
-              onclick={toggleChat}
-              class="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-700/10 dark:border-stone-700 dark:text-amber-500"
-            >
-              <MessageSquare size={13} /> Chat
-            </button>
-          {/if}
-          <div class="ml-auto"><PaperActionsMenu {d} /></div>
+          <button
+            type="button"
+            onclick={() => openIdentify(d.id, { doi: d.doi, arxiv_id: d.arxiv_id })}
+            class="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-700/10 dark:border-stone-700 dark:text-amber-500"
+          >
+            <Wand2 size={13} /> Identify…
+          </button>
         </div>
       {:catch}
         <p class="text-sm text-red-600 dark:text-red-400">
@@ -123,5 +119,9 @@
         </p>
       {/await}
     {/key}
+  </div>
+
+  <div class="flex flex-col items-center border-t border-stone-200 px-4 py-3 dark:border-stone-800">
+    <DeletePaperButton {id} />
   </div>
 </aside>
