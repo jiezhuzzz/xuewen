@@ -16,26 +16,50 @@ export interface GotoLink {
 }
 export interface RefAnchor { pageIndex: number; y: number; }
 
-// A run is the References heading if, once stripped of punctuation/casing, it
-// is exactly one of these words. Matching the whole run (not a substring)
-// avoids "see references" false positives.
-const HEADING_RE = /^(references|bibliography|works cited)$/;
+// A line is the References heading if, with every non-letter removed, it is
+// exactly one of these tokens. Real PDFs render such headings in small caps or
+// with a drop cap, which PDFium splits into several runs ("R" + "EFERENCES") on
+// the same baseline — so we reconstruct the LINE from its runs before matching,
+// and compare letters-only so a split ("REFERENCES") or spaced ("Works Cited")
+// heading both collapse to the same token. Exact (not substring) match avoids
+// "see the references section" false positives.
+const HEADING_TOKENS = new Set(['references', 'bibliography', 'workscited']);
 
-function normalizeHeading(s: string): string {
-  return s.replace(/[^a-zA-Z ]/g, '').trim().toLowerCase();
+// Runs whose y is within this many PDF points share a visual line (same baseline).
+const LINE_TOLERANCE = 3;
+
+function lettersOnly(s: string): string {
+  return s.replace(/[^a-zA-Z]/g, '').toLowerCase();
+}
+
+/** Group a page's runs into visual lines: text concatenated in reading (x)
+ *  order, tagged with the line's top y. */
+function pageLines(page: PageText): { y: number; text: string }[] {
+  const rows = new Map<number, TextRun[]>();
+  for (const r of page.runs) {
+    const key = Math.round(r.y / LINE_TOLERANCE);
+    const arr = rows.get(key) ?? [];
+    arr.push(r);
+    rows.set(key, arr);
+  }
+  return [...rows.values()].map((rs) => {
+    rs.sort((a, b) => a.x - b.x);
+    return { y: Math.min(...rs.map((r) => r.y)), text: rs.map((r) => r.text).join('') };
+  });
 }
 
 /**
- * The first run (in reading order: page ascending, then y ascending) whose text
- * is exactly a references heading. Returns its page + y, or null.
+ * The first line (in reading order: page ascending, then y ascending) that is
+ * exactly a references heading. Returns its page + y, or null. Reconstructs
+ * lines from runs so a styled heading split across runs is still detected.
  */
 export function findReferencesStart(pages: PageText[]): RefAnchor | null {
   const ordered = [...pages].sort((a, b) => a.pageIndex - b.pageIndex);
   for (const p of ordered) {
-    const runs = [...p.runs].sort((a, b) => a.y - b.y);
-    for (const r of runs) {
-      if (HEADING_RE.test(normalizeHeading(r.text))) {
-        return { pageIndex: p.pageIndex, y: r.y };
+    const lines = pageLines(p).sort((a, b) => a.y - b.y);
+    for (const line of lines) {
+      if (HEADING_TOKENS.has(lettersOnly(line.text))) {
+        return { pageIndex: p.pageIndex, y: line.y };
       }
     }
   }
