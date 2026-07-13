@@ -7,3 +7,4 @@ library.db*
 result
 result-*
 deploy/k8s/secret.yaml
+/frontend/public/pdfium.wasm

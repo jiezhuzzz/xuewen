@@ -7,9 +7,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "copy-wasm": "node scripts/copy-pdfium-wasm.mjs",
+    "predev": "node scripts/copy-pdfium-wasm.mjs",
+    "prebuild": "node scripts/copy-pdfium-wasm.mjs"
   },
   "dependencies": {
+    "@embedpdf/pdfium": "^2.14.4",
+    "@embedpdf/svelte-pdf-viewer": "^2.14.4",
     "@fontsource-variable/inter": "^5.1.0",
     "@fontsource-variable/source-serif-4": "^5.2.9",
     "lucide-svelte": "^0.468.0"
