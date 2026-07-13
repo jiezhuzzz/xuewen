@@ -1,16 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ENGINE_OPTIONS, themePreference, viewerPlugins } from './pdfEngine';
-
-describe('themePreference', () => {
-  it('returns the explicit mode when not system', () => {
-    expect(themePreference('dark', false)).toBe('dark');
-    expect(themePreference('light', true)).toBe('light');
-  });
-  it('resolves system mode from the OS flag', () => {
-    expect(themePreference('system', true)).toBe('dark');
-    expect(themePreference('system', false)).toBe('light');
-  });
-});
+import { ENGINE_OPTIONS, viewerPlugins } from './pdfEngine';
 
 describe('ENGINE_OPTIONS', () => {
   it('is offline + main-thread (load-bearing)', () => {
