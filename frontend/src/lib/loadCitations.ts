@@ -1,4 +1,4 @@
-import type { PdfDocumentObject, PdfPageObject } from '@embedpdf/models';
+import { PdfActionType, type PdfDocumentObject, type PdfLinkTarget, type PdfPageObject } from '@embedpdf/models';
 import {
   buildCitationData, findReferencesStart,
   type CitationData, type GotoLink, type PageText, type TextRun, type UrlLink,
@@ -10,12 +10,13 @@ import {
 // requires bookkeeping fields (`id`, etc.) this module never touches, so
 // using it verbatim as EngineLike's return type made the fake test engine
 // (which supplies only type/pageIndex/rect/target) fail `npm run check` with
-// "Property 'id' is missing". `target`'s precise shape (destination vs. URI
-// action) is still validated dynamically by destOf/uriOf below.
+// "Property 'id' is missing". `target`'s shape, however, is the real
+// PdfLinkTarget union (destination vs. action), so destOf/uriOf below are
+// checked by the compiler against the real discriminated union.
 export interface EngineAnnotation {
   type: number;
   rect: { origin: { x: number; y: number }; size: { width: number; height: number } };
-  target?: unknown;
+  target?: PdfLinkTarget;
 }
 
 export interface EngineLike {
@@ -37,18 +38,21 @@ function toTopLeftY(pageHeight: number, yBottomLeft: number, rectHeight: number)
 
 const LINK = 2; // PdfAnnotationSubtype.LINK
 
-function destOf(anno: any): { pageIndex: number; y: number } | null {
-  const t = anno.target;
-  if (!t) return null;
-  const dest = t.type === 'destination' ? t.destination : t.action?.type === 'Goto' || t.action?.type === 'RemoteGoto' ? t.action.destination : null;
+function destOf(target: PdfLinkTarget | undefined): { pageIndex: number; y: number } | null {
+  if (!target) return null;
+  const dest =
+    target.type === 'destination'
+      ? target.destination
+      : target.action.type === PdfActionType.Goto || target.action.type === PdfActionType.RemoteGoto
+        ? target.action.destination
+        : null;
   if (!dest) return null;
   const y = dest.zoom?.mode === 1 /* XYZ */ ? dest.zoom.params.y : 0;
   return { pageIndex: dest.pageIndex, y };
 }
 
-function uriOf(anno: any): string | undefined {
-  const t = anno.target;
-  return t?.type === 'action' && t.action?.type === 'URI' ? t.action.uri : undefined;
+function uriOf(target: PdfLinkTarget | undefined): string | undefined {
+  return target?.type === 'action' && target.action.type === PdfActionType.URI ? target.action.uri : undefined;
 }
 
 export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject): Promise<CitationData> {
@@ -71,15 +75,15 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
     }));
 
     const urlLinks: UrlLink[] = [];
-    for (const a of annos as any[]) {
+    for (const a of annos) {
       if (a.type !== LINK) continue;
-      const url = uriOf(a);
+      const url = uriOf(a.target);
       const ry = toTopLeftY(h, a.rect.origin.y, a.rect.size.height);
       if (url) {
         urlLinks.push({ x: a.rect.origin.x, y: ry, width: a.rect.size.width, height: a.rect.size.height, url });
         continue;
       }
-      const dest = destOf(a);
+      const dest = destOf(a.target);
       if (!dest) continue;
       // Destination y is a point on the destination page (top-left after flip).
       const destPage = doc.pages[dest.pageIndex];

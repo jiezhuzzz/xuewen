@@ -1,3 +1,4 @@
+import { PdfActionType, PdfZoomMode } from '@embedpdf/models';
 import { describe, expect, it } from 'vitest';
 import { loadCitations, type EngineLike } from './loadCitations';
 
@@ -22,12 +23,15 @@ const engine: EngineLike = {
           // that toTopLeftY(800, 370, 0) turns into 430 (top-left space) —
           // i.e. it lands on the reference entry's flipped y below.
           { type: 2 /* LINK */, pageIndex: 0, rect: { origin: { x: 90, y: 100 }, size: { width: 12, height: 12 } },
-            target: { type: 'destination', destination: { pageIndex: 1, zoom: { mode: 1 /* XYZ */, params: { x: 50, y: 370, zoom: 0 } } } } },
+            target: {
+              type: 'destination',
+              destination: { pageIndex: 1, view: [], zoom: { mode: PdfZoomMode.XYZ, params: { x: 50, y: 370, zoom: 0 } } },
+            } },
         ]
       : [
           // a URI link inside a reference on page 1 (pre-flip y=356 -> 432 top-left)
           { type: 2 /* LINK */, pageIndex: 1, rect: { origin: { x: 300, y: 356 }, size: { width: 80, height: 12 } },
-            target: { type: 'action', action: { type: 'URI', uri: 'https://doi.org/10.1/adam' } } },
+            target: { type: 'action', action: { type: PdfActionType.URI, uri: 'https://doi.org/10.1/adam' } } },
         ],
   ),
   getPageTextRuns: (_d, page: any) => task(
