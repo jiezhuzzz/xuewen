@@ -9,7 +9,7 @@ import {
 // is a union (link/text/popup/stamp/...) whose PdfAnnotationObjectBase
 // requires bookkeeping fields (`id`, etc.) this module never touches, so
 // using it verbatim as EngineLike's return type made the fake test engine
-// (which supplies only type/pageIndex/rect/target) fail `npm run check` with
+// (which supplies only type/rect/target) fail `npm run check` with
 // "Property 'id' is missing". `target`'s shape, however, is the real
 // PdfLinkTarget union (destination vs. action), so destOf/uriOf below are
 // checked by the compiler against the real discriminated union.
@@ -27,16 +27,12 @@ export interface EngineLike {
   ): { toPromise(): Promise<{ runs: { text: string; rect: { origin: { x: number; y: number }; size: { width: number; height: number } } }[] }> };
 }
 
-// PDFium annotation/text rects use a bottom-left origin (y grows upward). Our
-// pure logic + CSS overlay use a top-left origin (y grows downward). Convert by
-// flipping about the page height. NOTE: verified empirically in Step 5 — if a
-// real demo PDF's markers land mirrored vertically, this flip is the switch.
-// CALIBRATION: unverified against a real PDF — see Task 10's manual check.
-function toTopLeftY(pageHeight: number, yBottomLeft: number, rectHeight: number): number {
-  return pageHeight - yBottomLeft - rectHeight;
-}
-
 const LINK = 2; // PdfAnnotationSubtype.LINK
+
+// EmbedPDF returns annotation rects, text-run rects, and GoTo destination points
+// all in TOP-LEFT device space (y grows downward) — the same space the rendered
+// page and our CSS overlay use — so coordinates pass through unchanged, no y-flip.
+// (Verified live: with a flip, hover boxes landed vertically mirrored.)
 
 function destOf(target: PdfLinkTarget | undefined): { pageIndex: number; y: number } | null {
   if (!target) return null;
@@ -60,7 +56,6 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
   const links: GotoLink[] = [];
 
   for (const page of doc.pages) {
-    const h = page.size.height;
     const [annos, textRuns] = await Promise.all([
       engine.getPageAnnotations(doc, page).toPromise(),
       engine.getPageTextRuns(doc, page).toPromise(),
@@ -69,7 +64,7 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
     const runs: TextRun[] = textRuns.runs.map((r) => ({
       text: r.text,
       x: r.rect.origin.x,
-      y: toTopLeftY(h, r.rect.origin.y, r.rect.size.height),
+      y: r.rect.origin.y,
       width: r.rect.size.width,
       height: r.rect.size.height,
     }));
@@ -77,25 +72,18 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
     const urlLinks: UrlLink[] = [];
     for (const a of annos) {
       if (a.type !== LINK) continue;
+      const rect = { x: a.rect.origin.x, y: a.rect.origin.y, width: a.rect.size.width, height: a.rect.size.height };
       const url = uriOf(a.target);
-      const ry = toTopLeftY(h, a.rect.origin.y, a.rect.size.height);
       if (url) {
-        urlLinks.push({ x: a.rect.origin.x, y: ry, width: a.rect.size.width, height: a.rect.size.height, url });
+        urlLinks.push({ ...rect, url });
         continue;
       }
       const dest = destOf(a.target);
       if (!dest) continue;
-      // Destination y is a point on the destination page (top-left after flip).
-      const destPage = doc.pages[dest.pageIndex];
-      const destY = destPage ? toTopLeftY(destPage.size.height, dest.y, 0) : dest.y;
-      links.push({
-        pageIndex: page.index,
-        x: a.rect.origin.x, y: ry, width: a.rect.size.width, height: a.rect.size.height,
-        destPageIndex: dest.pageIndex, destY,
-      });
+      links.push({ pageIndex: page.index, ...rect, destPageIndex: dest.pageIndex, destY: dest.y });
     }
 
-    pages.push({ pageIndex: page.index, width: page.size.width, height: h, runs, urlLinks });
+    pages.push({ pageIndex: page.index, width: page.size.width, height: page.size.height, runs, urlLinks });
   }
 
   const refStart = findReferencesStart(pages);
