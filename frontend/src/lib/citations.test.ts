@@ -78,4 +78,18 @@ describe('buildCitationData', () => {
       { pageIndex: 0, x: 120, y: 100, width: 12, height: 12, refIndex: 1 },
     ]);
   });
+
+  it('dedupes markers that share a destination into one reference', () => {
+    // Two markers point at the SAME reference (destY 430 and 433 are within
+    // DEST_EPSILON=6), a third points at a distinct reference (470). The near-equal
+    // destinations must collapse to one reference; both markers map to it.
+    const dupLinks: GotoLink[] = [
+      { pageIndex: 0, x: 90, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 430 },
+      { pageIndex: 0, x: 140, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 433 },
+      { pageIndex: 0, x: 200, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 470 },
+    ];
+    const { references, markers } = buildCitationData(dupLinks, pages, refStart);
+    expect(references).toHaveLength(2);
+    expect(markers.map((m) => m.refIndex)).toEqual([0, 0, 1]);
+  });
 });
