@@ -7,13 +7,6 @@ import { SelectionPluginPackage } from '@embedpdf/plugin-selection';
 import { InteractionManagerPluginPackage } from '@embedpdf/plugin-interaction-manager';
 import { DocumentManagerPluginPackage } from '@embedpdf/plugin-document-manager';
 import { ZoomPluginPackage, ZoomMode } from '@embedpdf/plugin-zoom';
-import type { ThemeMode } from './state.svelte';
-
-/** EmbedPDF theme preference resolved from the app's theme mode. */
-export function themePreference(mode: ThemeMode, systemDark: boolean): 'light' | 'dark' {
-  if (mode === 'system') return systemDark ? 'dark' : 'light';
-  return mode;
-}
 
 // Load-bearing offline config (see CLAUDE.md "PDF viewer gotchas"):
 //  - worker:false  -> PDFium on the main thread (the blob worker never loads

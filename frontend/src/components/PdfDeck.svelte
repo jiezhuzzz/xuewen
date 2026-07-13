@@ -2,6 +2,7 @@
   import { viewer } from '../lib/state.svelte';
   import { pdfUrl } from '../lib/api';
   import { useDocumentManagerCapability } from '@embedpdf/plugin-document-manager/svelte';
+  import { reconcileDocuments } from '../lib/pdfDeck';
   import PdfTab from './PdfTab.svelte';
   import CitationPopover from './CitationPopover.svelte';
 
@@ -19,25 +20,35 @@
   $effect(() => {
     const cap = dm.provides;
     if (!cap) return;
-    const tabIds = new Set(viewer.tabs.map((t) => t.id));
-    for (const tab of viewer.tabs) {
-      if (!opened.has(tab.id)) {
-        opened.add(tab.id);
-        cap.openDocumentUrl({ url: pdfUrl(tab.id), documentId: tab.id, autoActivate: false });
-      }
+    const { toOpen, toClose } = reconcileDocuments(
+      opened,
+      viewer.tabs.map((t) => t.id),
+    );
+    for (const id of toOpen) {
+      opened.add(id);
+      // openDocumentUrl's task rejects if the manager's maxDocuments cap is
+      // hit (or the document errors before an id is assigned). Roll back so
+      // a later effect run (the next tab change) retries the open instead of
+      // leaving the tab stranded with no document.
+      cap.openDocumentUrl({ url: pdfUrl(id), documentId: id, autoActivate: false }).wait(
+        () => {},
+        () => opened.delete(id),
+      );
     }
-    for (const id of [...opened]) {
-      if (!tabIds.has(id)) {
-        opened.delete(id);
-        cap.closeDocument(id);
-      }
+    for (const id of toClose) {
+      opened.delete(id);
+      cap.closeDocument(id);
     }
   });
 
   // Keep the manager's active document in sync with the active tab.
+  // setActiveDocument throws if the document isn't open yet (e.g. still
+  // loading, or its open was rejected above), so guard with isDocumentOpen.
   $effect(() => {
     const cap = dm.provides;
-    if (cap && viewer.activeId) cap.setActiveDocument(viewer.activeId);
+    if (cap && viewer.activeId && cap.isDocumentOpen(viewer.activeId)) {
+      cap.setActiveDocument(viewer.activeId);
+    }
   });
 </script>
 
