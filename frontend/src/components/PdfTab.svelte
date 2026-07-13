@@ -1,10 +1,9 @@
 <script lang="ts">
   import { pdfUrl } from '../lib/api';
-  import PdfDocViewer from './PdfDocViewer.svelte';
+  import PdfPages from './PdfPages.svelte';
   import PdfFallback from './PdfFallback.svelte';
 
-  let { id, preference, active }: { id: string; preference: 'light' | 'dark'; active: boolean } =
-    $props();
+  let { id, active }: { id: string; active: boolean } = $props();
 
   // One-time HEAD check for a missing/broken PDF (id is fixed for this instance).
   let failed = $state(false);
@@ -23,13 +22,13 @@
 </script>
 
 <!-- Hide inactive tabs with visibility (not display:none): display:none
-     collapses the tab to 0×0, which resets EmbedPDF's virtualized thumbnail
-     list to the top and makes it re-scroll (animate) to the current page on
-     every switch. `invisible` keeps the layout, so state is fully preserved. -->
+     collapses the tab to 0×0, which resets EmbedPDF's virtualized layout to the
+     top and makes it re-scroll on every switch. `invisible` keeps the layout, so
+     each tab's Viewport (and its per-document scroll/zoom) is fully preserved. -->
 <div class={`absolute inset-0 ${active ? 'z-10' : 'invisible'}`}>
   {#if failed}
     <PdfFallback {id} />
   {:else}
-    <PdfDocViewer {id} {preference} {active} />
+    <PdfPages documentId={id} />
   {/if}
 </div>
