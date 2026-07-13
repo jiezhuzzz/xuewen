@@ -1,6 +1,6 @@
 <script lang="ts">
   import { theme, viewer } from '../lib/state.svelte';
-  import { themePreference } from '../lib/pdfViewer';
+  import { themePreference } from '../lib/pdfEngine';
   import PdfTab from './PdfTab.svelte';
 
   // Effective dark for `system` mode. Reactive to explicit theme changes; the
