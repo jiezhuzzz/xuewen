@@ -1,14 +1,17 @@
 <script lang="ts">
   import type { PaperSummary } from '../lib/types';
   import { openTab, searchMeta, selection, viewer } from '../lib/state.svelte';
+  import { abbreviateVenue } from '../lib/venue';
   import StatusPill from './StatusPill.svelte';
 
   let { paper }: { paper: PaperSummary } = $props();
+  const venueLabel = $derived(abbreviateVenue(paper.venue));
   const selected = $derived(selection.id === paper.id);
   const isOpen = $derived(viewer.tabs.some((t) => t.id === paper.id));
+  // With 3+ authors, show just the first and last (middle authors elided).
   const authors = $derived(
-    paper.authors.length > 3
-      ? `${paper.authors.slice(0, 3).join(', ')} et al.`
+    paper.authors.length > 2
+      ? `${paper.authors[0]} … ${paper.authors[paper.authors.length - 1]}`
       : paper.authors.join(', '),
   );
 
@@ -51,7 +54,8 @@
   {/if}
   <div class="mt-1.5 flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
     {#if paper.year}<span>{paper.year}</span>{/if}
-    {#if paper.venue}<span class="truncate">{#if paper.year}· {/if}{paper.venue}</span>{/if}
+    {#if paper.year && paper.venue}<span aria-hidden="true" class="-mx-1">•</span>{/if}
+    {#if paper.venue}<span class="truncate" title={paper.venue}>{venueLabel}</span>{/if}
     <StatusPill status={paper.status} />
   </div>
 </button>

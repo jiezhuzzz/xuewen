@@ -33,4 +33,31 @@ describe('PaperRow', () => {
     expect(viewer.tabs).toHaveLength(1);
     expect(viewer.activeId).toBe('p1');
   });
+
+  it('shows a lone author unchanged', () => {
+    render(PaperRow, { props: { paper: { ...paper, authors: ['Vaswani'] } } });
+    expect(screen.getByText('Vaswani')).toBeInTheDocument();
+  });
+
+  it('shows both names when there are exactly two authors', () => {
+    render(PaperRow, { props: { paper: { ...paper, authors: ['Vaswani', 'Polosukhin'] } } });
+    expect(screen.getByText('Vaswani, Polosukhin')).toBeInTheDocument();
+  });
+
+  it('collapses three or more authors to first and last only', () => {
+    render(PaperRow, {
+      props: { paper: { ...paper, authors: ['Vaswani', 'Shazeer', 'Parmar', 'Polosukhin'] } },
+    });
+    expect(screen.getByText('Vaswani … Polosukhin')).toBeInTheDocument();
+    expect(screen.queryByText(/Shazeer/)).not.toBeInTheDocument();
+  });
+
+  it('shows the abbreviated venue with the full name as a tooltip', () => {
+    const venue = '2025 IEEE Symposium on Security and Privacy (SP)';
+    render(PaperRow, { props: { paper: { ...paper, venue } } });
+    const el = screen.getByText('S&P');
+    expect(el).toBeInTheDocument();
+    expect(el).toHaveAttribute('title', venue);
+    expect(screen.queryByText(/Symposium/)).not.toBeInTheDocument();
+  });
 });
