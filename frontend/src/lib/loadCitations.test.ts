@@ -4,8 +4,10 @@ import { loadCitations, type EngineLike } from './loadCitations';
 
 function task<T>(v: T) { return { toPromise: () => Promise.resolve(v) }; }
 
-// Minimal fake doc: 2 pages, 800pt tall. PDFium annotation/text rects are given
-// here already in the shape the engine returns (see EngineLike types).
+// Minimal fake doc: 2 pages, 800pt tall. EmbedPDF returns annotation/text rects
+// and GoTo destination points in top-left device space (y grows downward), which
+// loadCitations passes through unchanged — so these coordinates are given in that
+// same top-left space (heading y=400, reference entry y=430).
 const doc: any = {
   id: 'd', pageCount: 2,
   pages: [
@@ -18,28 +20,25 @@ const engine: EngineLike = {
   getPageAnnotations: (_d, page: any) => task(
     page.index === 0
       ? [
-          // a LINK marker on page 0 pointing to page 1. destination y is given
-          // in PDFium's bottom-left-origin space; 370 is the pre-flip value
-          // that toTopLeftY(800, 370, 0) turns into 430 (top-left space) —
-          // i.e. it lands on the reference entry's flipped y below.
+          // a LINK marker on page 0 whose GoTo destination lands on the reference
+          // entry (page 1, y=430).
           { type: 2 /* LINK */, pageIndex: 0, rect: { origin: { x: 90, y: 100 }, size: { width: 12, height: 12 } },
             target: {
               type: 'destination',
-              destination: { pageIndex: 1, view: [], zoom: { mode: PdfZoomMode.XYZ, params: { x: 50, y: 370, zoom: 0 } } },
+              destination: { pageIndex: 1, view: [], zoom: { mode: PdfZoomMode.XYZ, params: { x: 50, y: 430, zoom: 0 } } },
             } },
         ]
       : [
-          // a URI link inside a reference on page 1 (pre-flip y=356 -> 432 top-left)
-          { type: 2 /* LINK */, pageIndex: 1, rect: { origin: { x: 300, y: 356 }, size: { width: 80, height: 12 } },
+          // a URI link inside the reference entry on page 1 (y=432, in its band)
+          { type: 2 /* LINK */, pageIndex: 1, rect: { origin: { x: 300, y: 432 }, size: { width: 80, height: 12 } },
             target: { type: 'action', action: { type: PdfActionType.URI, uri: 'https://doi.org/10.1/adam' } } },
         ],
   ),
   getPageTextRuns: (_d, page: any) => task(
     page.index === 1
       ? { runs: [
-          // pre-flip y=384 -> 400 top-left; pre-flip y=358 -> 430 top-left.
-          { text: 'References', rect: { origin: { x: 50, y: 384 }, size: { width: 90, height: 16 } } },
-          { text: '[1] Kingma, Ba. Adam. ICLR 2015.', rect: { origin: { x: 50, y: 358 }, size: { width: 320, height: 12 } } },
+          { text: 'References', rect: { origin: { x: 50, y: 400 }, size: { width: 90, height: 16 } } },
+          { text: '[1] Kingma, Ba. Adam. ICLR 2015.', rect: { origin: { x: 50, y: 430 }, size: { width: 320, height: 12 } } },
         ] }
       : { runs: [{ text: 'body [1]', rect: { origin: { x: 50, y: 100 }, size: { width: 80, height: 12 } } }] },
   ),
