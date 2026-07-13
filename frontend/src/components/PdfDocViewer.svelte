@@ -10,6 +10,7 @@
   import { PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
   import { pdfUrl } from '../lib/api';
   import { ENGINE_OPTIONS, viewerPlugins } from '../lib/pdfEngine';
+  import PdfControls from './PdfControls.svelte';
 
   let { id, preference }: { id: string; preference: 'light' | 'dark'; active?: boolean } = $props();
 
@@ -23,7 +24,7 @@
 </script>
 
 <div
-  class="h-full w-full bg-stone-100 dark:bg-stone-950"
+  class="relative h-full w-full bg-stone-100 dark:bg-stone-950"
   data-theme={preference}
 >
   {#if engine.isLoading}
@@ -46,6 +47,7 @@
           <DocumentContent {documentId}>
             {#snippet children(doc)}
               {#if doc.isLoaded}
+                <PdfControls {documentId} />
                 <Viewport {documentId} class="h-full w-full">
                   <Scroller {documentId} {renderPage} />
                 </Viewport>
