@@ -26,20 +26,24 @@ function show(ref: Partial<import('../lib/citations').Reference>, matchedPaper: 
 describe('CitationPopover', () => {
   it('always shows the raw reference text', async () => {
     show({ rawText: 'Kingma & Ba. Adam. ICLR 2015.' }, null);
-    const { findByText } = render(CitationPopover);
+    const { findByText, queryByRole } = render(CitationPopover);
     expect(await findByText(/Adam\. ICLR 2015\./)).toBeInTheDocument();
+    expect(queryByRole('button', { name: /open in library/i })).not.toBeInTheDocument();
+    expect(queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('shows Open in library only when matched', async () => {
     show({}, paper);
-    const { findByRole } = render(CitationPopover);
+    const { findByRole, queryByRole } = render(CitationPopover);
     expect(await findByRole('button', { name: /open in library/i })).toBeInTheDocument();
+    expect(queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('shows an external link when the entry has a url', async () => {
     show({ externalUrl: 'https://doi.org/10.1/x' }, null);
-    const { findByRole } = render(CitationPopover);
+    const { findByRole, queryByRole } = render(CitationPopover);
     const link = await findByRole('link', { name: /doi\.org/i });
     expect(link).toHaveAttribute('href', 'https://doi.org/10.1/x');
+    expect(queryByRole('button', { name: /open in library/i })).not.toBeInTheDocument();
   });
 });
