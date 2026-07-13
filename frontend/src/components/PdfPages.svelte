@@ -13,7 +13,6 @@
   import { listPapers } from '../lib/api';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
-  import type { PdfDocumentObject } from '@embedpdf/models';
 
   // Renders one paper's pages inside the shared <EmbedPDF> (see PdfViewer/PdfDeck).
   // Bound to its own `documentId` — one PdfPages is mounted per open tab — so the
@@ -28,16 +27,17 @@
   let pageSizes = $state<{ width: number; height: number }[]>([]);
 
   // Extract citation markers + match them against the library ONCE per document.
-  // `docState.current` is reassigned on any core change (incl. zoom scale), so we
-  // guard on the document object's identity to avoid re-running loadCitations +
-  // the /api/papers fetch on every zoom tick. Failures are caught/logged so the
-  // reader still works without citation hovers.
-  let extractedDoc: PdfDocumentObject | null = null;
+  // `docState.current` (and its `.document`) is reassigned on any core change —
+  // incl. zoom scale and an initial load→reload — so guarding on the document
+  // object's identity still re-ran extraction. Guard on the (fixed) documentId
+  // instead: one PdfPages is mounted per tab, so extraction runs exactly once.
+  // Failures are caught/logged so the reader still works without citation hovers.
+  let extractedFor: string | null = null;
   $effect(() => {
     const registry = ctx.registry;
     const doc = docState.current?.document ?? null;
-    if (!registry || !doc || doc === extractedDoc) return;
-    extractedDoc = doc;
+    if (!registry || !doc || extractedFor === documentId) return;
+    extractedFor = documentId;
     pageSizes = doc.pages.map((p) => ({ width: p.size.width, height: p.size.height }));
     const engine = registry.getEngine();
     let cancelled = false;

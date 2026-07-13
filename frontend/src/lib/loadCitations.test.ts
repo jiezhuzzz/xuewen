@@ -4,10 +4,11 @@ import { loadCitations, type EngineLike } from './loadCitations';
 
 function task<T>(v: T) { return { toPromise: () => Promise.resolve(v) }; }
 
-// Minimal fake doc: 2 pages, 800pt tall. EmbedPDF returns annotation/text rects
-// and GoTo destination points in top-left device space (y grows downward), which
-// loadCitations passes through unchanged — so these coordinates are given in that
-// same top-left space (heading y=400, reference entry y=430).
+// Minimal fake doc: 2 pages, 800pt tall. EmbedPDF returns annotation and text
+// rects in top-left device space (given here directly: heading y=400, reference
+// entry y=430), but GoTo destination `y` in PDF bottom-left space — so the
+// marker's destination y is 370 (= 800 − 430), which loadCitations flips back to
+// 430 to line it up with the reference entry.
 const doc: any = {
   id: 'd', pageCount: 2,
   pages: [
@@ -20,12 +21,12 @@ const engine: EngineLike = {
   getPageAnnotations: (_d, page: any) => task(
     page.index === 0
       ? [
-          // a LINK marker on page 0 whose GoTo destination lands on the reference
-          // entry (page 1, y=430).
+          // a LINK marker on page 0 whose GoTo destination (bottom-left y=370)
+          // flips to the reference entry (page 1, top-left y=430).
           { type: 2 /* LINK */, pageIndex: 0, rect: { origin: { x: 90, y: 100 }, size: { width: 12, height: 12 } },
             target: {
               type: 'destination',
-              destination: { pageIndex: 1, view: [], zoom: { mode: PdfZoomMode.XYZ, params: { x: 50, y: 430, zoom: 0 } } },
+              destination: { pageIndex: 1, view: [], zoom: { mode: PdfZoomMode.XYZ, params: { x: 50, y: 370, zoom: 0 } } },
             } },
         ]
       : [

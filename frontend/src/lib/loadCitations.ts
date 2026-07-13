@@ -29,10 +29,14 @@ export interface EngineLike {
 
 const LINK = 2; // PdfAnnotationSubtype.LINK
 
-// EmbedPDF returns annotation rects, text-run rects, and GoTo destination points
-// all in TOP-LEFT device space (y grows downward) — the same space the rendered
-// page and our CSS overlay use — so coordinates pass through unchanged, no y-flip.
-// (Verified live: with a flip, hover boxes landed vertically mirrored.)
+// Coordinate spaces (verified live against real PDFs):
+//  - Annotation rects and text-run rects come back in TOP-LEFT device space
+//    (y grows downward) — the same space the rendered page + CSS overlay use —
+//    so they pass through unchanged (a flip mirrored the hover boxes vertically).
+//  - GoTo destination `y`, however, is left in PDF USER space (BOTTOM-LEFT origin,
+//    y grows upward), so it must be flipped to top-left before it can be lined up
+//    with the reference text runs — otherwise a marker maps to the mirror-image
+//    reference (e.g. the popover showed the wrong entry).
 
 function destOf(target: PdfLinkTarget | undefined): { pageIndex: number; y: number } | null {
   if (!target) return null;
@@ -52,15 +56,43 @@ function uriOf(target: PdfLinkTarget | undefined): string | undefined {
 }
 
 export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject): Promise<CitationData> {
-  const pages: PageText[] = [];
+  // Pass 1 — link annotations from every page (cheap). These give the citation
+  // markers + their destinations, plus any URL links (kept per page so a
+  // reference's DOI/URL can be attached below).
   const links: GotoLink[] = [];
-
+  const urlLinksByPage = new Map<number, UrlLink[]>();
   for (const page of doc.pages) {
-    const [annos, textRuns] = await Promise.all([
-      engine.getPageAnnotations(doc, page).toPromise(),
-      engine.getPageTextRuns(doc, page).toPromise(),
-    ]);
+    const annos = await engine.getPageAnnotations(doc, page).toPromise();
+    for (const a of annos) {
+      if (a.type !== LINK) continue;
+      const rect = { x: a.rect.origin.x, y: a.rect.origin.y, width: a.rect.size.width, height: a.rect.size.height };
+      const url = uriOf(a.target);
+      if (url) {
+        const arr = urlLinksByPage.get(page.index) ?? [];
+        arr.push({ ...rect, url });
+        urlLinksByPage.set(page.index, arr);
+        continue;
+      }
+      const dest = destOf(a.target);
+      if (!dest) continue;
+      // Flip the destination y from PDF bottom-left space into top-left space so
+      // it lines up with the reference text runs (see the coordinate note above).
+      const destPage = doc.pages[dest.pageIndex];
+      const destY = destPage ? destPage.size.height - dest.y : dest.y;
+      links.push({ pageIndex: page.index, ...rect, destPageIndex: dest.pageIndex, destY });
+    }
+  }
+  if (links.length === 0) return { references: [], markers: [] };
 
+  // Pass 2 — the bibliography lives on the pages the citation links point to, so
+  // read text runs (the expensive call) ONLY for those pages (usually a handful),
+  // not every page. Markers already come from the annotations above.
+  const refPageIndexes = [...new Set(links.map((l) => l.destPageIndex))].sort((a, b) => a - b);
+  const pages: PageText[] = [];
+  for (const idx of refPageIndexes) {
+    const page = doc.pages[idx];
+    if (!page) continue;
+    const textRuns = await engine.getPageTextRuns(doc, page).toPromise();
     const runs: TextRun[] = textRuns.runs.map((r) => ({
       text: r.text,
       x: r.rect.origin.x,
@@ -68,22 +100,7 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
       width: r.rect.size.width,
       height: r.rect.size.height,
     }));
-
-    const urlLinks: UrlLink[] = [];
-    for (const a of annos) {
-      if (a.type !== LINK) continue;
-      const rect = { x: a.rect.origin.x, y: a.rect.origin.y, width: a.rect.size.width, height: a.rect.size.height };
-      const url = uriOf(a.target);
-      if (url) {
-        urlLinks.push({ ...rect, url });
-        continue;
-      }
-      const dest = destOf(a.target);
-      if (!dest) continue;
-      links.push({ pageIndex: page.index, ...rect, destPageIndex: dest.pageIndex, destY: dest.y });
-    }
-
-    pages.push({ pageIndex: page.index, width: page.size.width, height: page.size.height, runs, urlLinks });
+    pages.push({ pageIndex: idx, width: page.size.width, height: page.size.height, runs, urlLinks: urlLinksByPage.get(idx) ?? [] });
   }
 
   const refStart = findReferencesStart(pages);
