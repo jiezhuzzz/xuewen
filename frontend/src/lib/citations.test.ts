@@ -23,6 +23,20 @@ describe('findReferencesStart', () => {
     expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200 });
   });
 
+  it('detects a heading split across runs on one line (small-caps / drop cap)', () => {
+    // Real PDFs render "REFERENCES" with a large first letter, which PDFium
+    // splits into separate runs on the same baseline (same y). The line must be
+    // reconstructed from its runs before matching.
+    const pages = [
+      page(5, 600, 800, [
+        { text: 'R', x: 50, y: 300, width: 14, height: 16 },
+        { text: 'EFERENCES', x: 64, y: 300, width: 80, height: 12 },
+        { text: '[1] A. Author. Title. 2020.', x: 50, y: 330, width: 300, height: 12 },
+      ]),
+    ];
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 5, y: 300 });
+  });
+
   it('ignores the word inside a sentence (not a heading)', () => {
     const pages = [page(0, 600, 800, [
       { text: 'see the references section for details', x: 50, y: 100, width: 260, height: 12 },
