@@ -1,9 +1,11 @@
 <script lang="ts">
   import { ExternalLink } from 'lucide-svelte';
   import type { PaperDetail } from '../lib/types';
+  import { abbreviateVenue } from '../lib/venue';
   import StatusPill from './StatusPill.svelte';
 
   let { d }: { d: PaperDetail } = $props();
+  const venueLabel = $derived(abbreviateVenue(d.venue));
 
   type Link = { label: string; href: string };
   const links = $derived.by(() => {
@@ -24,7 +26,7 @@
 {/if}
 <div class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-stone-500 dark:text-stone-400">
   {#if d.venue || d.year}
-    <span>{d.venue ?? ''}{d.venue && d.year ? ' · ' : ''}{d.year ?? ''}</span>
+    <span>{#if d.venue}<span title={d.venue}>{venueLabel}</span>{/if}{d.venue && d.year ? ' · ' : ''}{d.year ?? ''}</span>
   {/if}
   <StatusPill status={d.status} />
 </div>
