@@ -97,8 +97,9 @@
         </div>
       {/if}
       <div class="flex min-h-0 flex-1">
-        <!-- PdfViewer stays mounted while home is active so iframe scroll
-             positions survive a trip to the Library. -->
+        <!-- Reader column is hidden (not unmounted) while the Library view is
+             active, so returning to an open paper doesn't rebuild the subtree.
+             (The viewer itself remounts per paper, so scroll isn't preserved.) -->
         <div class={`relative min-h-0 min-w-0 flex-1 ${viewer.activeId === null ? 'hidden' : 'flex'}`}>
           <PdfViewer />
           {#if viewer.infoOpen && viewer.activeId}

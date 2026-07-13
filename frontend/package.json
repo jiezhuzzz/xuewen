@@ -9,8 +9,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "copy-wasm": "node scripts/copy-pdfium-wasm.mjs",
-    "predev": "node scripts/copy-pdfium-wasm.mjs",
-    "prebuild": "node scripts/copy-pdfium-wasm.mjs"
+    "predev": "npm run copy-wasm",
+    "prebuild": "npm run copy-wasm"
   },
   "dependencies": {
     "@embedpdf/pdfium": "^2.14.4",

@@ -34,4 +34,8 @@ describe('pdfViewerConfig', () => {
     expect(theme.light.background.surface).toBe('#faf9f7'); // paper
     expect(theme.dark.background.surface).toBe('#211d1a'); // soot
   });
+
+  it('percent-encodes the paper id in src', () => {
+    expect(pdfViewerConfig('a b/c%d', 'light').src).toBe('/papers/a%20b%2Fc%25d/pdf');
+  });
 });

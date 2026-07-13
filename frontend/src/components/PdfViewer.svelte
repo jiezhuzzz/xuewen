@@ -6,8 +6,6 @@
   import { pdfViewerConfig, themePreference } from '../lib/pdfViewer';
   import PdfFallback from './PdfFallback.svelte';
 
-  type ViewerConfig = ComponentProps<typeof PDFViewer>['config'];
-
   // Effective dark for `system` mode. Reactive to explicit theme changes; the
   // OS-follow case updates on the media-query event below.
   let systemDark = $state(
@@ -40,6 +38,7 @@
   $effect(() => {
     const id = viewer.activeId;
     failedId = null;
+    container = null; // the current instance unmounts on activeId change; oninit re-sets it
     if (!id) return;
     const controller = new AbortController();
     fetch(pdfUrl(id), { method: 'HEAD', signal: controller.signal })
@@ -61,7 +60,7 @@
     {:else}
       {#key viewer.activeId}
         <PDFViewer
-          config={pdfViewerConfig(viewer.activeId, preference) as unknown as ViewerConfig}
+          config={pdfViewerConfig(viewer.activeId, preference)}
           style="width:100%;height:100%"
           oninit={(c) => (container = c)}
         />

@@ -1,3 +1,4 @@
+import type { PDFViewerConfig } from '@embedpdf/svelte-pdf-viewer';
 import type { ThemeMode } from './state.svelte';
 
 /** EmbedPDF theme preference resolved from the app's theme mode. */
@@ -28,14 +29,15 @@ const VIEWER_THEME = {
 } as const;
 
 /**
- * Offline, self-hosted `<PDFViewer>` config for one paper. Returns a plain
- * object (cast to the component's config at the call site) so this stays
- * hermetic and unit-testable without importing the EmbedPDF runtime.
+ * Offline, self-hosted `<PDFViewer>` config for one paper. Typed against the
+ * component's own config (a type-only import, erased at build) so it is
+ * compile-checked yet stays hermetic — the unit test never loads the EmbedPDF
+ * runtime.
  */
 export function pdfViewerConfig(
   paperId: string,
   preference: 'light' | 'dark',
-): Record<string, unknown> {
+): PDFViewerConfig {
   return {
     src: `/papers/${encodeURIComponent(paperId)}/pdf`,
     // Load the self-hosted wasm, NOT EmbedPDF's default (the jsDelivr CDN) —
