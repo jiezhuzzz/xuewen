@@ -23,6 +23,15 @@
 
   const preference = $derived(themePreference(theme.mode, systemDark));
 
+  // `config.theme` only sets the viewer's INITIAL mode; it doesn't re-read the
+  // prop when the app theme toggles. Capture the container on init and drive
+  // `setTheme` so the viewer follows the app's light/dark live.
+  type Container = Parameters<NonNullable<ComponentProps<typeof PDFViewer>['oninit']>>[0];
+  let container = $state<Container | null>(null);
+  $effect(() => {
+    container?.setTheme(preference);
+  });
+
   // `@embedpdf/svelte-pdf-viewer` exposes no load-error callback (only
   // `oninit`/`onready`), so failure is detected out-of-band: a HEAD check of
   // the PDF URL whenever the active paper changes. Reset the fallback first
@@ -54,6 +63,7 @@
         <PDFViewer
           config={pdfViewerConfig(viewer.activeId, preference) as unknown as ViewerConfig}
           style="width:100%;height:100%"
+          oninit={(c) => (container = c)}
         />
       {/key}
     {/if}
