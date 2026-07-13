@@ -37,7 +37,11 @@
   });
 </script>
 
-<div class={`absolute inset-0 ${active ? '' : 'hidden'}`}>
+<!-- Hide inactive tabs with visibility (not display:none): display:none
+     collapses the tab to 0×0, which resets EmbedPDF's virtualized thumbnail
+     list to the top and makes it re-scroll (animate) to the current page on
+     every switch. `invisible` keeps the layout, so state is fully preserved. -->
+<div class={`absolute inset-0 ${active ? 'z-10' : 'invisible'}`}>
   {#if failed}
     <PdfFallback {id} />
   {:else}
