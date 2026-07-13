@@ -21,14 +21,17 @@ describe('ENGINE_OPTIONS', () => {
 });
 
 describe('viewerPlugins', () => {
-  it('registers the document at the given href and includes the needed plugins', () => {
-    const regs = viewerPlugins('/papers/abc/pdf');
+  it('includes the needed plugins and opens no document up front', () => {
+    const regs = viewerPlugins();
     // Every registration exposes a package manifest with an id.
     const ids = regs.map((r) => r.package.manifest.id);
     for (const id of ['viewport', 'scroll', 'render', 'selection', 'interaction-manager', 'document-manager']) {
       expect(ids).toContain(id);
     }
     const docReg = regs.find((r) => r.package.manifest.id === 'document-manager');
-    expect(docReg?.config?.initialDocuments?.[0]?.url).toBe('/papers/abc/pdf');
+    // Documents are opened per tab at runtime, not seeded here.
+    expect(docReg?.config?.initialDocuments).toBeUndefined();
+    // A cap high enough for many open tabs.
+    expect(docReg?.config?.maxDocuments).toBeGreaterThanOrEqual(16);
   });
 });

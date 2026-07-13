@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { useRegistry } from '@embedpdf/core/svelte';
+  import { useRegistry, useDocumentState } from '@embedpdf/core/svelte';
   import { Viewport } from '@embedpdf/plugin-viewport/svelte';
   import { Scroller, type PageLayout } from '@embedpdf/plugin-scroll/svelte';
   import { DocumentContent } from '@embedpdf/plugin-document-manager/svelte';
@@ -13,31 +13,33 @@
   import { listPapers } from '../lib/api';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
+  import type { PdfDocumentObject } from '@embedpdf/models';
 
-  // Rendered as a child inside <EmbedPDF>'s `children` snippet (see
-  // PdfDocViewer.svelte) so that `useRegistry()` — a context hook — resolves
-  // against the plugin registry EmbedPDF sets up. Svelte doesn't allow
-  // `$state`/`$effect`/hook calls directly inside a `{#snippet}` body (that's
-  // template syntax, not a component script), so citation loading + the page
-  // layout are hoisted into this dedicated component instead.
+  // Renders one paper's pages inside the shared <EmbedPDF> (see PdfViewer/PdfDeck).
+  // Bound to its own `documentId` — one PdfPages is mounted per open tab — so the
+  // shared engine is fine while each tab reads/extracts its own document.
   let { documentId }: { documentId: string } = $props();
 
   const ctx = useRegistry();
+  const docState = useDocumentState(() => documentId);
 
   let citations = $state<CitationData>({ references: [], markers: [] });
   let matches = $state<Map<number, PaperSummary>>(new Map());
   let pageSizes = $state<{ width: number; height: number }[]>([]);
 
-  // Extract citation markers + match them against the library once the
-  // document is loaded. Extraction failures (e.g. an odd PDF structure) are
-  // caught and logged so the reader still works without citation hovers.
+  // Extract citation markers + match them against the library ONCE per document.
+  // `docState.current` is reassigned on any core change (incl. zoom scale), so we
+  // guard on the document object's identity to avoid re-running loadCitations +
+  // the /api/papers fetch on every zoom tick. Failures are caught/logged so the
+  // reader still works without citation hovers.
+  let extractedDoc: PdfDocumentObject | null = null;
   $effect(() => {
     const registry = ctx.registry;
-    const docState = ctx.activeDocument;
-    if (!registry || !docState?.document) return;
-    const engine = registry.getEngine();
-    const doc = docState.document;
+    const doc = docState.current?.document ?? null;
+    if (!registry || !doc || doc === extractedDoc) return;
+    extractedDoc = doc;
     pageSizes = doc.pages.map((p) => ({ width: p.size.width, height: p.size.height }));
+    const engine = registry.getEngine();
     let cancelled = false;
     (async () => {
       try {
@@ -82,9 +84,9 @@
         <Scroller {documentId} {renderPage} />
       </Viewport>
     {:else if doc.isError}
-      <p class="p-4 text-sm text-red-600">Failed to load document.</p>
+      <p class="p-4 text-sm text-red-600 dark:text-red-400">Failed to load document.</p>
     {:else}
-      <p class="p-4 text-sm text-stone-500">Loading document…</p>
+      <p class="p-4 text-sm text-stone-500 dark:text-stone-400">Loading document…</p>
     {/if}
   {/snippet}
 </DocumentContent>

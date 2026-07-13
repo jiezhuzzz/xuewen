@@ -26,14 +26,19 @@ export const ENGINE_OPTIONS = {
   fontFallback: null,
 } as const;
 
+// One shared registry hosts every open paper as a document (EmbedPDF's Svelte
+// bindings use a module-level singleton context, so there can only be ONE
+// <EmbedPDF> per page). `maxDocuments` caps how many tabs can be open at once.
+const MAX_OPEN_DOCUMENTS = 32;
+
 /**
- * Plugin registrations for one paper's viewer. `pdfHref` is the same-origin
- * URL the backend serves the PDF from (`/papers/{id}/pdf`).
+ * Plugin registrations for the single, app-level viewer. Documents are opened
+ * per tab at runtime via the document-manager capability (no `initialDocuments`).
  */
-export function viewerPlugins(pdfHref: string): PluginBatchRegistrations {
+export function viewerPlugins(): PluginBatchRegistrations {
   return [
     createPluginRegistration(DocumentManagerPluginPackage, {
-      initialDocuments: [{ url: pdfHref }],
+      maxDocuments: MAX_OPEN_DOCUMENTS,
     }),
     createPluginRegistration(ViewportPluginPackage),
     createPluginRegistration(ScrollPluginPackage),
