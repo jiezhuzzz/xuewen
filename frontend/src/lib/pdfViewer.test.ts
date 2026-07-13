@@ -22,6 +22,16 @@ describe('pdfViewerConfig', () => {
     expect(c.fontFallback).toBeNull();
     expect(c.stamp).toEqual({ manifests: [] });
     expect(c.tabBar).toBe('never');
-    expect(c.theme).toEqual({ preference: 'dark' });
+    const theme = c.theme as {
+      preference: string;
+      light: { accent: { primary: string }; background: { surface: string } };
+      dark: { accent: { primary: string }; background: { surface: string } };
+    };
+    expect(theme.preference).toBe('dark');
+    // Palette aligns the viewer chrome with the web UI: amber accent + warm surfaces.
+    expect(theme.light.accent.primary).toBe('#b45309'); // amber-700
+    expect(theme.dark.accent.primary).toBe('#f59e0b'); // amber-500
+    expect(theme.light.background.surface).toBe('#faf9f7'); // paper
+    expect(theme.dark.background.surface).toBe('#211d1a'); // soot
   });
 });
