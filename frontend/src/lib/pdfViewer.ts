@@ -18,7 +18,14 @@ export function pdfViewerConfig(
   return {
     src: `/papers/${encodeURIComponent(paperId)}/pdf`,
     wasmUrl: '/pdfium.wasm',
-    worker: true,
+    // PDFium runs on the main thread, not a Web Worker. EmbedPDF's worker is a
+    // `blob:` worker; in our (plain Vite, non-SvelteKit) production build it
+    // never loads pdfium.wasm — the wasm URL resolves against the blob
+    // `import.meta.url` and our `wasmUrl` isn't threaded into the worker's
+    // Emscripten loader, so the viewer hangs on "Loading document...". The
+    // main-thread `direct-engine` loads the self-hosted /pdfium.wasm correctly.
+    // Fine for typical (few-MB) papers; revisit worker mode if large PDFs jank.
+    worker: false,
     fonts: { ui: null, signature: null },
     fontFallback: null,
     stamp: { manifests: [] },

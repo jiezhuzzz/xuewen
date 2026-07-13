@@ -17,7 +17,7 @@ describe('pdfViewerConfig', () => {
     const c = pdfViewerConfig('p1', 'dark');
     expect(c.src).toBe('/papers/p1/pdf');
     expect(c.wasmUrl).toBe('/pdfium.wasm');
-    expect(c.worker).toBe(true);
+    expect(c.worker).toBe(false);
     expect(c.fonts).toEqual({ ui: null, signature: null });
     expect(c.fontFallback).toBeNull();
     expect(c.stamp).toEqual({ manifests: [] });
