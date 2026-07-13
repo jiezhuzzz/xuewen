@@ -173,6 +173,35 @@ describe('handleKeydown', () => {
     expect(viewer.tabs).toHaveLength(0);
   });
 
+  // A keydown that bubbled out of a shadow DOM (e.g. the PDF viewer): the
+  // browser retargets `target` to the non-editable host, but composedPath()[0]
+  // is the real element inside the shadow tree.
+  function shadowKey(k: string, realTarget: EventTarget, host: EventTarget): KeyboardEvent {
+    const e = new KeyboardEvent('keydown', { key: k });
+    Object.defineProperty(e, 'target', { value: host });
+    Object.defineProperty(e, 'composedPath', { value: () => [realTarget, host, window] });
+    return e;
+  }
+
+  it('ignores shortcuts when a shadow-DOM input (viewer find box) is the real target', () => {
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    expect(viewer.activeId).toBe('a');
+    const host = document.createElement('embedpdf-container'); // non-editable shadow host
+    const input = document.createElement('input'); // real target inside the shadow tree
+    handleKeydown(shadowKey('x', input, host));
+    expect(viewer.tabs).toHaveLength(1); // NOT closed — the key belongs to the find box
+  });
+
+  it('still fires shortcuts when the real shadow target is non-editable (viewport)', () => {
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    const host = document.createElement('embedpdf-container');
+    const viewport = document.createElement('div'); // non-editable
+    handleKeydown(shadowKey('x', viewport, host));
+    expect(viewer.tabs).toHaveLength(0); // closed — shortcuts still work while reading
+  });
+
   it('single-key shortcuts are inert while a modal is open', () => {
     ui.importOpen = true;
     handleKeydown(key('['));

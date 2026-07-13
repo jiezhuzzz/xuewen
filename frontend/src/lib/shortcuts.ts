@@ -71,7 +71,12 @@ export function handleKeydown(e: KeyboardEvent): void {
     else if (ui.zen) ui.zen = false;
     return;
   }
-  if (isEditable(e.target) || ui.paletteOpen) return;
+  // Keyboard events from inside a shadow DOM (the PDF viewer) retarget
+  // `e.target` to the shadow host, which is never editable — so keys typed
+  // into the viewer's find box would leak to these app shortcuts. Check the
+  // real deepest target from the composed path instead.
+  const realTarget = e.composedPath()[0] ?? e.target;
+  if (isEditable(realTarget) || ui.paletteOpen) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   // Match letters case-insensitively so Caps Lock or a held Shift doesn't
   // dead-key a shortcut (`Z`/`X` would otherwise miss `z`/`x`). Named keys
