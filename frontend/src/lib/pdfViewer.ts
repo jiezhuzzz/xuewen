@@ -17,6 +17,9 @@ export function pdfViewerConfig(
 ): Record<string, unknown> {
   return {
     src: `/papers/${encodeURIComponent(paperId)}/pdf`,
+    // Load the self-hosted wasm, NOT EmbedPDF's default (the jsDelivr CDN) —
+    // required for the app to work offline. Served from /pdfium.wasm by the
+    // Task-1 build copy.
     wasmUrl: '/pdfium.wasm',
     // PDFium runs on the main thread, not a Web Worker. EmbedPDF's worker is a
     // `blob:` worker; in our (plain Vite, non-SvelteKit) production build it
