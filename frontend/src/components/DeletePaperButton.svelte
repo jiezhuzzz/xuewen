@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Trash2 } from 'lucide-svelte';
+  import ConfirmButtons from './ConfirmButtons.svelte';
   import { removePaper } from '../lib/state.svelte';
   import { toast } from '../lib/toasts.svelte';
 
@@ -29,20 +30,11 @@
   {:else}
     <p class="text-xs text-stone-600 dark:text-stone-300">Delete this paper?</p>
     <div class="mt-1.5 flex gap-2">
-      <button
-        type="button"
-        onclick={doDelete}
-        class="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
-      >
-        Delete
-      </button>
-      <button
-        type="button"
-        onclick={() => { confirming = false; error = null; }}
-        class="rounded px-2 py-1 text-xs text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
-      >
-        Cancel
-      </button>
+      <ConfirmButtons
+        confirmLabel="Delete"
+        onConfirm={doDelete}
+        onCancel={() => { confirming = false; error = null; }}
+      />
     </div>
   {/if}
 {:else}

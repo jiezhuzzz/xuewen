@@ -9,6 +9,7 @@
     setChatModel,
     stopChatStream,
   } from '../lib/chat.svelte';
+  import ConfirmButtons from './ConfirmButtons.svelte';
 
   let transcript = $state<HTMLElement | null>(null);
   // Stick to the bottom unless the reader scrolled up to reread something.
@@ -84,23 +85,14 @@
   {#if confirmingClear}
     <div class="flex shrink-0 items-center gap-2 border-b border-stone-200 bg-parchment/60 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-800/40">
       <span class="min-w-0 flex-1 text-stone-600 dark:text-stone-300">Clear this conversation?</span>
-      <button
-        type="button"
-        onclick={() => {
+      <ConfirmButtons
+        confirmLabel="Clear"
+        onConfirm={() => {
           confirmingClear = false;
           void clearChatThread();
         }}
-        class="rounded-lg bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700"
-      >
-        Clear
-      </button>
-      <button
-        type="button"
-        onclick={() => (confirmingClear = false)}
-        class="rounded-lg px-2.5 py-1 text-xs text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
-      >
-        Cancel
-      </button>
+        onCancel={() => (confirmingClear = false)}
+      />
     </div>
   {/if}
 

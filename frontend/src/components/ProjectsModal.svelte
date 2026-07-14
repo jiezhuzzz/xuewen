@@ -7,6 +7,7 @@
     removeProject,
     renameProject,
   } from '../lib/state.svelte';
+  import ConfirmButtons from './ConfirmButtons.svelte';
   import Modal from './Modal.svelte';
 
   let newName = $state('');
@@ -109,20 +110,11 @@
             <span class="flex shrink-0 items-center gap-2">
               <span class="text-xs text-stone-500 dark:text-stone-400">{p.paper_count}</span>
               {#if confirmingId === p.id}
-                <button
-                  type="button"
-                  onclick={() => void remove(p.id)}
-                  class="rounded-lg bg-red-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-red-700"
-                >
-                  Delete
-                </button>
-                <button
-                  type="button"
-                  onclick={() => (confirmingId = null)}
-                  class="rounded-lg px-2 py-0.5 text-xs text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
-                >
-                  Cancel
-                </button>
+                <ConfirmButtons
+                  confirmLabel="Delete"
+                  onConfirm={() => void remove(p.id)}
+                  onCancel={() => (confirmingId = null)}
+                />
               {:else}
                 <button
                   type="button"
