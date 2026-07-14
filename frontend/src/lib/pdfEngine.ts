@@ -7,6 +7,7 @@ import { SelectionPluginPackage } from '@embedpdf/plugin-selection';
 import { InteractionManagerPluginPackage } from '@embedpdf/plugin-interaction-manager';
 import { DocumentManagerPluginPackage } from '@embedpdf/plugin-document-manager';
 import { ZoomPluginPackage, ZoomMode } from '@embedpdf/plugin-zoom';
+import { TilingPluginPackage } from '@embedpdf/plugin-tiling';
 
 // Load-bearing offline config (see CLAUDE.md "PDF viewer gotchas"):
 //  - worker:false  -> PDFium on the main thread (the blob worker never loads
@@ -39,5 +40,10 @@ export function viewerPlugins(): PluginBatchRegistrations {
     createPluginRegistration(InteractionManagerPluginPackage),
     createPluginRegistration(SelectionPluginPackage),
     createPluginRegistration(ZoomPluginPackage, { defaultZoomLevel: ZoomMode.FitWidth }),
+    // Visible-area high-res tiles; the full-page RenderLayer base stays at
+    // scale 1 so zooming never re-renders whole pages (see PdfPages.svelte).
+    // Defaults (tileSize 768) match the ready-made viewer; only pass config
+    // here if a verified option needs changing.
+    createPluginRegistration(TilingPluginPackage),
   ];
 }

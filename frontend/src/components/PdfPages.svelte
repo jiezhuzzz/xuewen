@@ -6,6 +6,7 @@
   import { RenderLayer } from '@embedpdf/plugin-render/svelte';
   import { SelectionLayer } from '@embedpdf/plugin-selection/svelte';
   import { PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
+  import { TilingLayer } from '@embedpdf/plugin-tiling/svelte';
   import PdfControls from './PdfControls.svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
@@ -63,7 +64,12 @@
 {#snippet renderPage(page: PageLayout)}
   <div style:width="{page.width}px" style:height="{page.height}px" style:position="relative">
     <PagePointerProvider {documentId} pageIndex={page.pageIndex}>
-      <RenderLayer {documentId} pageIndex={page.pageIndex} />
+      <!-- Low-res base rendered once (scale locked at 1, CSS-scaled by the
+           framework); TilingLayer draws crisp visible tiles at the real zoom.
+           This mirrors the ready-made viewer and is the perf fix — do NOT
+           remove scale={1} or pages re-render fully on every zoom. -->
+      <RenderLayer {documentId} pageIndex={page.pageIndex} scale={1} class="pointer-events-none" />
+      <TilingLayer {documentId} pageIndex={page.pageIndex} class="pointer-events-none" />
       <SelectionLayer {documentId} pageIndex={page.pageIndex} />
       <CitationLayer
         pageIndex={page.pageIndex}
