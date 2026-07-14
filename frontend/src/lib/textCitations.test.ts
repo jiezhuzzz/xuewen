@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { columnMajorLines, segmentReferences, findNumberedMarkers } from './textCitations';
+import { columnMajorLines, segmentReferences, findNumberedMarkers, entryHeadInfo, findAuthorYearCandidates, resolveAuthorYearMarkers } from './textCitations';
 import type { PageText } from './citations';
 import type { CmLine } from './textCitations';
 
@@ -165,5 +165,41 @@ describe('findNumberedMarkers', () => {
     expect(m.width).toBeCloseTo((3 / 12) * 60, 1);
     expect(m.y).toBe(100);
     expect(m.height).toBe(12);
+  });
+});
+
+describe('author-year markers', () => {
+  const line = (text: string, x = 50, y = 100): CmLine => {
+    const run = { text, x, y, width: text.length * 5, height: 12 };
+    return { pageIndex: 0, col: 0, y, x, text, runs: [{ run, start: 0, end: text.length }] };
+  };
+  const refs = [
+    { index: 0, destPageIndex: 2, destY: 80, rawText: 'Kingma, D. and Ba, J. (2015). Adam.' },
+    { index: 1, destPageIndex: 2, destY: 130, rawText: 'Devlin, J. et al. (2019). BERT.',
+      structured: { authors: ['Jacob Devlin'], title: 'BERT', venue: null, year: 2019, doi: null, arxiv_id: null, url: null } },
+  ];
+
+  it('entryHeadInfo pulls the first surname and year from a raw entry', () => {
+    expect(entryHeadInfo('Kingma, D. and Ba, J. (2015). Adam.')).toEqual({ surname: 'kingma', year: 2015 });
+  });
+
+  it('finds parenthetical candidates and resolves multi-cites to the first hit', () => {
+    const cands = findAuthorYearCandidates([line('as shown (Kingma and Ba, 2015; Devlin et al., 2019) here')]);
+    expect(cands).toHaveLength(1);
+    const ms = resolveAuthorYearMarkers(cands, refs as never);
+    expect(ms).toHaveLength(1);
+    expect(ms[0].refIndex).toBe(0);
+  });
+
+  it('resolves via structured authors when available (narrative cite)', () => {
+    const cands = findAuthorYearCandidates([line('Devlin et al. (2019) show that')]);
+    expect(cands).toHaveLength(1);
+    const ms = resolveAuthorYearMarkers(cands, refs as never);
+    expect(ms[0].refIndex).toBe(1);
+  });
+
+  it('ignores year-only parentheses that match no entry', () => {
+    const cands = findAuthorYearCandidates([line('since (2015) alone means nothing')]);
+    expect(resolveAuthorYearMarkers(cands, refs as never)).toHaveLength(0);
   });
 });
