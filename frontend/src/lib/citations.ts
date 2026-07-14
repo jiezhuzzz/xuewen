@@ -12,7 +12,8 @@ export interface GotoLink {
   pageIndex: number; // page the marker sits on
   x: number; y: number; width: number; height: number; // marker rect (top-left, PDF points)
   destPageIndex: number;
-  destY: number; // destination y in the same top-left space
+  destY: number; // destination y in the same top-left space (0 = page top when unknown)
+  destX: number; // destination x in PDF points (0 when unknown) — column assignment
 }
 export interface RefAnchor { pageIndex: number; y: number; }
 

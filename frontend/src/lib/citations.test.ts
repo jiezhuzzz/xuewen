@@ -111,9 +111,9 @@ describe('buildCitationData', () => {
   ];
   const refStart: import('./citations').RefAnchor = { pageIndex: 1, y: 400 };
   const links: GotoLink[] = [
-    { pageIndex: 0, x: 90, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 430 },
-    { pageIndex: 0, x: 120, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 470 },
-    { pageIndex: 0, x: 200, y: 300, width: 12, height: 12, destPageIndex: 1, destY: 150 }, // above refStart → ignored
+    { pageIndex: 0, x: 90, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 430, destX: 0 },
+    { pageIndex: 0, x: 120, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 470, destX: 0 },
+    { pageIndex: 0, x: 200, y: 300, width: 12, height: 12, destPageIndex: 1, destY: 150, destX: 0 }, // above refStart → ignored
   ];
 
   it('orders references by destination and extracts their raw text', () => {
@@ -142,9 +142,9 @@ describe('buildCitationData', () => {
     // DEST_EPSILON=6), a third points at a distinct reference (470). The near-equal
     // destinations must collapse to one reference; both markers map to it.
     const dupLinks: GotoLink[] = [
-      { pageIndex: 0, x: 90, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 430 },
-      { pageIndex: 0, x: 140, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 433 },
-      { pageIndex: 0, x: 200, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 470 },
+      { pageIndex: 0, x: 90, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 430, destX: 0 },
+      { pageIndex: 0, x: 140, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 433, destX: 0 },
+      { pageIndex: 0, x: 200, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 470, destX: 0 },
     ];
     const { references, markers } = buildCitationData(dupLinks, pages, refStart);
     expect(references).toHaveLength(2);

@@ -64,4 +64,53 @@ describe('loadCitations', () => {
     expect(references).toHaveLength(0);
     expect(markers).toHaveLength(0);
   });
+
+  it('reads the destination top from view[] for FitH destinations', async () => {
+    const eng: EngineLike = {
+      getPageAnnotations: (_d, page: any) => task(
+        page.index === 0
+          ? [{ type: 2, rect: { origin: { x: 90, y: 100 }, size: { width: 12, height: 12 } },
+               target: { type: 'destination',
+                 destination: { pageIndex: 1, view: [370], zoom: { mode: PdfZoomMode.FitHorizontal } } } }]
+          : [],
+      ),
+      getPageTextRuns: (_d, page: any) => task(
+        page.index === 1
+          ? { runs: [
+              { text: 'References', rect: { origin: { x: 50, y: 400 }, size: { width: 90, height: 16 } } },
+              { text: '[1] A. Author. Adam. 2015.', rect: { origin: { x: 50, y: 430 }, size: { width: 300, height: 12 } } },
+            ] }
+          : { runs: [] },
+      ),
+    };
+    const data = await loadCitations(eng, doc);
+    // view[0]=370 in bottom-left space flips to 800-370=430 → the entry line.
+    expect(data.references).toHaveLength(1);
+    expect(data.references[0].rawText).toContain('Adam');
+    expect(data.markers).toHaveLength(1);
+  });
+
+  it('anchors whole-page-fit destinations to the page top, not the flipped bottom', async () => {
+    const eng: EngineLike = {
+      getPageAnnotations: (_d, page: any) => task(
+        page.index === 0
+          ? [{ type: 2, rect: { origin: { x: 90, y: 100 }, size: { width: 12, height: 12 } },
+               target: { type: 'destination',
+                 destination: { pageIndex: 1, view: [], zoom: { mode: PdfZoomMode.FitPage } } } }]
+          : [],
+      ),
+      getPageTextRuns: (_d, page: any) => task(
+        page.index === 1
+          ? { runs: [
+              { text: 'References', rect: { origin: { x: 50, y: 0 }, size: { width: 90, height: 16 } } },
+              { text: '[1] A. Author. Adam. 2015.', rect: { origin: { x: 50, y: 30 }, size: { width: 300, height: 12 } } },
+            ] }
+          : { runs: [] },
+      ),
+    };
+    const data = await loadCitations(eng, doc);
+    // destY must be 0 (top): at/after the heading at y=0 within DEST_EPSILON
+    // it still counts as a citation link and picks up the entry text below.
+    expect(data.markers).toHaveLength(1);
+  });
 });
