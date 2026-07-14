@@ -2,8 +2,12 @@
   import { ExternalLink, BookOpen } from 'lucide-svelte';
   import { citationHover, cancelHideCitation, hideCitationSoon } from '../lib/citationState.svelte';
   import { openTab } from '../lib/state.svelte';
+  import { abbreviateVenue } from '../lib/venue';
+  import { authorLine, refLinks } from '../lib/refFormat';
 
   const c = $derived(citationHover.current);
+  const s = $derived(c?.reference.structured ?? null);
+  const links = $derived(c ? refLinks(s, c.reference.externalUrl) : []);
 
   // Keep the popover on screen. It normally sits ABOVE the marker; near the top
   // of the viewport that would clip off-screen (looked like "no popup"), so flip
@@ -31,7 +35,19 @@
     style:transform={below ? 'none' : 'translateY(-100%)'}
     class="pointer-events-auto fixed z-50 max-w-sm rounded-xl border border-stone-200 bg-paper p-3 text-[12.5px] shadow-2xl dark:border-stone-800 dark:bg-soot"
   >
-    <p class="font-serif leading-relaxed text-stone-700 dark:text-stone-300">{c.reference.rawText}</p>
+    {#if s?.title}
+      <p class="font-medium leading-snug text-ink dark:text-stone-100">{s.title}</p>
+      {#if s.authors.length > 0}
+        <p class="mt-0.5 leading-snug text-stone-500 dark:text-stone-400">{authorLine(s.authors)}</p>
+      {/if}
+      {#if s.venue || s.year}
+        <p class="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
+          {[abbreviateVenue(s.venue), s.year].filter(Boolean).join(' · ')}
+        </p>
+      {/if}
+    {:else}
+      <p class="font-serif leading-relaxed text-stone-700 dark:text-stone-300">{c.reference.rawText}</p>
+    {/if}
     <div class="mt-2 flex items-center gap-3">
       {#if c.matchedPaper}
         <button
@@ -42,16 +58,16 @@
           <BookOpen size={13} /> Open in library
         </button>
       {/if}
-      {#if c.reference.externalUrl}
+      {#each links as l (l.href)}
         <a
-          href={c.reference.externalUrl}
+          href={l.href}
           target="_blank"
           rel="noopener noreferrer"
           class="inline-flex items-center gap-1 text-xs text-stone-500 hover:text-ink dark:text-stone-400"
         >
-          <ExternalLink size={12} /> {new URL(c.reference.externalUrl).host}
+          <ExternalLink size={12} /> {l.label}
         </a>
-      {/if}
+      {/each}
     </div>
   </div>
 {/if}

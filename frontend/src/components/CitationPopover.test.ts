@@ -46,4 +46,29 @@ describe('CitationPopover', () => {
     expect(link).toHaveAttribute('href', 'https://doi.org/10.1/x');
     expect(queryByRole('button', { name: /open in library/i })).not.toBeInTheDocument();
   });
+
+  it('renders a structured card when the reference is parsed', async () => {
+    show(
+      {
+        structured: {
+          authors: ['D. Kingma', 'J. Ba'], title: 'Adam: A Method for Stochastic Optimization',
+          venue: 'ICLR', year: 2015,
+          doi: null, arxiv_id: '1412.6980', url: null,
+        },
+      },
+      null,
+    );
+    const { findByText, queryByText, findByRole } = render(CitationPopover);
+    expect(await findByText('Adam: A Method for Stochastic Optimization')).toBeInTheDocument();
+    expect(await findByText(/D\. Kingma, J\. Ba/)).toBeInTheDocument();
+    expect(await findByText(/ICLR.*2015/)).toBeInTheDocument(); // venue (via abbreviateVenue) + year
+    expect(await findByRole('link', { name: /arXiv/i })).toBeInTheDocument();
+    expect(queryByText('raw ref text')).not.toBeInTheDocument(); // structured replaces raw
+  });
+
+  it('falls back to raw text when structured is null', async () => {
+    show({ structured: null }, null);
+    const { findByText } = render(CitationPopover);
+    expect(await findByText('raw ref text')).toBeInTheDocument();
+  });
 });
