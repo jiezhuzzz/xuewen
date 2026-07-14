@@ -309,6 +309,22 @@ pub(super) fn parse_lncs(entry: &str) -> StructuredReference {
     }
 }
 
+/// plain.bst: `Authors. Title. Venue, year.` - period-delimited, no anchors,
+/// so this grammar only ever runs when the vote picked it for the whole
+/// bibliography, and strict validation guards the output.
+pub(super) fn parse_plain(entry: &str) -> StructuredReference {
+    let segs = split_sentences(entry);
+    if segs.len() < 2 {
+        return StructuredReference::default();
+    }
+    StructuredReference {
+        authors: split_authors(&segs[0]),
+        title: Some(segs[1].trim().to_string()),
+        venue: segs.get(2).and_then(|v| clean_venue(v)),
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,5 +602,26 @@ mod tests {
             parse_lncs("D. Kingma and J. Ba. Adam. ICLR, 2015."),
             StructuredReference::default()
         );
+    }
+
+    #[test]
+    fn parses_plain_entries() {
+        let r = parse_plain(
+            "D. P. Kingma and J. Ba. Adam: A method for stochastic optimization. ICLR, 2015.",
+        );
+        assert_eq!(
+            r.title.as_deref(),
+            Some("Adam: A method for stochastic optimization")
+        );
+        assert_eq!(r.authors, vec!["D. P. Kingma", "J. Ba"]);
+        assert_eq!(r.venue.as_deref(), Some("ICLR"));
+
+        let p = parse_plain("J. Smith. A systems paper. In Proc. of OSDI, 2020.");
+        assert_eq!(p.venue.as_deref(), Some("Proc. of OSDI"));
+    }
+
+    #[test]
+    fn plain_single_segment_yields_default() {
+        assert_eq!(parse_plain("garbage"), StructuredReference::default());
     }
 }
