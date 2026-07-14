@@ -15,7 +15,6 @@
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
   import Welcome from './components/Welcome.svelte';
-  import ZenPill from './components/ZenPill.svelte';
   import { chat, loadChatModels, loadThread } from './lib/chat.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
@@ -123,5 +122,4 @@
 {#if identifyState.open}<IdentifyModal />{/if}
 {#if ui.projectsOpen}<ProjectsModal />{/if}
 {#if ui.paletteOpen}<CommandPalette />{/if}
-{#if ui.zen}<ZenPill />{/if}
 <Toaster />
