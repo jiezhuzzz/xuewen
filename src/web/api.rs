@@ -953,7 +953,9 @@ pub async fn parse_citations(
             return internal_error();
         }
     }
-    match svc.parse(&id, &body.references).await {
+    // TODO(task 10): pass the paper's actual venue instead of `None` once
+    // the web layer is wired to fetch it.
+    match svc.parse(&id, &body.references, None).await {
         Ok(parsed) => Json(serde_json::json!({ "references": parsed })).into_response(),
         Err(e) => {
             tracing::error!("parse_citations {id}: {e}");

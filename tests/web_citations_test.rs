@@ -25,7 +25,9 @@ async fn parses_references_and_caches() {
     let server =
         TestServer::new(xuewen::web::build_router_with_citations(pool, root, svc)).unwrap();
 
-    let body = json!({"references": ["[1] A. Author. Adam. ICLR 2015."]});
+    // No year/DOI/arXiv id, so the heuristic parser fails validation and
+    // this entry is a leftover routed to the (mocked) LLM.
+    let body = json!({"references": ["[1] A. Author. Adam. ICLR."]});
     let resp = server.post("/api/papers/p1/citations").json(&body).await;
     resp.assert_status_ok();
     let v: serde_json::Value = resp.json();
