@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { columnMajorLines, segmentReferences } from './textCitations';
+import { columnMajorLines, segmentReferences, findNumberedMarkers } from './textCitations';
 import type { PageText } from './citations';
+import type { CmLine } from './textCitations';
 
 function page(pageIndex: number, width: number, height: number, runs: PageText['runs'], urlLinks: PageText['urlLinks'] = []): PageText {
   return { pageIndex, width, height, runs, urlLinks };
@@ -130,5 +131,39 @@ describe('segmentReferences — author-year (hanging indent)', () => {
     expect(seg.references).toHaveLength(4);
     expect(seg.references[2].rawText).toBe('He, K. (2016). ResNet. CVPR.');
     expect(seg.references[3].rawText).toBe('Vaswani, A. (2017). Attention is all you need. NeurIPS.');
+  });
+});
+
+describe('findNumberedMarkers', () => {
+  const numberOf = new Map([[1, 0], [2, 1], [3, 2], [4, 3], [5, 4]]);
+  const line = (text: string, x = 50, y = 100): CmLine => {
+    const run = { text, x, y, width: text.length * 5, height: 12 };
+    return { pageIndex: 0, col: 0, y, x, text, runs: [{ run, start: 0, end: text.length }] };
+  };
+
+  it('finds [3] and maps it to the entry', () => {
+    const ms = findNumberedMarkers([line('as shown in [3] recently')], numberOf);
+    expect(ms).toHaveLength(1);
+    expect(ms[0].refIndex).toBe(2);
+  });
+
+  it('expands lists and ranges to the first entry, one marker per group', () => {
+    const ms = findNumberedMarkers([line('prior work [3, 5] and [1–4]')], numberOf);
+    expect(ms).toHaveLength(2);
+    expect(ms.map((m) => m.refIndex)).toEqual([2, 0]);
+  });
+
+  it('rejects math intervals like [0, 1] and out-of-range numbers', () => {
+    expect(findNumberedMarkers([line('in the interval [0, 1] we')], numberOf)).toHaveLength(0);
+    expect(findNumberedMarkers([line('see [17]')], numberOf)).toHaveLength(0);
+  });
+
+  it('computes a proportional rect inside the line', () => {
+    const l = line('abcd [3] xyz'); // '[3]' at chars 5..8 of a 12-char run, width 60
+    const [m] = findNumberedMarkers([l], numberOf);
+    expect(m.x).toBeCloseTo(50 + (5 / 12) * 60, 1);
+    expect(m.width).toBeCloseTo((3 / 12) * 60, 1);
+    expect(m.y).toBe(100);
+    expect(m.height).toBe(12);
   });
 });
