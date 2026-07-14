@@ -112,5 +112,9 @@ describe('loadCitations', () => {
     // destY must be 0 (top): at/after the heading at y=0 within DEST_EPSILON
     // it still counts as a citation link and picks up the entry text below.
     expect(data.markers).toHaveLength(1);
+    // At the buggy flipped-bottom destY (800) the text band [794, ∞) contains
+    // no runs, so rawText would be empty — this discriminates top vs bottom.
+    expect(data.references).toHaveLength(1);
+    expect(data.references[0].rawText).toContain('Adam');
   });
 });

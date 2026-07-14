@@ -60,9 +60,10 @@ function destOf(
   ) {
     return { pageIndex: dest.pageIndex, x: null, y: dest.view[0] };
   }
-  // Whole-page fits have no vertical position: anchor the page TOP. (y:null
-  // must never go through the bottom-left→top-left flip, which would turn
-  // "unknown" into "page bottom" and mis-map every marker on that page.)
+  // All other / unhandled zoom modes: no usable vertical position here —
+  // anchor the page TOP. (y:null must never go through the bottom-left→
+  // top-left flip, which would turn "unknown" into "page bottom" and
+  // mis-map every marker on that page.)
   return { pageIndex: dest.pageIndex, x: null, y: null };
 }
 
