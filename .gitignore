@@ -8,3 +8,6 @@ result
 result-*
 deploy/k8s/secret.yaml
 /frontend/public/pdfium.wasm
+
+# Local demo data (DB, PDFs, vectors, config)
+/demo/
