@@ -41,9 +41,9 @@ pub struct AppState {
     /// Present when paper chat is configured (`serve`). `None` -> chat
     /// endpoints answer 503 / available:false.
     pub chat: Option<Arc<crate::chat::ChatService>>,
-    /// Present when [ai.citations] is configured (`serve`). `None` ->
-    /// POST /api/papers/{id}/citations answers 503.
-    pub citations: Option<Arc<crate::citations::CitationsService>>,
+    /// Always present: heuristic parsing needs no config; [ai.citations]
+    /// adds the LLM fallback for entries heuristics can't parse.
+    pub citations: Arc<crate::citations::CitationsService>,
     /// UI-facing preferences (e.g. abstract folding). Defaulted in
     /// read-only/test routers; set from config in `serve`.
     pub ui: crate::config::UiConfig,
@@ -60,6 +60,7 @@ impl AppState {
 
 /// Assemble the read-only web router (no import). Used directly by tests.
 pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
+    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
     router_with(AppState {
         pool,
         library_root,
@@ -68,7 +69,7 @@ pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
         search: None,
         daily: None,
         chat: None,
-        citations: None,
+        citations,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -79,6 +80,7 @@ pub fn build_router_with_ingest(
     library_root: PathBuf,
     ingest: Arc<Ingest>,
 ) -> Router {
+    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
     router_with(AppState {
         pool,
         library_root,
@@ -87,7 +89,7 @@ pub fn build_router_with_ingest(
         search: None,
         daily: None,
         chat: None,
-        citations: None,
+        citations,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -99,6 +101,7 @@ pub fn build_router_with_ingest_proxy(
     ingest: Arc<Ingest>,
     proxy_login_url: Option<String>,
 ) -> Router {
+    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
     router_with(AppState {
         pool,
         library_root,
@@ -107,7 +110,7 @@ pub fn build_router_with_ingest_proxy(
         search: None,
         daily: None,
         chat: None,
-        citations: None,
+        citations,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -118,6 +121,7 @@ pub fn build_router_with_search(
     library_root: PathBuf,
     search: Arc<crate::search::SearchService>,
 ) -> Router {
+    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
     router_with(AppState {
         pool,
         library_root,
@@ -126,7 +130,7 @@ pub fn build_router_with_search(
         search: Some(search),
         daily: None,
         chat: None,
-        citations: None,
+        citations,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -137,6 +141,7 @@ pub fn build_router_with_daily(
     library_root: PathBuf,
     daily: Arc<crate::daily::DailyService>,
 ) -> Router {
+    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
     router_with(AppState {
         pool,
         library_root,
@@ -145,7 +150,7 @@ pub fn build_router_with_daily(
         search: None,
         daily: Some(daily),
         chat: None,
-        citations: None,
+        citations,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -156,6 +161,7 @@ pub fn build_router_with_chat(
     library_root: PathBuf,
     chat: Arc<crate::chat::ChatService>,
 ) -> Router {
+    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
     router_with(AppState {
         pool,
         library_root,
@@ -164,7 +170,7 @@ pub fn build_router_with_chat(
         search: None,
         daily: None,
         chat: Some(chat),
-        citations: None,
+        citations,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -183,7 +189,7 @@ pub fn build_router_with_citations(
         search: None,
         daily: None,
         chat: None,
-        citations: Some(citations),
+        citations,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -255,7 +261,7 @@ pub async fn serve(
     search: Option<Arc<crate::search::SearchService>>,
     daily: Option<Arc<crate::daily::DailyService>>,
     chat: Option<Arc<crate::chat::ChatService>>,
-    citations: Option<Arc<crate::citations::CitationsService>>,
+    citations: Arc<crate::citations::CitationsService>,
     ui: crate::config::UiConfig,
 ) -> Result<()> {
     let app = router_with(AppState {

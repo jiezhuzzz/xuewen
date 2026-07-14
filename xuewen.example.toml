@@ -59,5 +59,6 @@ database_url  = "sqlite:./library.db"
 #[ai.daily]
 
 # Structured reference parsing for the PDF reader's citation popovers.
-# Empty ⇒ inherits [ai] endpoint + model.
+# Common CS styles are parsed for free by pattern matching; this LLM
+# parses only the leftovers. Empty ⇒ inherits [ai] endpoint + model.
 #[ai.citations]

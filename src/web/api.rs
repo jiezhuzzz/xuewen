@@ -927,35 +927,32 @@ pub struct ParseCitationsBody {
 }
 
 /// POST /api/papers/{id}/citations — parse extracted reference strings into
-/// structured fields via [ai.citations] (cached per paper). 503 when the
-/// service is not configured.
+/// structured fields: heuristics first (always available), then the
+/// [ai.citations] LLM for entries heuristics couldn't parse (cached per
+/// paper).
 pub async fn parse_citations(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<ParseCitationsBody>,
 ) -> Response {
-    let Some(svc) = app.citations.clone() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "citation parsing not configured"})),
-        )
-            .into_response();
-    };
     let total: usize = body.references.iter().map(|r| r.len()).sum();
     if body.references.is_empty() || body.references.len() > 500 || total > 200_000 {
         return bad_request("references must be 1..=500 entries and under 200kB");
     }
-    match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(_)) => {}
+    // The paper's venue seeds the style vote's tie-breaker.
+    let venue = match db::get_by_id(&app.pool, &id).await {
+        Ok(Some(p)) => p.meta.venue,
         Ok(None) => return not_found(),
         Err(e) => {
             tracing::error!("parse_citations lookup {id}: {e}");
             return internal_error();
         }
-    }
-    // TODO(task 10): pass the paper's actual venue instead of `None` once
-    // the web layer is wired to fetch it.
-    match svc.parse(&id, &body.references, None).await {
+    };
+    match app
+        .citations
+        .parse(&id, &body.references, venue.as_deref())
+        .await
+    {
         Ok(parsed) => Json(serde_json::json!({ "references": parsed })).into_response(),
         Err(e) => {
             tracing::error!("parse_citations {id}: {e}");
