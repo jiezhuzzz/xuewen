@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { useRegistry, useDocumentState } from '@embedpdf/core/svelte';
   import { Viewport } from '@embedpdf/plugin-viewport/svelte';
   import { Scroller, type PageLayout } from '@embedpdf/plugin-scroll/svelte';
@@ -33,8 +34,15 @@
   // incl. zoom scale and an initial load→reload — so guarding on the document
   // object's identity still re-ran extraction. Guard on the (fixed) documentId
   // instead: one PdfPages is mounted per tab, so extraction runs exactly once.
-  // Failures are caught/logged so the reader still works without citation hovers.
+  // Extraction is scheduled once per document at idle; the schedule itself is
+  // a true one-shot, cancelled ONLY on component unmount. This $effect can
+  // legitimately re-run on the same document (zoom/reload churn re-fires
+  // `docState.current`) — such re-runs must NOT cancel a pending/in-flight
+  // extraction, so this effect returns no cleanup. Failures are caught/logged
+  // so the reader still works without citation hovers.
   let extractedFor: string | null = null;
+  let extractionCancelled = false;
+  let cancelExtractionIdle: (() => void) | null = null;
   $effect(() => {
     const registry = ctx.registry;
     const doc = docState.current?.document ?? null;
@@ -42,28 +50,28 @@
     extractedFor = documentId;
     pageSizes = doc.pages.map((p) => ({ width: p.size.width, height: p.size.height }));
     const engine = registry.getEngine();
-    let cancelled = false;
     // Extraction is main-thread PDFium work — wait for idle so the first
     // pages paint before we start crawling annotations/text.
-    const cancelIdle = runWhenIdle(() => {
+    cancelExtractionIdle = runWhenIdle(() => {
       void (async () => {
         try {
           const data = await loadCitations(engine as unknown as EngineLike, doc);
-          if (cancelled) return;
+          if (extractionCancelled) return;
           citations = data;
           // Whole library, independent of the current UI filter.
           const papers = await listPapers({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
-          if (cancelled) return;
+          if (extractionCancelled) return;
           matches = matchReferences(data.references, papers);
         } catch (err) {
           console.warn('citation extraction failed', err); // reader still works
         }
       })();
     });
-    return () => {
-      cancelled = true;
-      cancelIdle();
-    };
+  });
+
+  onDestroy(() => {
+    extractionCancelled = true;
+    cancelExtractionIdle?.();
   });
 </script>
 
