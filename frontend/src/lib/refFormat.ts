@@ -1,9 +1,9 @@
 import type { StructuredReference } from './types';
 
-/** "A, B, C" for up to three authors, then "A, B, C et al." */
+/** One or two authors verbatim; three or more collapse to "First, …, Last". */
 export function authorLine(authors: string[]): string {
-  const shown = authors.slice(0, 3).join(', ');
-  return authors.length > 3 ? `${shown} et al.` : shown;
+  if (authors.length <= 2) return authors.join(', ');
+  return `${authors[0]}, …, ${authors[authors.length - 1]}`;
 }
 
 /** External links for a reference: structured DOI/arXiv/URL first, then the

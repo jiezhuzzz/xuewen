@@ -7,11 +7,13 @@ const base: StructuredReference = {
 };
 
 describe('authorLine', () => {
-  it('joins up to three names', () => {
-    expect(authorLine(['A. One', 'B. Two', 'C. Three'])).toBe('A. One, B. Two, C. Three');
+  it('shows one or two names verbatim', () => {
+    expect(authorLine(['A. One'])).toBe('A. One');
+    expect(authorLine(['A. One', 'B. Two'])).toBe('A. One, B. Two');
   });
-  it('truncates with et al.', () => {
-    expect(authorLine(['A', 'B', 'C', 'D'])).toBe('A, B, C et al.');
+  it('collapses three or more to first and last', () => {
+    expect(authorLine(['A. One', 'B. Two', 'C. Three'])).toBe('A. One, …, C. Three');
+    expect(authorLine(['A', 'B', 'C', 'D'])).toBe('A, …, D');
   });
   it('empty list gives empty string', () => {
     expect(authorLine([])).toBe('');
