@@ -57,3 +57,7 @@ database_url  = "sqlite:./library.db"
 
 # Daily arXiv feed summaries.
 #[ai.daily]
+
+# Structured reference parsing for the PDF reader's citation popovers.
+# Empty ⇒ inherits [ai] endpoint + model.
+#[ai.citations]
