@@ -147,6 +147,73 @@ pub(super) fn looks_like_name(a: &str) -> bool {
             .any(|c| c.is_ascii_digit() || c == '(' || c == ')')
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Style {
+    Ieee = 0,
+    Acm = 1,
+    Lncs = 2,
+    Plain = 3,
+}
+
+/// IEEE titles are quoted (straight or curly).
+pub(super) static QUOTED_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"[""]([^"""]{4,}?)[""]"#).unwrap());
+/// ACM: leading author segment, then ". YYYY. ", then the rest.
+pub(super) static ACM_HEAD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)^(.{3,300}?)\.\s+((19|20)\d{2})\.\s+(.+)$").unwrap());
+/// LNCS entries start "Lastname, F." — full signature also needs the ".:"
+/// that closes the author block.
+static LNCS_START_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\p{Lu}[\p{L}''-]+,\s*\p{Lu}\.").unwrap());
+
+fn style_of_entry(e: &str) -> Style {
+    if QUOTED_RE.is_match(e) {
+        Style::Ieee
+    } else if LNCS_START_RE.is_match(e) && e.contains(".:") {
+        Style::Lncs
+    } else if ACM_HEAD_RE.is_match(e) {
+        Style::Acm
+    } else {
+        Style::Plain
+    }
+}
+
+/// Publisher family inferred from the paper's venue string — a prior, used
+/// only when the content vote is ambiguous. Deliberately not a maintained
+/// venue map: four substring rules cover the publisher families.
+fn venue_family_style(venue: &str) -> Option<Style> {
+    let v = venue.to_ascii_lowercase();
+    if v.contains("acm") {
+        Some(Style::Acm)
+    } else if v.contains("ieee") {
+        Some(Style::Ieee)
+    } else if v.contains("usenix") {
+        Some(Style::Plain)
+    } else if v.contains("springer") || v.contains("lncs") || v.contains("lecture notes") {
+        Some(Style::Lncs)
+    } else {
+        None
+    }
+}
+
+/// One bibliography = one style: vote across entries, ≥60% wins; otherwise
+/// the venue family decides; otherwise None (every entry goes to the LLM).
+pub(super) fn detect_style(entries: &[&str], venue: Option<&str>) -> Option<Style> {
+    if entries.is_empty() {
+        return None;
+    }
+    let mut counts = [0usize; 4];
+    for e in entries {
+        counts[style_of_entry(e) as usize] += 1;
+    }
+    let styles = [Style::Ieee, Style::Acm, Style::Lncs, Style::Plain];
+    let (best, &max) = counts.iter().enumerate().max_by_key(|(_, c)| **c).unwrap();
+    if max * 10 >= entries.len() * 6 {
+        return Some(styles[best]);
+    }
+    venue.and_then(venue_family_style)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +325,70 @@ mod tests {
         assert!(!looks_like_name("x"));
         assert!(!looks_like_name("3rd Workshop"));
         assert!(!looks_like_name("proceedings of the acm")); // no uppercase
+    }
+
+    #[test]
+    fn detects_style_by_majority_vote() {
+        let ieee = vec![
+            r#"K. Kim and T. Kim, "PGFUZZ: Policy-guided fuzzing," in Proc. of NDSS, 2021."#,
+            r#"D. Kingma and J. Ba, "Adam: A method for stochastic optimization," in Proc. of ICLR, 2015."#,
+            "garbled entry without a quote 2020",
+        ];
+        assert_eq!(detect_style(&ieee, None), Some(Style::Ieee)); // 2/3 ≥ 60%
+
+        let acm = vec![
+            "Martín Abadi and Andy Chu. 2016. Deep Learning with Differential Privacy. In CCS.",
+            "Jane Doe. 2019. Another Paper Title. In SOSP.",
+        ];
+        assert_eq!(detect_style(&acm, None), Some(Style::Acm));
+
+        let lncs = vec![
+            "Ateniese, G., Magri, B.: Redactable blockchain. In: EuroS&P, pp. 111–126. IEEE (2017)",
+            "Kingma, D., Ba, J.: Adam. In: ICLR (2015)",
+        ];
+        assert_eq!(detect_style(&lncs, None), Some(Style::Lncs));
+
+        let plain = vec![
+            "D. Kingma and J. Ba. Adam: A method. ICLR, 2015.",
+            "J. Smith. A systems paper. In Proc. of OSDI, 2020.",
+        ];
+        assert_eq!(detect_style(&plain, None), Some(Style::Plain));
+    }
+
+    #[test]
+    fn ambiguous_vote_falls_back_to_venue_family() {
+        // 1 IEEE + 1 ACM + 1 LNCS: no style reaches 60%.
+        let mixed = vec![
+            r#"A. B, "Quoted title here," in Proc. X, 2020."#,
+            "Jane Doe. 2019. Some Title. In SOSP.",
+            "Roe, R.: Colon Title. In: S&P (2018)",
+        ];
+        assert_eq!(detect_style(&mixed, None), None);
+        assert_eq!(
+            detect_style(
+                &mixed,
+                Some("2021 IEEE Symposium on Security and Privacy (SP)")
+            ),
+            Some(Style::Ieee)
+        );
+        assert_eq!(
+            detect_style(&mixed, Some("Proceedings of the ACM SIGSAC CCS")),
+            Some(Style::Acm)
+        );
+        assert_eq!(
+            detect_style(&mixed, Some("USENIX Security Symposium")),
+            Some(Style::Plain)
+        );
+        assert_eq!(
+            detect_style(&mixed, Some("ESORICS, Lecture Notes in CS")),
+            Some(Style::Lncs)
+        );
+        assert_eq!(detect_style(&mixed, Some("Journal of Cryptology")), None);
+    }
+
+    #[test]
+    fn empty_entries_detect_nothing() {
+        assert_eq!(detect_style(&[], None), None);
+        assert_eq!(detect_style(&[], Some("ACM CCS")), None);
     }
 }
