@@ -515,6 +515,10 @@ async fn main() -> Result<()> {
             if chat.is_none() {
                 tracing::info!("paper chat disabled (no usable [[ai.chat.models]])");
             }
+            let citations = xuewen::citations::CitationsService::from_config(pool.clone(), &cfg);
+            if citations.is_none() {
+                tracing::info!("citation parsing disabled (no [ai.citations])");
+            }
             web::serve(
                 &host,
                 port,
@@ -525,6 +529,7 @@ async fn main() -> Result<()> {
                 search,
                 daily,
                 chat,
+                citations,
                 cfg.ui.clone(),
             )
             .await?;
@@ -737,7 +742,9 @@ async fn main() -> Result<()> {
         }
         Command::Summarize { id, all } => {
             let Some(svc) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) else {
-                anyhow::bail!("[ai.summary] is not configured (or no model/API key) — nothing to do");
+                anyhow::bail!(
+                    "[ai.summary] is not configured (or no model/API key) — nothing to do"
+                );
             };
             if all {
                 xuewen::summary::store::clear(&pool, None).await?;
@@ -755,7 +762,14 @@ async fn main() -> Result<()> {
                 xuewen::summary::store::clear(&pool, Some(id)).await?;
                 xuewen::summary::store::clear_failure(&pool, Some(id)).await?;
                 let ok = svc.summarize_one(id).await?;
-                println!("{}", if ok { "summary generated" } else { "no summary generated (see logs)" });
+                println!(
+                    "{}",
+                    if ok {
+                        "summary generated"
+                    } else {
+                        "no summary generated (see logs)"
+                    }
+                );
             } else {
                 let mut total = 0usize;
                 loop {
