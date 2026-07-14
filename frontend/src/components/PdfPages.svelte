@@ -11,8 +11,8 @@
   import PdfControls from './PdfControls.svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
-  import { matchReferences } from '../lib/citationMatch';
-  import { listPapers, parseCitations } from '../lib/api';
+  import { libraryTitleIndex, matchReferences } from '../lib/citationMatch';
+  import { parseCitations } from '../lib/api';
   import { runWhenIdle } from '../lib/idle';
   import { mergeStructured } from '../lib/refMerge';
   import { resolveAuthorYearMarkers } from '../lib/textCitations';
@@ -67,10 +67,11 @@
           const data = await loadCitations(engine as unknown as EngineLike, doc);
           if (extractionCancelled) return;
           citations = data;
-          // Whole library, independent of the current UI filter.
-          const papers = await listPapers({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
+          // Whole-library title index, independent of the current UI filter
+          // and shared across all open tabs (one fetch + normalization pass).
+          const index = await libraryTitleIndex();
           if (extractionCancelled) return;
-          matches = matchReferences(data.references, papers);
+          matches = matchReferences(data.references, index);
 
           let refs = data.references;
           if (refs.length > 0) {
@@ -85,7 +86,7 @@
             ? resolveAuthorYearMarkers(data.pendingAuthorYear, refs)
             : [];
           citations = { references: refs, markers: [...data.markers, ...extra] };
-          matches = matchReferences(refs, papers);
+          matches = matchReferences(refs, index);
         } catch (err) {
           console.warn('citation extraction failed', err); // reader still works
         }

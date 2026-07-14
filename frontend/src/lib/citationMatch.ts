@@ -1,4 +1,6 @@
+import { listPapers } from './api';
 import type { Reference } from './citations';
+import type { PaperSummary } from './types';
 
 /** Lowercase, replace every non-alphanumeric char with a space, collapse ws.
  *  Mirrors `normalize_title` in src/matching.rs so both ends agree. */
@@ -14,27 +16,61 @@ export function normalizeTitle(s: string): string {
 // titles ("On It") appear by chance in prose and cause false positives.
 const MIN_TITLE_LEN = 12;
 
-/**
- * For each reference, the id of the first library paper whose normalized title
- * occurs verbatim inside the normalized reference text (or matches the structured
- * title if available). References almost always contain the cited paper's exact
- * title, so substring containment is reliable and needs no reference parsing.
- */
-export function matchReferences<P extends { id: string; title: string | null }>(
-  refs: Reference[],
+/** Normalized-title lookup structures for a set of papers — built once,
+ *  matched against many times (`matchReferences` used to rebuild this on
+ *  every call, twice per document open). */
+export interface TitleIndex<P> {
+  normed: { paper: P; title: string }[];
+  byNormTitle: Map<string, P>;
+}
+
+export function buildTitleIndex<P extends { id: string; title: string | null }>(
   papers: P[],
-): Map<number, P> {
+): TitleIndex<P> {
   const normed = papers
     .filter((p) => !!p.title)
     .map((p) => ({ paper: p, title: normalizeTitle(p.title as string) }))
     .filter((p) => p.title.length >= MIN_TITLE_LEN);
 
-  // First match wins — same tie-break as the substring fallback below.
+  // First match wins — same tie-break as the substring fallback in
+  // matchReferences.
   const byNormTitle = new Map<string, P>();
   for (const p of normed) {
     if (!byNormTitle.has(p.title)) byNormTitle.set(p.title, p.paper);
   }
+  return { normed, byNormTitle };
+}
 
+/** Whole-library title index shared by every open PDF tab: one fetch + one
+ *  normalization pass serves all of them (each tab used to refetch and
+ *  re-normalize the full library independently). Invalidate when the
+ *  library changes (import/delete/identify). */
+let libraryIndexPromise: Promise<TitleIndex<PaperSummary>> | null = null;
+
+export function libraryTitleIndex(): Promise<TitleIndex<PaperSummary>> {
+  libraryIndexPromise ??= listPapers({ q: '', status: 'all', sort: 'year_desc', project: 'all' })
+    .then(buildTitleIndex)
+    .catch((e) => {
+      libraryIndexPromise = null; // failed fetches must not be cached
+      throw e;
+    });
+  return libraryIndexPromise;
+}
+
+export function invalidateLibraryTitleIndex(): void {
+  libraryIndexPromise = null;
+}
+
+/**
+ * For each reference, the first index paper whose normalized title occurs
+ * verbatim inside the normalized reference text (or matches the structured
+ * title if available). References almost always contain the cited paper's
+ * exact title, so substring containment is reliable and needs no parsing.
+ */
+export function matchReferences<P extends { id: string; title: string | null }>(
+  refs: Reference[],
+  { normed, byNormTitle }: TitleIndex<P>,
+): Map<number, P> {
   const out = new Map<number, P>();
   for (const r of refs) {
     const parsedTitle = r.structured?.title ? normalizeTitle(r.structured.title) : null;

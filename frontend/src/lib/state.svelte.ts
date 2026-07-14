@@ -18,6 +18,7 @@ import {
   searchPapers,
   updateProject,
 } from './api';
+import { invalidateLibraryTitleIndex } from './citationMatch';
 import { dur } from './motion';
 import type {
   BibFormat,
@@ -370,6 +371,7 @@ export async function removePaper(id: string): Promise<void> {
   closeTab(id);
   library.papers = library.papers.filter((p) => p.id !== id);
   detailCache.delete(id);
+  invalidateLibraryTitleIndex();
   if (selection.id === id) selection.id = null;
   await loadStats();
 }
@@ -496,6 +498,7 @@ async function drainQueue(): Promise<void> {
     }
   }
   // Reflect the newly ingested papers in the sidebar list and counts.
+  invalidateLibraryTitleIndex();
   await loadPapers();
   await loadStats();
 }
@@ -648,6 +651,7 @@ export async function applyIdentify(): Promise<void> {
     // whether this identify session is still the live one...
     detailCache.set(id, detail);
     detailRefresh.n += 1;
+    invalidateLibraryTitleIndex(); // identify can change the paper's title
     const tab = viewer.tabs.find((t) => t.id === id);
     if (tab) tab.title = detail.title ?? tab.title;
     if (session === identifySession) {

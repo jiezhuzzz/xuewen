@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchReferences, normalizeTitle } from './citationMatch';
+import { buildTitleIndex, matchReferences, normalizeTitle } from './citationMatch';
 import type { Reference } from './citations';
 
 function ref(index: number, rawText: string): Reference {
@@ -23,24 +23,24 @@ describe('matchReferences', () => {
 
   it('matches when a library title appears verbatim inside the reference text', () => {
     const refs = [ref(0, '[12] D. Kingma, J. Ba. Adam: A Method for Stochastic Optimization. ICLR 2015.')];
-    const m = matchReferences(refs, papers);
+    const m = matchReferences(refs, buildTitleIndex(papers));
     expect(m.get(0)?.id).toBe('p-adam');
   });
 
   it('does not match unrelated references', () => {
     const refs = [ref(0, '[3] Some Unrelated Paper About Frogs. Nature 2001.')];
-    expect(matchReferences(refs, papers).has(0)).toBe(false);
+    expect(matchReferences(refs, buildTitleIndex(papers)).has(0)).toBe(false);
   });
 
   it('guards against very short titles causing false positives', () => {
     const shortTitlePapers = [{ id: 'p-x', title: 'On It' }];
     const refs = [ref(0, '[1] A paper that mentions on it somewhere in prose. 2020.')];
-    expect(matchReferences(refs, shortTitlePapers).has(0)).toBe(false);
+    expect(matchReferences(refs, buildTitleIndex(shortTitlePapers)).has(0)).toBe(false);
   });
 
   it('ignores papers with null titles', () => {
     const refs = [ref(0, 'anything at all')];
-    expect(matchReferences(refs, papers).has(0)).toBe(false);
+    expect(matchReferences(refs, buildTitleIndex(papers)).has(0)).toBe(false);
   });
 
   it('matches on the structured title even when the raw text differs', () => {
@@ -51,12 +51,12 @@ describe('matchReferences', () => {
         venue: 'ICLR', year: 2015, doi: null, arxiv_id: null, url: null,
       },
     }];
-    expect(matchReferences(refs, papers).get(0)?.id).toBe('p-adam');
+    expect(matchReferences(refs, buildTitleIndex(papers)).get(0)?.id).toBe('p-adam');
   });
 
   it('structured null still falls back to substring matching', () => {
     const refs = [{ ...ref(0, 'x Adam: A Method for Stochastic Optimization x'), structured: null }];
-    expect(matchReferences(refs, papers).get(0)?.id).toBe('p-adam');
+    expect(matchReferences(refs, buildTitleIndex(papers)).get(0)?.id).toBe('p-adam');
   });
 
   it('breaks duplicate-title ties the same way as the substring path (first wins)', () => {
@@ -71,6 +71,6 @@ describe('matchReferences', () => {
         venue: null, year: null, doi: null, arxiv_id: null, url: null,
       },
     }];
-    expect(matchReferences(refs, dupPapers).get(0)?.id).toBe('p-first');
+    expect(matchReferences(refs, buildTitleIndex(dupPapers)).get(0)?.id).toBe('p-first');
   });
 });
