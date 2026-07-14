@@ -97,25 +97,34 @@ export function segmentReferences(pages: PageText[], refStart: RefAnchor): Segme
     return { references, numberOf, style: 'numbered' };
   }
 
-  // Author-year: entries split on the hanging-indent pattern. Group lines by
-  // column, find each column's two dominant start-x values; whichever start-x
-  // begins lines that CONTAIN A YEAR more often marks entry starts.
+  // Author-year: entries split on the hanging-indent pattern, detected PER
+  // COLUMN (entry starts sit at each column's own margin). For each column,
+  // take its two most frequent line start-x buckets; whichever bucket's lines
+  // contain a year more often marks that column's entry starts. A column that
+  // is pure continuation spill-over can still contribute false starts if its
+  // lines carry years — the global ≥60% year gate below bounds the damage.
   const YEAR = /(?:19|20)\d{2}/;
   const xKey = (x: number) => Math.round(x / 4) * 4;
-  const freq = new Map<number, number>();
-  for (const l of lines) freq.set(xKey(l.x), (freq.get(xKey(l.x)) ?? 0) + 1);
-  const candidates = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([x]) => x);
-  if (candidates.length === 0) return null;
-  const yearShare = (x: number) => {
-    const at = lines.filter((l) => xKey(l.x) === x);
-    return at.length === 0 ? 0 : at.filter((l) => YEAR.test(l.text)).length / at.length;
-  };
-  const startX = candidates.length === 1 ? candidates[0]
-    : yearShare(candidates[0]) >= yearShare(candidates[1]) ? candidates[0] : candidates[1];
+  const startXByCol = new Map<number, number>();
+  const cols = [...new Set(lines.map((l) => l.col))];
+  for (const col of cols) {
+    const colLines = lines.filter((l) => l.col === col);
+    const freq = new Map<number, number>();
+    for (const l of colLines) freq.set(xKey(l.x), (freq.get(xKey(l.x)) ?? 0) + 1);
+    const candidates = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([x]) => x);
+    if (candidates.length === 0) continue;
+    const yearShare = (x: number) => {
+      const at = colLines.filter((l) => xKey(l.x) === x);
+      return at.length === 0 ? 0 : at.filter((l) => YEAR.test(l.text)).length / at.length;
+    };
+    const startX = candidates.length === 1 ? candidates[0]
+      : yearShare(candidates[0]) >= yearShare(candidates[1]) ? candidates[0] : candidates[1];
+    startXByCol.set(col, startX);
+  }
 
   const ayStarts = lines
     .map((l, i) => ({ l, i }))
-    .filter(({ l }) => xKey(l.x) === startX && !isReferencesHeading(l.text));
+    .filter(({ l }) => startXByCol.get(l.col) === xKey(l.x) && !isReferencesHeading(l.text));
   if (ayStarts.length < MIN_ENTRIES) return null;
 
   const ayRefs: Reference[] = ayStarts.map(({ i: from }, refIndex) => {
