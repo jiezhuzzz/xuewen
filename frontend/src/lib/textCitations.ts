@@ -2,6 +2,7 @@ import {
   assignColumns,
   isReferencesHeading,
   LINE_TOLERANCE,
+  type Marker,
   type PageText,
   type RefAnchor,
   type Reference,
@@ -150,4 +151,61 @@ function colOfPoint(pages: PageText[], pageIndex: number, x: number): number {
   const cols = assignColumns(p.runs, p.width);
   const twoCol = [...cols.values()].some((c) => c === 1);
   return twoCol && x >= p.width / 2 ? 1 : 0;
+}
+
+const BRACKET_GROUP = /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)\]/g;
+
+/** Bracketed-number citation markers in body lines. One marker per bracket
+ *  group; a group is a citation only if EVERY number in it (ranges expanded)
+ *  resolves to a known entry — this kills math like [0, 1] and stray [17]s. */
+export function findNumberedMarkers(bodyLines: CmLine[], numberOf: Map<number, number>): Marker[] {
+  const markers: Marker[] = [];
+  for (const line of bodyLines) {
+    for (const m of line.text.matchAll(BRACKET_GROUP)) {
+      const nums = expandGroup(m[1]);
+      if (!nums || nums.some((n) => !numberOf.has(n))) continue;
+      const refIndex = numberOf.get(nums[0])!;
+      const rect = rectForSpan(line, m.index!, m.index! + m[0].length);
+      if (rect) markers.push({ pageIndex: line.pageIndex, ...rect, refIndex });
+    }
+  }
+  return markers;
+}
+
+/** "3, 5" → [3,5]; "1–4" → [1,2,3,4]; null on a zero or an absurd range. */
+function expandGroup(group: string): number[] | null {
+  const out: number[] = [];
+  for (const part of group.split(/[,;]/)) {
+    const range = part.split(/[–—-]/).map((s) => parseInt(s.trim(), 10));
+    if (range.some((n) => !Number.isFinite(n) || n <= 0)) return null;
+    if (range.length === 1) out.push(range[0]);
+    else if (range.length === 2 && range[1] > range[0] && range[1] - range[0] <= 50) {
+      for (let n = range[0]; n <= range[1]; n++) out.push(n);
+    } else return null;
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** Rect covering line chars [start, end): union of the runs' slices, with a
+ *  proportional cut inside partially-covered runs. */
+function rectForSpan(
+  line: CmLine,
+  start: number,
+  end: number,
+): { x: number; y: number; width: number; height: number } | null {
+  let x1 = Infinity, x2 = -Infinity, y1 = Infinity, y2 = -Infinity;
+  for (const { run, start: rs, end: re } of line.runs) {
+    const s = Math.max(start, rs);
+    const e = Math.min(end, re);
+    if (s >= e) continue;
+    const chars = re - rs;
+    const left = run.x + ((s - rs) / chars) * run.width;
+    const right = run.x + ((e - rs) / chars) * run.width;
+    x1 = Math.min(x1, left);
+    x2 = Math.max(x2, right);
+    y1 = Math.min(y1, run.y);
+    y2 = Math.max(y2, run.y + run.height);
+  }
+  if (x1 === Infinity) return null;
+  return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
 }
