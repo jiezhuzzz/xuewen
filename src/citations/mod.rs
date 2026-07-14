@@ -1,3 +1,4 @@
+pub mod heuristic;
 pub mod store;
 
 use anyhow::{anyhow, Result};
@@ -9,7 +10,7 @@ use crate::config::Config;
 
 /// One bibliography entry parsed to fields. Field names are the JSON wire
 /// format shared with the frontend (`StructuredReference` in types.ts).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StructuredReference {
     /// `null_as_empty`: the model sometimes emits `"authors": null` for an
     /// entry it half-parsed; that must not fail the whole batch.
@@ -234,14 +235,19 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let refs: Vec<String> = (1..=55).map(|i| format!("REF-{i} some paper title")).collect();
+        let refs: Vec<String> = (1..=55)
+            .map(|i| format!("REF-{i} some paper title"))
+            .collect();
         let pool = crate::citations::store::tests_pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
 
         let out = svc.parse("p1", &refs).await.unwrap();
         assert_eq!(out.len(), 55);
         // chunk-local index 1 of chunk 2 = overall entry 26
-        assert_eq!(out[25].as_ref().unwrap().title.as_deref(), Some("chunk2-first"));
+        assert_eq!(
+            out[25].as_ref().unwrap().title.as_deref(),
+            Some("chunk2-first")
+        );
         assert!(out[0].is_none());
         let refs_json = serde_json::to_string(&refs).unwrap();
         assert!(store::get(&pool, "p1", &refs_json).await.unwrap().is_some());
