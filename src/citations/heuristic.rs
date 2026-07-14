@@ -325,6 +325,57 @@ pub(super) fn parse_plain(entry: &str) -> StructuredReference {
     }
 }
 
+/// Grammar fields win; universal fields fill the gaps.
+fn merge_universal(mut r: StructuredReference, u: UniversalFields) -> StructuredReference {
+    r.year = r.year.or(u.year);
+    r.doi = r.doi.or(u.doi);
+    r.arxiv_id = r.arxiv_id.or(u.arxiv_id);
+    r.url = r.url.or(u.url);
+    r
+}
+
+/// Strict per-entry gate: a false None costs one LLM entry; a false Some
+/// shows a wrong popover.
+fn validate(r: &StructuredReference) -> bool {
+    let Some(t) = r.title.as_deref() else {
+        return false;
+    };
+    let n = t.chars().count();
+    if !(4..=300).contains(&n) || !t.chars().any(|c| c.is_alphabetic()) || t.contains("http") {
+        return false;
+    }
+    if r.authors.is_empty() || !r.authors.iter().all(|a| looks_like_name(a)) {
+        return false;
+    }
+    if r.year.is_none() && r.doi.is_none() && r.arxiv_id.is_none() {
+        return false;
+    }
+    r.venue.as_deref() != Some(t)
+}
+
+/// Parse every entry with the bibliography's detected style. Entries that
+/// fail strict validation come back None - the caller's LLM leftovers.
+/// Index-aligned with `refs`.
+pub fn parse_all(refs: &[String], venue: Option<&str>) -> Vec<Option<StructuredReference>> {
+    let stripped: Vec<&str> = refs.iter().map(|r| strip_marker(r)).collect();
+    let Some(style) = detect_style(&stripped, venue) else {
+        return vec![None; refs.len()];
+    };
+    stripped
+        .iter()
+        .map(|e| {
+            let parsed = match style {
+                Style::Ieee => parse_ieee(e),
+                Style::Acm => parse_acm(e),
+                Style::Lncs => parse_lncs(e),
+                Style::Plain => parse_plain(e),
+            };
+            let merged = merge_universal(parsed, universal_fields(e));
+            validate(&merged).then_some(merged)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -623,5 +674,62 @@ mod tests {
     #[test]
     fn plain_single_segment_yields_default() {
         assert_eq!(parse_plain("garbage"), StructuredReference::default());
+    }
+
+    #[test]
+    fn parse_all_parses_a_full_ieee_bibliography() {
+        let refs: Vec<String> = vec![
+            r#"[1] K. Kim, T. Kim, and E. Fernandez, "PGFUZZ: Policy-guided fuzzing for robotic vehicles," in Proceedings of NDSS, 2021."#.into(),
+            "[2] D. Kingma and J. Ba, \"Adam: A method for stochastic optimization,\" in Proc. of ICLR, 2015, pp. 1\u{2013}15."
+                .into(),
+            "[3] garbled fragment no quote".into(),
+        ];
+        let out = parse_all(&refs, None);
+        assert_eq!(out.len(), 3);
+        let r0 = out[0].as_ref().unwrap();
+        assert_eq!(
+            r0.title.as_deref(),
+            Some("PGFUZZ: Policy-guided fuzzing for robotic vehicles")
+        );
+        assert_eq!(r0.year, Some(2021)); // universal year merged into IEEE parse
+        assert_eq!(
+            out[1].as_ref().unwrap().venue.as_deref(),
+            Some("Proc. of ICLR")
+        );
+        assert!(out[2].is_none()); // leftover -> LLM
+    }
+
+    #[test]
+    fn parse_all_without_style_or_venue_returns_all_none() {
+        // Three different signatures -> no 60% winner, no venue -> all None.
+        let refs: Vec<String> = vec![
+            r#"A. B, "Quoted title here," in Proc. X, 2020."#.into(),
+            "Jane Doe. 2019. Some Title Here. In SOSP.".into(),
+            "Roe, R.: Colon Title Here. In: S&P (2018)".into(),
+        ];
+        assert_eq!(parse_all(&refs, None), vec![None, None, None]);
+        // Same input WITH an ACM venue: entry 2 parses, the others fail
+        // ACM validation and stay None.
+        let out = parse_all(&refs, Some("ACM CCS"));
+        assert!(out[1].is_some());
+    }
+
+    #[test]
+    fn validation_rejects_wrong_but_plausible_parses() {
+        // natbib author-year mis-voted into plain: "(2015)" glues onto an
+        // author token, which fails the all-authors name-shape rule.
+        let refs: Vec<String> = vec![
+            "Kingma, D. P. and Ba, J. (2015). Adam: A method for stochastic optimization. In ICLR."
+                .into(),
+            "Sutton, R. S. and Barto, A. G. (2018). Reinforcement Learning: An Introduction. MIT Press."
+                .into(),
+        ];
+        for r in parse_all(&refs, None) {
+            assert!(r.is_none());
+        }
+        // URL-only entry: no title-shaped segment survives validation.
+        let urls: Vec<String> =
+            vec!["The mypy project. https://mypy-lang.org/. Accessed 2024.".into()];
+        assert!(parse_all(&urls, None)[0].is_none());
     }
 }
