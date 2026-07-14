@@ -105,6 +105,22 @@ pub struct Resolved {
     pub reasoning_effort: Option<String>,
 }
 
+impl Resolved {
+    /// Runnable chat client for this endpoint — `None` when no model or no
+    /// API key resolved. The single home for the config → client dance, so
+    /// every keyed service constructs its `LlmClient` identically. (Chat is
+    /// the deliberate exception: it permits keyless local endpoints and
+    /// builds its own client.)
+    pub fn client(&self) -> Option<crate::llm::LlmClient> {
+        let model = self.model.clone()?;
+        let key = self.api_key.clone()?;
+        Some(
+            crate::llm::LlmClient::new(&self.base_url, &model, Some(key))
+                .with_reasoning_effort(self.reasoning_effort.clone()),
+        )
+    }
+}
+
 /// All AI/LLM config (`[ai]`): shared defaults plus each use.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]

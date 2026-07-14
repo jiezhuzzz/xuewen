@@ -64,19 +64,11 @@ impl CitationsService {
     /// model/API key (warns) → heuristics only.
     pub fn from_config(pool: SqlitePool, cfg: &Config) -> Arc<Self> {
         let llm = cfg.ai.citations.as_ref().and_then(|use_| {
-            let r = cfg.ai.resolve(use_);
-            match (r.model.clone(), r.api_key.clone()) {
-                (Some(model), Some(key)) => Some(
-                    crate::llm::LlmClient::new(&r.base_url, &model, Some(key))
-                        .with_reasoning_effort(r.reasoning_effort.clone()),
-                ),
-                _ => {
-                    tracing::warn!(
-                        "[ai.citations] has no model or API key — LLM fallback disabled"
-                    );
-                    None
-                }
+            let client = cfg.ai.resolve(use_).client();
+            if client.is_none() {
+                tracing::warn!("[ai.citations] has no model or API key — LLM fallback disabled");
             }
+            client
         });
         if llm.is_none() {
             tracing::info!("citation parsing: heuristics only (no [ai.citations] LLM fallback)");
@@ -173,15 +165,18 @@ impl CitationsService {
         Ok(parsed)
     }
 
+    /// Chunks are disjoint slices, so their LLM calls run concurrently — a
+    /// ~100-entry bibliography's first open pays one round trip, not four.
+    /// `try_join_all` preserves chunk order for the concatenation.
     async fn parse_leftovers(
         llm: &crate::llm::LlmClient,
         refs: &[String],
     ) -> Result<Vec<Option<StructuredReference>>> {
-        let mut out = Vec::with_capacity(refs.len());
-        for chunk in refs.chunks(CHUNK_SIZE) {
-            out.extend(Self::parse_chunk(llm, chunk).await?);
-        }
-        Ok(out)
+        let chunks = refs
+            .chunks(CHUNK_SIZE)
+            .map(|chunk| Self::parse_chunk(llm, chunk));
+        let results = futures_util::future::try_join_all(chunks).await?;
+        Ok(results.into_iter().flatten().collect())
     }
 
     /// One LLM call for one chunk. Results are INDEX-KEYED, not positional:
@@ -211,12 +206,7 @@ impl CitationsService {
              invent placeholders for them.\n\n{numbered}"
         );
         let text = llm.complete(SYSTEM, &user).await?;
-        let cleaned = text
-            .trim()
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim();
+        let cleaned = crate::llm::strip_code_fence(&text);
         let parsed: Vec<IndexedReference> = serde_json::from_str(cleaned)
             .map_err(|e| anyhow!("citation parse: model returned invalid JSON: {e}"))?;
         let mut out: Vec<Option<StructuredReference>> = vec![None; refs.len()];

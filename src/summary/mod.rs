@@ -32,18 +32,15 @@ pub struct Summarizer {
 
 impl Summarizer {
     pub fn new(base_url: &str, model: &str, api_key: Option<String>) -> Self {
-        Self { inner: crate::llm::LlmClient::new(base_url, model, api_key) }
+        Self {
+            inner: crate::llm::LlmClient::new(base_url, model, api_key),
+        }
     }
 
     /// Build a summarizer for a resolved endpoint. `None` when no model OR no
-    /// key resolves (matches the old `from_summary`/`from_daily_llm`, which
-    /// required a key — a keyless summary run would just 401 per paper).
+    /// key resolves (a keyless summary run would just 401 per paper).
     pub fn from_resolved(r: &crate::config::Resolved) -> Option<Self> {
-        let model = r.model.clone()?;
-        let key = r.api_key.clone()?;
-        let inner = crate::llm::LlmClient::new(&r.base_url, &model, Some(key))
-            .with_reasoning_effort(r.reasoning_effort.clone());
-        Some(Self { inner })
+        Some(Self { inner: r.client()? })
     }
 
     /// Keyless client pointed at a mock server. Test support only.
@@ -82,12 +79,7 @@ fn prompt(title: &str, abstract_text: &str, full_text: Option<&str>) -> String {
 
 /// Parse the model's reply as a `Summary`, tolerating a Markdown code fence.
 fn parse_summary(reply: &str) -> Result<Summary> {
-    let mut s = reply.trim();
-    if let Some(rest) = s.strip_prefix("```") {
-        let rest = rest.strip_prefix("json").unwrap_or(rest);
-        s = rest.strip_suffix("```").unwrap_or(rest).trim();
-    }
-    Ok(serde_json::from_str(s)?)
+    Ok(serde_json::from_str(crate::llm::strip_code_fence(reply))?)
 }
 
 async fn summary_attempt(
