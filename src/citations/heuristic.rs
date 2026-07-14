@@ -83,7 +83,7 @@ const ABBREVS: &[&str] = &[
 
 /// "J." (initials, incl. "D.P"), "(J" and known abbreviations don't end a sentence.
 fn is_initial_or_abbrev(word: &str) -> bool {
-    let w = word.trim_start_matches(['(', '[', '\u{201C}', '\u{201D}', '\'']);
+    let w = word.trim_start_matches(['(', '[', '"', '\u{201C}', '\u{201D}', '\'']);
     let alpha = w.chars().filter(|c| c.is_alphabetic()).count();
     if alpha == 0 {
         return false;
@@ -227,6 +227,11 @@ mod tests {
                 "See \u{201C}Proc. of CCS\u{201D} for details",
                 "Second sentence"
             ]
+        );
+        // Same for a straight double quote.
+        assert_eq!(
+            split_sentences("See \"Proc. of CCS\" for details. Second sentence"),
+            vec!["See \"Proc. of CCS\" for details", "Second sentence"]
         );
     }
 
