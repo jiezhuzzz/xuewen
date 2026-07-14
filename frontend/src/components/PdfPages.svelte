@@ -12,6 +12,7 @@
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
   import { matchReferences } from '../lib/citationMatch';
   import { listPapers } from '../lib/api';
+  import { runWhenIdle } from '../lib/idle';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
 
@@ -42,21 +43,26 @@
     pageSizes = doc.pages.map((p) => ({ width: p.size.width, height: p.size.height }));
     const engine = registry.getEngine();
     let cancelled = false;
-    (async () => {
-      try {
-        const data = await loadCitations(engine as unknown as EngineLike, doc);
-        if (cancelled) return;
-        citations = data;
-        // Whole library, independent of the current UI filter.
-        const papers = await listPapers({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
-        if (cancelled) return;
-        matches = matchReferences(data.references, papers);
-      } catch (err) {
-        console.warn('citation extraction failed', err); // reader still works
-      }
-    })();
+    // Extraction is main-thread PDFium work — wait for idle so the first
+    // pages paint before we start crawling annotations/text.
+    const cancelIdle = runWhenIdle(() => {
+      void (async () => {
+        try {
+          const data = await loadCitations(engine as unknown as EngineLike, doc);
+          if (cancelled) return;
+          citations = data;
+          // Whole library, independent of the current UI filter.
+          const papers = await listPapers({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
+          if (cancelled) return;
+          matches = matchReferences(data.references, papers);
+        } catch (err) {
+          console.warn('citation extraction failed', err); // reader still works
+        }
+      })();
+    });
     return () => {
       cancelled = true;
+      cancelIdle();
     };
   });
 </script>
