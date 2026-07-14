@@ -12,6 +12,7 @@ import type {
   SearchStatus,
   Settings,
   Stats,
+  StructuredReference,
 } from './types';
 
 export async function listPapers(f: Filters): Promise<PaperSummary[]> {
@@ -242,4 +243,25 @@ export async function getSearchStatus(): Promise<SearchStatus> {
   const res = await fetch('/api/search/status');
   if (!res.ok) throw new Error(`search status failed: ${res.status}`);
   return res.json();
+}
+
+/** Parse extracted reference strings via the backend LLM service. Returns
+ *  null on ANY failure (503 = [ai.citations] unconfigured, network error,
+ *  unexpected shape) — the popover then just keeps showing raw text. */
+export async function parseCitations(
+  paperId: string,
+  references: string[],
+): Promise<(StructuredReference | null)[] | null> {
+  try {
+    const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/citations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ references }),
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return Array.isArray(j.references) ? j.references : null;
+  } catch {
+    return null;
+  }
 }
