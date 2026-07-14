@@ -15,12 +15,12 @@ describe('findReferencesStart', () => {
         { text: '[1] A. Author. A Title. Venue 2020.', x: 50, y: 430, width: 300, height: 12 },
       ]),
     ];
-    expect(findReferencesStart(pages)).toEqual({ pageIndex: 1, y: 400 });
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 1, y: 400, x: 50 });
   });
 
   it('also matches "Bibliography"', () => {
     const pages = [page(0, 600, 800, [{ text: 'Bibliography', x: 50, y: 200, width: 110, height: 16 }])];
-    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200 });
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200, x: 50 });
   });
 
   it('detects a heading split across runs on one line (small-caps / drop cap)', () => {
@@ -34,29 +34,29 @@ describe('findReferencesStart', () => {
         { text: '[1] A. Author. Title. 2020.', x: 50, y: 330, width: 300, height: 12 },
       ]),
     ];
-    expect(findReferencesStart(pages)).toEqual({ pageIndex: 5, y: 300 });
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 5, y: 300, x: 50 });
   });
 
   it('matches numbered headings: "7 References"', () => {
     const pages = [page(0, 600, 800, [{ text: '7 References', x: 50, y: 200, width: 120, height: 16 }])];
-    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200 });
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200, x: 50 });
   });
 
   it('matches roman-numbered headings: "VII. References"', () => {
     const pages = [page(0, 600, 800, [{ text: 'VII. References', x: 50, y: 200, width: 140, height: 16 }])];
-    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200 });
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200, x: 50 });
   });
 
   it('matches "References and Notes" and "Works Cited"', () => {
     const a = [page(0, 600, 800, [{ text: 'References and Notes', x: 50, y: 100, width: 180, height: 16 }])];
     const b = [page(0, 600, 800, [{ text: 'Works Cited', x: 50, y: 100, width: 100, height: 16 }])];
-    expect(findReferencesStart(a)).toEqual({ pageIndex: 0, y: 100 });
-    expect(findReferencesStart(b)).toEqual({ pageIndex: 0, y: 100 });
+    expect(findReferencesStart(a)).toEqual({ pageIndex: 0, y: 100, x: 50 });
+    expect(findReferencesStart(b)).toEqual({ pageIndex: 0, y: 100, x: 50 });
   });
 
   it('matches "References Cited"', () => {
     const pages = [page(0, 600, 800, [{ text: 'References Cited', x: 50, y: 100, width: 140, height: 16 }])];
-    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 100 });
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 100, x: 50 });
   });
 
   it('does not match ordinary words spelled from roman letters', () => {
@@ -109,7 +109,7 @@ describe('buildCitationData', () => {
         { text: '[2] He et al. ResNet. CVPR 2016.', x: 50, y: 470, width: 320, height: 12 },
       ] },
   ];
-  const refStart: import('./citations').RefAnchor = { pageIndex: 1, y: 400 };
+  const refStart: import('./citations').RefAnchor = { pageIndex: 1, y: 400, x: 50 };
   const links: GotoLink[] = [
     { pageIndex: 0, x: 90, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 430, destX: 0 },
     { pageIndex: 0, x: 120, y: 100, width: 12, height: 12, destPageIndex: 1, destY: 470, destX: 0 },
@@ -149,5 +149,52 @@ describe('buildCitationData', () => {
     const { references, markers } = buildCitationData(dupLinks, pages, refStart);
     expect(references).toHaveLength(2);
     expect(markers.map((m) => m.refIndex)).toEqual([0, 0, 1]);
+  });
+});
+
+describe('two-column bibliographies', () => {
+  // 600pt-wide page, mid=300: left column x≈50, right column x≈320.
+  // Left column: [1] at y=100 (its text continues into the right column top),
+  // Right column: [2] at y=100 — same y as [1] but a DIFFERENT reference.
+  const p = page(3, 600, 800, [
+    { text: 'References', x: 50, y: 60, width: 90, height: 16 },
+    { text: '[1] A. Adam paper line one', x: 50, y: 100, width: 220, height: 12 },
+    { text: 'continued in left column', x: 50, y: 120, width: 200, height: 12 },
+    { text: 'and finishes atop the right column.', x: 320, y: 60, width: 220, height: 12 },
+    { text: '[2] B. Bert paper.', x: 320, y: 100, width: 200, height: 12 },
+  ]);
+  const links: GotoLink[] = [
+    { pageIndex: 0, x: 90, y: 700, width: 12, height: 12, destPageIndex: 3, destY: 100, destX: 50 },
+    { pageIndex: 0, x: 120, y: 700, width: 12, height: 12, destPageIndex: 3, destY: 100, destX: 320 },
+  ];
+  const refStart = { pageIndex: 3, y: 60, x: 50 };
+
+  it('keeps same-y anchors in different columns as distinct references', () => {
+    const data = buildCitationData(links, [p], refStart);
+    expect(data.references).toHaveLength(2);
+  });
+
+  it('slices entry text column-major so an entry flows across the column break', () => {
+    const data = buildCitationData(links, [p], refStart);
+    const first = data.references.find((r) => r.rawText.startsWith('[1]'))!;
+    expect(first.rawText).toBe('[1] A. Adam paper line one continued in left column and finishes atop the right column.');
+    const second = data.references.find((r) => r.rawText.startsWith('[2]'))!;
+    expect(second.rawText).toBe('[2] B. Bert paper.');
+  });
+
+  it('includes right-column entries ABOVE the heading y on the heading page', () => {
+    // heading in the LEFT column at y=60; a right-column entry at y=30 is
+    // still "after" it in column-major (reading) order.
+    const p2 = page(3, 600, 800, [
+      { text: 'References', x: 50, y: 60, width: 90, height: 16 },
+      { text: '[1] Left entry.', x: 50, y: 100, width: 150, height: 12 },
+      { text: '[2] Right entry above heading y.', x: 320, y: 30, width: 220, height: 12 },
+    ]);
+    const links2: GotoLink[] = [
+      { pageIndex: 0, x: 90, y: 700, width: 12, height: 12, destPageIndex: 3, destY: 100, destX: 50 },
+      { pageIndex: 0, x: 120, y: 700, width: 12, height: 12, destPageIndex: 3, destY: 30, destX: 320 },
+    ];
+    const data = buildCitationData(links2, [p2], { pageIndex: 3, y: 60, x: 50 });
+    expect(data.references).toHaveLength(2);
   });
 });
