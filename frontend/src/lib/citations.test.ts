@@ -1,9 +1,47 @@
 import { describe, expect, it } from 'vitest';
-import { buildCitationData, findReferencesStart, type GotoLink, type PageText } from './citations';
+import {
+  buildCitationData,
+  clusterLines,
+  findReferencesStart,
+  type GotoLink,
+  type PageText,
+  type TextRun,
+} from './citations';
 
 function page(pageIndex: number, width: number, height: number, runs: PageText['runs']): PageText {
   return { pageIndex, width, height, runs, urlLinks: [] };
 }
+
+describe('clusterLines', () => {
+  it('drops rotated sidebar runs that would glue a whole column into one line (empc)', () => {
+    // IEEE Xplore stamps a vertical sidebar (observed live: a 10×431pt run)
+    // whose y-extent overlaps EVERY body line in the column; the accumulated
+    // extent then chains all of them into one franken-line, shuffling
+    // citation groups across paragraphs.
+    const sidebar: TextRun = { text: '2025 IEEE Symposium … DOI: …', x: 9, y: 301, width: 10, height: 431 };
+    const l1: TextRun = { text: 'software testing [', x: 54, y: 641, width: 72, height: 12 };
+    const l1b: TextRun = { text: '9,15,22]', x: 126, y: 641, width: 40, height: 12 };
+    const l2: TextRun = { text: 'treats inputs as symbolic', x: 54, y: 686, width: 243, height: 12 };
+    const runs = [sidebar, l1, l1b, l2];
+    const cols = new Map(runs.map((r) => [r, 0]));
+    const lines = clusterLines(runs, cols);
+    expect(lines.map((l) => l.runs.map((r) => r.text).join(''))).toEqual([
+      'software testing [9,15,22]',
+      'treats inputs as symbolic',
+    ]);
+  });
+
+  it('keeps drop-caps and lone tall runs (median is per call)', () => {
+    // A page whose only run is tall must not delete itself.
+    const only: TextRun = { text: 'BIG', x: 10, y: 10, width: 30, height: 100 };
+    expect(clusterLines([only], new Map([[only, 0]]))).toHaveLength(1);
+    // A drop-cap "R" (h14 vs h12 neighbor) stays merged with its line.
+    const cap: TextRun = { text: 'R', x: 108, y: 81, width: 12, height: 14 };
+    const rest: TextRun = { text: 'EFERENCES', x: 117, y: 83, width: 82, height: 12 };
+    const cols = new Map<TextRun, number>([[cap, 0], [rest, 0]]);
+    expect(clusterLines([cap, rest], cols)).toHaveLength(1);
+  });
+});
 
 describe('findReferencesStart', () => {
   it('finds a standalone "References" heading and returns its position', () => {
