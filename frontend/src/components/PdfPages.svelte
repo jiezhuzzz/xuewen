@@ -15,6 +15,7 @@
   import { listPapers, parseCitations } from '../lib/api';
   import { runWhenIdle } from '../lib/idle';
   import { mergeStructured } from '../lib/refMerge';
+  import { resolveAuthorYearMarkers } from '../lib/textCitations';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
 
@@ -70,14 +71,21 @@
           const papers = await listPapers({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
           if (extractionCancelled) return;
           matches = matchReferences(data.references, papers);
-          // Structured upgrade — one POST per open; any failure keeps raw text.
-          if (data.references.length > 0) {
-            const structured = await parseCitations(documentId, data.references.map((r) => r.rawText));
-            if (extractionCancelled || !structured) return;
-            const upgraded = { ...data, references: mergeStructured(data.references, structured) };
-            citations = upgraded;
-            matches = matchReferences(upgraded.references, papers);
+
+          let refs = data.references;
+          if (refs.length > 0) {
+            // Structured upgrade — one POST per open; failure keeps raw text.
+            const structured = await parseCitations(documentId, refs.map((r) => r.rawText));
+            if (extractionCancelled) return;
+            if (structured) refs = mergeStructured(refs, structured);
           }
+          // Fallback author-year markers resolve best with structured entries,
+          // and degrade to raw entry heads when the parse is unavailable.
+          const extra = data.pendingAuthorYear?.length
+            ? resolveAuthorYearMarkers(data.pendingAuthorYear, refs)
+            : [];
+          citations = { references: refs, markers: [...data.markers, ...extra] };
+          matches = matchReferences(refs, papers);
         } catch (err) {
           console.warn('citation extraction failed', err); // reader still works
         }

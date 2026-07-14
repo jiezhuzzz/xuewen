@@ -138,3 +138,63 @@ describe('loadCitations', () => {
     expect(data.references[0].rawText).toContain('Adam');
   });
 });
+
+describe('text-layer fallback (no hyperlinks)', () => {
+  const doc3: any = {
+    id: 'd3', pageCount: 3,
+    pages: [0, 1, 2].map((i) => ({ index: i, size: { width: 600, height: 800 }, rotation: 0 })),
+  };
+  const noAnnos: EngineLike['getPageAnnotations'] = () => task([]);
+
+  it('segments a numbered bibliography and finds [n] markers', async () => {
+    const eng: EngineLike = {
+      getPageAnnotations: noAnnos,
+      getPageTextRuns: (_d, page: any) => task({
+        runs: page.index === 0
+          ? [{ text: 'we build on [1] and [2] here', rect: { origin: { x: 50, y: 100 }, size: { width: 250, height: 12 } } }]
+          : page.index === 2
+            ? [
+                { text: 'References', rect: { origin: { x: 50, y: 40 }, size: { width: 90, height: 16 } } },
+                { text: '[1] Kingma. Adam. ICLR 2015.', rect: { origin: { x: 50, y: 80 }, size: { width: 280, height: 12 } } },
+                { text: '[2] Devlin. BERT. NAACL 2019.', rect: { origin: { x: 50, y: 110 }, size: { width: 280, height: 12 } } },
+              ]
+            : [],
+      }),
+    };
+    const data = await loadCitations(eng, doc3);
+    expect(data.references).toHaveLength(2);
+    expect(data.markers).toHaveLength(2);
+    expect(data.markers.map((m) => m.refIndex).sort()).toEqual([0, 1]);
+  });
+
+  it('returns author-year candidates as pending (resolved after the LLM parse)', async () => {
+    const eng: EngineLike = {
+      getPageAnnotations: noAnnos,
+      getPageTextRuns: (_d, page: any) => task({
+        runs: page.index === 0
+          ? [{ text: 'following (Kingma and Ba, 2015) we', rect: { origin: { x: 50, y: 100 }, size: { width: 260, height: 12 } } }]
+          : page.index === 2
+            ? [
+                { text: 'References', rect: { origin: { x: 50, y: 40 }, size: { width: 90, height: 16 } } },
+                { text: 'Kingma, D. and Ba, J. (2015). Adam. ICLR.', rect: { origin: { x: 50, y: 80 }, size: { width: 300, height: 12 } } },
+                { text: 'Devlin, J. (2019). BERT. NAACL.', rect: { origin: { x: 50, y: 110 }, size: { width: 280, height: 12 } } },
+              ]
+            : [],
+      }),
+    };
+    const data = await loadCitations(eng, doc3);
+    expect(data.references).toHaveLength(2);
+    expect(data.markers).toHaveLength(0);
+    expect(data.pendingAuthorYear).toHaveLength(1);
+  });
+
+  it('stays empty when there is no heading anywhere', async () => {
+    const eng: EngineLike = {
+      getPageAnnotations: noAnnos,
+      getPageTextRuns: () => task({ runs: [{ text: 'just prose', rect: { origin: { x: 50, y: 100 }, size: { width: 100, height: 12 } } }] }),
+    };
+    const data = await loadCitations(eng, doc3);
+    expect(data.references).toHaveLength(0);
+    expect(data.markers).toHaveLength(0);
+  });
+});
