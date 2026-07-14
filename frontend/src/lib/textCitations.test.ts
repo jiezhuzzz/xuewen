@@ -64,3 +64,44 @@ describe('segmentReferences — numbered', () => {
     expect(seg.references[1].rawText).toBe('[2] Right entry above heading y. 2021.');
   });
 });
+
+describe('segmentReferences — author-year (hanging indent)', () => {
+  const refStart = { pageIndex: 2, y: 40, x: 50 };
+
+  it('splits entries at flush-left lines (continuations indented)', () => {
+    const bib = page(2, 600, 800, [
+      { text: 'References', x: 50, y: 40, width: 90, height: 16 },
+      { text: 'Kingma, D. and Ba, J. (2015). Adam: a method', x: 50, y: 80, width: 300, height: 12 },
+      { text: 'for stochastic optimization. In ICLR.', x: 68, y: 100, width: 260, height: 12 },
+      { text: 'Devlin, J. et al. (2019). BERT. In NAACL.', x: 50, y: 130, width: 300, height: 12 },
+      { text: 'Vaswani, A. (2017). Attention is all you need.', x: 50, y: 160, width: 300, height: 12 },
+    ]);
+    const seg = segmentReferences([bib], refStart)!;
+    expect(seg.style).toBe('authoryear');
+    expect(seg.references).toHaveLength(3);
+    expect(seg.references[0].rawText).toBe(
+      'Kingma, D. and Ba, J. (2015). Adam: a method for stochastic optimization. In ICLR.',
+    );
+  });
+
+  it('handles the inverted pattern (first line indented, continuations flush)', () => {
+    const bib = page(2, 600, 800, [
+      { text: 'References', x: 50, y: 40, width: 90, height: 16 },
+      { text: 'Kingma, D. (2015). Adam: a method for', x: 68, y: 80, width: 280, height: 12 },
+      { text: 'stochastic optimization. ICLR.', x: 50, y: 100, width: 240, height: 12 },
+      { text: 'Devlin, J. (2019). BERT. NAACL.', x: 68, y: 130, width: 260, height: 12 },
+    ]);
+    const seg = segmentReferences([bib], refStart)!;
+    expect(seg.style).toBe('authoryear');
+    expect(seg.references).toHaveLength(2);
+  });
+
+  it('rejects blocks where most entries lack a year (not a bibliography)', () => {
+    const notBib = page(2, 600, 800, [
+      { text: 'References', x: 50, y: 40, width: 90, height: 16 },
+      { text: 'Some sentence without anything.', x: 50, y: 80, width: 280, height: 12 },
+      { text: 'Another plain sentence here too.', x: 50, y: 110, width: 280, height: 12 },
+    ]);
+    expect(segmentReferences([notBib], refStart)).toBeNull();
+  });
+});
