@@ -10,6 +10,7 @@
   import { TilingLayer } from '@embedpdf/plugin-tiling/svelte';
   import PdfToolbar from './PdfToolbar.svelte';
   import PdfFindBar from './PdfFindBar.svelte';
+  import PdfSidePanel from './PdfSidePanel.svelte';
   import { SearchLayer } from '@embedpdf/plugin-search/svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
@@ -135,6 +136,9 @@
   {#snippet children(doc)}
     {#if doc.isLoaded}
       <div class="flex h-full">
+        {#if reader.panel[documentId]}
+          <PdfSidePanel {documentId} />
+        {/if}
         <div class="relative min-w-0 flex-1">
           <PdfToolbar {documentId} />
           {#if reader.find[documentId]}
