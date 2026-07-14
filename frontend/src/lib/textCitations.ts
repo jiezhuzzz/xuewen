@@ -1,5 +1,6 @@
 import {
   assignColumns,
+  isReferencesHeading,
   LINE_TOLERANCE,
   type PageText,
   type RefAnchor,
@@ -77,15 +78,50 @@ export function segmentReferences(pages: PageText[], refStart: RefAnchor): Segme
   const starts = lines
     .map((l, i) => ({ i, m: l.text.match(NUMBERED_START) }))
     .filter((s): s is { i: number; m: RegExpMatchArray } => s.m !== null);
-  if (starts.length < MIN_ENTRIES) return null; // author-year path lands in Task 17
+  if (starts.length >= MIN_ENTRIES) {
+    const numberOf = new Map<number, number>();
+    const references: Reference[] = starts.map((s, refIndex) => {
+      const from = s.i;
+      const to = refIndex + 1 < starts.length ? starts[refIndex + 1].i : lines.length;
+      const span = lines.slice(from, to);
+      const rawText = span.map((l) => l.text).join(' ').replace(/\s+/g, ' ').trim();
+      numberOf.set(parseInt(s.m[1], 10), refIndex);
+      const first = lines[from];
+      const page = pages.find((p) => p.pageIndex === first.pageIndex);
+      const externalUrl = page?.urlLinks.find((u) =>
+        span.some((l) => l.pageIndex === page.pageIndex && Math.abs(l.y - u.y) <= LINE_TOLERANCE * 2),
+      )?.url;
+      return { index: refIndex, destPageIndex: first.pageIndex, destY: first.y, rawText, externalUrl };
+    });
 
-  const numberOf = new Map<number, number>();
-  const references: Reference[] = starts.map((s, refIndex) => {
-    const from = s.i;
-    const to = refIndex + 1 < starts.length ? starts[refIndex + 1].i : lines.length;
+    return { references, numberOf, style: 'numbered' };
+  }
+
+  // Author-year: entries split on the hanging-indent pattern. Group lines by
+  // column, find each column's two dominant start-x values; whichever start-x
+  // begins lines that CONTAIN A YEAR more often marks entry starts.
+  const YEAR = /(?:19|20)\d{2}/;
+  const xKey = (x: number) => Math.round(x / 4) * 4;
+  const freq = new Map<number, number>();
+  for (const l of lines) freq.set(xKey(l.x), (freq.get(xKey(l.x)) ?? 0) + 1);
+  const candidates = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([x]) => x);
+  if (candidates.length === 0) return null;
+  const yearShare = (x: number) => {
+    const at = lines.filter((l) => xKey(l.x) === x);
+    return at.length === 0 ? 0 : at.filter((l) => YEAR.test(l.text)).length / at.length;
+  };
+  const startX = candidates.length === 1 ? candidates[0]
+    : yearShare(candidates[0]) >= yearShare(candidates[1]) ? candidates[0] : candidates[1];
+
+  const ayStarts = lines
+    .map((l, i) => ({ l, i }))
+    .filter(({ l }) => xKey(l.x) === startX && !isReferencesHeading(l.text));
+  if (ayStarts.length < MIN_ENTRIES) return null;
+
+  const ayRefs: Reference[] = ayStarts.map(({ i: from }, refIndex) => {
+    const to = refIndex + 1 < ayStarts.length ? ayStarts[refIndex + 1].i : lines.length;
     const span = lines.slice(from, to);
     const rawText = span.map((l) => l.text).join(' ').replace(/\s+/g, ' ').trim();
-    numberOf.set(parseInt(s.m[1], 10), refIndex);
     const first = lines[from];
     const page = pages.find((p) => p.pageIndex === first.pageIndex);
     const externalUrl = page?.urlLinks.find((u) =>
@@ -93,8 +129,10 @@ export function segmentReferences(pages: PageText[], refStart: RefAnchor): Segme
     )?.url;
     return { index: refIndex, destPageIndex: first.pageIndex, destY: first.y, rawText, externalUrl };
   });
-
-  return { references, numberOf, style: 'numbered' };
+  // Sanity: a real bibliography's entries overwhelmingly contain a year.
+  const withYear = ayRefs.filter((r) => YEAR.test(r.rawText)).length;
+  if (withYear / ayRefs.length < 0.6) return null;
+  return { references: ayRefs, numberOf: new Map(), style: 'authoryear' };
 }
 
 function colOfPoint(pages: PageText[], pageIndex: number, x: number): number {
