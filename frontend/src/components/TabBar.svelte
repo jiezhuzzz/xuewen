@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Info, LibraryBig, Maximize2, X } from 'lucide-svelte';
+  import { LibraryBig, X } from 'lucide-svelte';
   import { flip } from 'svelte/animate';
   import { crossfade, fade } from 'svelte/transition';
   import { DUR, dur } from '../lib/motion';
-  import { closeTab, goHome, toggleInfo, toggleZen, viewer } from '../lib/state.svelte';
+  import { closeTab, goHome, viewer } from '../lib/state.svelte';
 
   // The active-tab underline crossfades between tabs — a real sliding
   // indicator with no measurement code.
@@ -71,28 +71,4 @@
     {/each}
   </div>
 
-  {#if viewer.activeId !== null}
-    <button
-      type="button"
-      aria-label="Zen mode"
-      title="Zen mode (z)"
-      onclick={toggleZen}
-      class="mr-1 shrink-0 rounded-lg p-2 text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
-    >
-      <Maximize2 size={16} />
-    </button>
-    <button
-      type="button"
-      aria-label="Toggle info"
-      aria-expanded={viewer.infoOpen}
-      onclick={toggleInfo}
-      class={`mr-2 shrink-0 rounded-lg p-2 ${
-        viewer.infoOpen
-          ? 'bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500'
-          : 'text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800'
-      }`}
-    >
-      <Info size={18} />
-    </button>
-  {/if}
 </div>

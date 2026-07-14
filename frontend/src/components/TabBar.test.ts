@@ -49,11 +49,10 @@ describe('TabBar', () => {
     expect(screen.getByRole('button', { name: 'Library' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('shows the zen toggle only while a PDF tab is active', async () => {
-    render(TabBar);
-    expect(screen.queryByRole('button', { name: 'Zen mode' })).not.toBeInTheDocument();
+  it('hosts no zen/info buttons (they live on the PDF toolbar)', async () => {
     openTab(paper('a', 'First Paper'));
-    await Promise.resolve();
-    expect(screen.getByRole('button', { name: 'Zen mode' })).toBeInTheDocument();
+    render(TabBar);
+    expect(screen.queryByRole('button', { name: /zen/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Toggle info' })).not.toBeInTheDocument();
   });
 });
