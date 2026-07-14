@@ -619,6 +619,7 @@ model = "gpt-5.6-terra"
         assert!(cfg.ai.chat.models.is_empty());
         assert!(cfg.ai.summary.is_none());
         assert!(cfg.ai.daily.is_none());
+        assert!(cfg.ai.citations.is_none());
     }
 
     #[test]

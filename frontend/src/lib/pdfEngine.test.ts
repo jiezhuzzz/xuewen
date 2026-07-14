@@ -9,6 +9,7 @@ describe('ENGINE_OPTIONS', () => {
     // a path-absolute fetch like '/pdfium.wasm' against it. See pdfEngine.ts.
     expect(ENGINE_OPTIONS.wasmUrl).toBe(new URL('/pdfium.wasm', location.origin).href);
     expect(ENGINE_OPTIONS.wasmUrl.endsWith('/pdfium.wasm')).toBe(true);
+    expect(ENGINE_OPTIONS.wasmUrl.startsWith('http')).toBe(true);
     expect(ENGINE_OPTIONS.fontFallback).toBeNull();
   });
 });
