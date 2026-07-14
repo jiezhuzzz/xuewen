@@ -58,4 +58,19 @@ describe('matchReferences', () => {
     const refs = [{ ...ref(0, 'x Adam: A Method for Stochastic Optimization x'), structured: null }];
     expect(matchReferences(refs, papers).get(0)?.id).toBe('p-adam');
   });
+
+  it('breaks duplicate-title ties the same way as the substring path (first wins)', () => {
+    const dupPapers = [
+      { id: 'p-first', title: 'Adam: A Method for Stochastic Optimization' },
+      { id: 'p-second', title: 'Adam: A Method for Stochastic Optimization' },
+    ];
+    const refs = [{
+      ...ref(0, 'unrelated raw text without the title'),
+      structured: {
+        authors: [], title: 'Adam: A Method for Stochastic Optimization',
+        venue: null, year: null, doi: null, arxiv_id: null, url: null,
+      },
+    }];
+    expect(matchReferences(refs, dupPapers).get(0)?.id).toBe('p-first');
+  });
 });

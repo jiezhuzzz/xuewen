@@ -29,7 +29,11 @@ export function matchReferences<P extends { id: string; title: string | null }>(
     .map((p) => ({ paper: p, title: normalizeTitle(p.title as string) }))
     .filter((p) => p.title.length >= MIN_TITLE_LEN);
 
-  const byNormTitle = new Map(normed.map((p) => [p.title, p.paper]));
+  // First match wins — same tie-break as the substring fallback below.
+  const byNormTitle = new Map<string, P>();
+  for (const p of normed) {
+    if (!byNormTitle.has(p.title)) byNormTitle.set(p.title, p.paper);
+  }
 
   const out = new Map<number, P>();
   for (const r of refs) {
