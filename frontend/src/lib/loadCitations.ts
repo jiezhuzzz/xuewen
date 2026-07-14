@@ -1,8 +1,12 @@
 import { PdfActionType, PdfZoomMode, type PdfDocumentObject, type PdfLinkTarget, type PdfPageObject } from '@embedpdf/models';
 import {
-  buildCitationData, findReferencesStart,
-  type CitationData, type GotoLink, type PageText, type TextRun, type UrlLink,
+  assignColumns, buildCitationData, findReferencesStart,
+  type CitationData, type GotoLink, type PageText, type RefAnchor, type TextRun, type UrlLink,
 } from './citations';
+import {
+  columnMajorLines, findAuthorYearCandidates, findNumberedMarkers, segmentReferences,
+  type AyCandidate, type CmLine,
+} from './textCitations';
 
 // A structural subset of @embedpdf/models' PdfAnnotationObject: just the
 // fields this module reads off a link annotation. The real PdfAnnotationObject
@@ -71,7 +75,13 @@ function uriOf(target: PdfLinkTarget | undefined): string | undefined {
   return target?.type === 'action' && target.action.type === PdfActionType.URI ? target.action.uri : undefined;
 }
 
-export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject): Promise<CitationData> {
+export interface CitationLoad extends CitationData {
+  /** Author-year marker candidates awaiting entry resolution (fallback mode;
+   *  PdfPages resolves them once the structured parse arrives). */
+  pendingAuthorYear?: AyCandidate[];
+}
+
+export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject): Promise<CitationLoad> {
   // Pass 1 — link annotations from every page (cheap). These give the citation
   // markers + their destinations, plus any URL links (kept per page so a
   // reference's DOI/URL can be attached below).
@@ -98,29 +108,106 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
       links.push({ pageIndex: page.index, ...rect, destPageIndex: dest.pageIndex, destY, destX: dest.x ?? 0 });
     }
   }
-  if (links.length === 0) return { references: [], markers: [] };
+  if (links.length > 0) {
+    // Pass 2 — the bibliography lives on the destination pages; ALSO read the
+    // page just before the earliest destination, because the "References"
+    // heading often sits at the bottom of the previous page.
+    const destPages = [...new Set(links.map((l) => l.destPageIndex))].sort((a, b) => a - b);
+    const scanPages = destPages[0] > 0 ? [destPages[0] - 1, ...destPages] : destPages;
+    const pages: PageText[] = [];
+    for (const idx of scanPages) {
+      const page = doc.pages[idx];
+      if (!page) continue;
+      const textRuns = await engine.getPageTextRuns(doc, page).toPromise();
+      const runs: TextRun[] = textRuns.runs.map((r) => ({
+        text: r.text,
+        x: r.rect.origin.x,
+        y: r.rect.origin.y,
+        width: r.rect.size.width,
+        height: r.rect.size.height,
+      }));
+      pages.push({ pageIndex: idx, width: page.size.width, height: page.size.height, runs, urlLinks: urlLinksByPage.get(idx) ?? [] });
+    }
 
-  // Pass 2 — the bibliography lives on the destination pages; ALSO read the
-  // page just before the earliest destination, because the "References"
-  // heading often sits at the bottom of the previous page.
-  const destPages = [...new Set(links.map((l) => l.destPageIndex))].sort((a, b) => a - b);
-  const scanPages = destPages[0] > 0 ? [destPages[0] - 1, ...destPages] : destPages;
-  const pages: PageText[] = [];
-  for (const idx of scanPages) {
+    const refStart = findReferencesStart(pages);
+    if (refStart) {
+      const data = buildCitationData(links, pages, refStart);
+      if (data.markers.length > 0) return data;
+    }
+  }
+  // Hyperlink path yielded nothing usable — text-layer fallback.
+  return loadCitationsFromText(engine, doc, urlLinksByPage);
+}
+
+// How many pages from the end to scan for the References heading.
+const MAX_HEADING_SCAN = 15;
+
+async function loadCitationsFromText(
+  engine: EngineLike,
+  doc: PdfDocumentObject,
+  urlLinksByPage: Map<number, UrlLink[]>,
+): Promise<CitationLoad> {
+  const cache = new Map<number, PageText>();
+  const readPage = async (idx: number): Promise<PageText | null> => {
     const page = doc.pages[idx];
-    if (!page) continue;
+    if (!page) return null;
+    const hit = cache.get(idx);
+    if (hit) return hit;
     const textRuns = await engine.getPageTextRuns(doc, page).toPromise();
     const runs: TextRun[] = textRuns.runs.map((r) => ({
-      text: r.text,
-      x: r.rect.origin.x,
-      y: r.rect.origin.y,
-      width: r.rect.size.width,
-      height: r.rect.size.height,
+      text: r.text, x: r.rect.origin.x, y: r.rect.origin.y,
+      width: r.rect.size.width, height: r.rect.size.height,
     }));
-    pages.push({ pageIndex: idx, width: page.size.width, height: page.size.height, runs, urlLinks: urlLinksByPage.get(idx) ?? [] });
+    const p: PageText = {
+      pageIndex: idx, width: page.size.width, height: page.size.height,
+      runs, urlLinks: urlLinksByPage.get(idx) ?? [],
+    };
+    cache.set(idx, p);
+    return p;
+  };
+
+  // Heading: scan from the last page backward (bibliographies live at the back).
+  let refStart: RefAnchor | null = null;
+  const lowest = Math.max(0, doc.pages.length - MAX_HEADING_SCAN);
+  for (let i = doc.pages.length - 1; i >= lowest; i--) {
+    const p = await readPage(i);
+    if (!p) continue;
+    const found = findReferencesStart([p]);
+    if (found) { refStart = found; break; }
+  }
+  if (!refStart) return { references: [], markers: [] };
+
+  // Entries: heading page through the last page.
+  const refPages: PageText[] = [];
+  for (let i = refStart.pageIndex; i < doc.pages.length; i++) {
+    const p = await readPage(i);
+    if (p) refPages.push(p);
+  }
+  const seg = segmentReferences(refPages, refStart);
+  if (!seg) return { references: [], markers: [] };
+
+  // Body lines: pages before the heading, plus the heading page's lines that
+  // read BEFORE the heading (column-major).
+  const bodyLines: CmLine[] = [];
+  for (let i = 0; i <= refStart.pageIndex; i++) {
+    const p = await readPage(i);
+    if (!p) continue;
+    for (const l of columnMajorLines(p)) {
+      const beforeHeading =
+        i < refStart.pageIndex ||
+        l.col < colOfAnchor(p, refStart) ||
+        (l.col === colOfAnchor(p, refStart) && l.y < refStart.y);
+      if (beforeHeading) bodyLines.push(l);
+    }
   }
 
-  const refStart = findReferencesStart(pages);
-  if (!refStart) return { references: [], markers: [] };
-  return buildCitationData(links, pages, refStart);
+  const markers = seg.numberOf.size > 0 ? findNumberedMarkers(bodyLines, seg.numberOf) : [];
+  const pendingAuthorYear = seg.style === 'authoryear' ? findAuthorYearCandidates(bodyLines) : undefined;
+  return { references: seg.references, markers, pendingAuthorYear };
+}
+
+function colOfAnchor(p: PageText, a: RefAnchor): number {
+  const cols = assignColumns(p.runs, p.width);
+  const twoCol = [...cols.values()].some((c) => c === 1);
+  return twoCol && a.x >= p.width / 2 ? 1 : 0;
 }
