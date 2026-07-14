@@ -35,4 +35,10 @@ describe('refLinks', () => {
     const links = refLinks({ ...base, doi: '10.1/x' }, 'https://doi.org/10.1/x');
     expect(links).toHaveLength(1);
   });
+  it('drops non-http(s) and unparseable hrefs (javascript:, data:, garbage)', () => {
+    expect(refLinks({ ...base, url: 'javascript:alert(1)' })).toEqual([]);
+    expect(refLinks(null, 'data:text/html,<script>alert(1)</script>')).toEqual([]);
+    expect(refLinks({ ...base, url: 'not a url' })).toEqual([]);
+    expect(refLinks({ ...base, url: 'https://ok.example/x' })).toEqual([{ label: 'ok.example', href: 'https://ok.example/x' }]);
+  });
 });
