@@ -16,20 +16,28 @@ export interface GotoLink {
 }
 export interface RefAnchor { pageIndex: number; y: number; }
 
-// A line is the References heading if, with every non-letter removed, it is
-// exactly one of these tokens. Real PDFs render such headings in small caps or
-// with a drop cap, which PDFium splits into several runs ("R" + "EFERENCES") on
-// the same baseline — so we reconstruct the LINE from its runs before matching,
-// and compare letters-only so a split ("REFERENCES") or spaced ("Works Cited")
-// heading both collapse to the same token. Exact (not substring) match avoids
-// "see the references section" false positives.
-const HEADING_TOKENS = new Set(['references', 'bibliography', 'workscited']);
+// A line is a references heading if, with every non-letter removed, it is one
+// of these tokens — optionally preceded by a roman-numeral section number
+// ("VII. References"; arabic numbers are digits and vanish with the
+// non-letters). Whole-line (not substring) matching avoids "see the
+// references section" false positives; letters-only comparison keeps the
+// existing tolerance for headings split across runs ("R"+"EFERENCES").
+const HEADING_TOKENS = new Set([
+  'references',
+  'bibliography',
+  'workscited',
+  'referencesandnotes',
+  'referencescited',
+]);
 
 // Runs whose y is within this many PDF points share a visual line (same baseline).
 const LINE_TOLERANCE = 3;
 
-function lettersOnly(s: string): string {
-  return s.replace(/[^a-zA-Z]/g, '').toLowerCase();
+export function isReferencesHeading(lineText: string): boolean {
+  const letters = lineText.replace(/[^a-zA-Z]/g, '').toLowerCase();
+  if (HEADING_TOKENS.has(letters)) return true;
+  const m = letters.match(/^[ivxlcdm]{1,7}(.+)$/);
+  return m !== null && HEADING_TOKENS.has(m[1]);
 }
 
 /** Group a page's runs into visual lines: text concatenated in reading (x)
@@ -58,7 +66,7 @@ export function findReferencesStart(pages: PageText[]): RefAnchor | null {
   for (const p of ordered) {
     const lines = pageLines(p).sort((a, b) => a.y - b.y);
     for (const line of lines) {
-      if (HEADING_TOKENS.has(lettersOnly(line.text))) {
+      if (isReferencesHeading(line.text)) {
         return { pageIndex: p.pageIndex, y: line.y };
       }
     }
