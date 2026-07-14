@@ -522,7 +522,11 @@ pub async fn create_project(
     if name.is_empty() {
         return bad_request("empty name");
     }
-    let note = body.note.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let note = body
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     match db::create_project(&app.pool, name, note).await {
         Ok(project) => (StatusCode::CREATED, Json(project)).into_response(),
         Err(e) if db::is_unique_violation(&e) => (
@@ -672,7 +676,14 @@ pub async fn export_paper(
     match db::get_by_id(&app.pool, &id).await {
         Ok(Some(paper)) => {
             let body = export::format_entry(&paper, parse_format(p.format.as_deref()));
-            ([(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
+            (
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                )],
+                body,
+            )
+                .into_response()
         }
         Ok(None) => not_found(),
         Err(e) => {
@@ -873,7 +884,11 @@ pub async fn daily_papers(State(app): State<AppState>) -> Response {
             papers: papers.iter().map(DailyPaperDto::from).collect(),
         })
         .into_response(),
-        Ok(None) => Json(DailyResponse { date: None, papers: Vec::new() }).into_response(),
+        Ok(None) => Json(DailyResponse {
+            date: None,
+            papers: Vec::new(),
+        })
+        .into_response(),
         Err(e) => {
             tracing::error!("daily papers: {e}");
             internal_error()
@@ -903,5 +918,46 @@ pub async fn run_daily(State(app): State<AppState>) -> Response {
             Json(serde_json::json!({"error": "a daily run is already in flight"})),
         )
             .into_response()
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ParseCitationsBody {
+    pub references: Vec<String>,
+}
+
+/// POST /api/papers/{id}/citations — parse extracted reference strings into
+/// structured fields via [ai.citations] (cached per paper). 503 when the
+/// service is not configured.
+pub async fn parse_citations(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ParseCitationsBody>,
+) -> Response {
+    let Some(svc) = app.citations.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "citation parsing not configured"})),
+        )
+            .into_response();
+    };
+    let total: usize = body.references.iter().map(|r| r.len()).sum();
+    if body.references.is_empty() || body.references.len() > 500 || total > 200_000 {
+        return bad_request("references must be 1..=500 entries and under 200kB");
+    }
+    match db::get_by_id(&app.pool, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::error!("parse_citations lookup {id}: {e}");
+            return internal_error();
+        }
+    }
+    match svc.parse(&id, &body.references).await {
+        Ok(parsed) => Json(serde_json::json!({ "references": parsed })).into_response(),
+        Err(e) => {
+            tracing::error!("parse_citations {id}: {e}");
+            internal_error()
+        }
     }
 }

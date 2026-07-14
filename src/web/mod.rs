@@ -41,6 +41,9 @@ pub struct AppState {
     /// Present when paper chat is configured (`serve`). `None` -> chat
     /// endpoints answer 503 / available:false.
     pub chat: Option<Arc<crate::chat::ChatService>>,
+    /// Present when [ai.citations] is configured (`serve`). `None` ->
+    /// POST /api/papers/{id}/citations answers 503.
+    pub citations: Option<Arc<crate::citations::CitationsService>>,
     /// UI-facing preferences (e.g. abstract folding). Defaulted in
     /// read-only/test routers; set from config in `serve`.
     pub ui: crate::config::UiConfig,
@@ -65,6 +68,7 @@ pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
         search: None,
         daily: None,
         chat: None,
+        citations: None,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -83,6 +87,7 @@ pub fn build_router_with_ingest(
         search: None,
         daily: None,
         chat: None,
+        citations: None,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -102,6 +107,7 @@ pub fn build_router_with_ingest_proxy(
         search: None,
         daily: None,
         chat: None,
+        citations: None,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -120,6 +126,7 @@ pub fn build_router_with_search(
         search: Some(search),
         daily: None,
         chat: None,
+        citations: None,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -138,6 +145,7 @@ pub fn build_router_with_daily(
         search: None,
         daily: Some(daily),
         chat: None,
+        citations: None,
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -156,6 +164,26 @@ pub fn build_router_with_chat(
         search: None,
         daily: None,
         chat: Some(chat),
+        citations: None,
+        ui: crate::config::UiConfig::default(),
+    })
+}
+
+/// Test router with the citations service wired (everything else off).
+pub fn build_router_with_citations(
+    pool: SqlitePool,
+    library_root: PathBuf,
+    citations: Arc<crate::citations::CitationsService>,
+) -> Router {
+    router_with(AppState {
+        pool,
+        library_root,
+        ingest: None,
+        proxy_login_url: None,
+        search: None,
+        daily: None,
+        chat: None,
+        citations: Some(citations),
         ui: crate::config::UiConfig::default(),
     })
 }
@@ -208,6 +236,10 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{id}/chat",
             get(chat::history).post(chat::send).delete(chat::clear),
         )
+        .route(
+            "/api/papers/{id}/citations",
+            axum::routing::post(api::parse_citations),
+        )
         .fallback(assets::static_handler)
         .with_state(state)
 }
@@ -223,6 +255,7 @@ pub async fn serve(
     search: Option<Arc<crate::search::SearchService>>,
     daily: Option<Arc<crate::daily::DailyService>>,
     chat: Option<Arc<crate::chat::ChatService>>,
+    citations: Option<Arc<crate::citations::CitationsService>>,
     ui: crate::config::UiConfig,
 ) -> Result<()> {
     let app = router_with(AppState {
@@ -233,6 +266,7 @@ pub async fn serve(
         search,
         daily,
         chat,
+        citations,
         ui,
     });
     let addr = format!("{host}:{port}");
