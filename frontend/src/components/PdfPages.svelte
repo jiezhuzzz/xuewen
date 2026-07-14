@@ -12,8 +12,9 @@
   import CitationLayer from './CitationLayer.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
   import { matchReferences } from '../lib/citationMatch';
-  import { listPapers } from '../lib/api';
+  import { listPapers, parseCitations } from '../lib/api';
   import { runWhenIdle } from '../lib/idle';
+  import { mergeStructured } from '../lib/refMerge';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
 
@@ -69,6 +70,14 @@
           const papers = await listPapers({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
           if (extractionCancelled) return;
           matches = matchReferences(data.references, papers);
+          // Structured upgrade — one POST per open; any failure keeps raw text.
+          if (data.references.length > 0) {
+            const structured = await parseCitations(documentId, data.references.map((r) => r.rawText));
+            if (extractionCancelled || !structured) return;
+            const upgraded = { ...data, references: mergeStructured(data.references, structured) };
+            citations = upgraded;
+            matches = matchReferences(upgraded.references, papers);
+          }
         } catch (err) {
           console.warn('citation extraction failed', err); // reader still works
         }
