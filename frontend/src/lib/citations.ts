@@ -17,27 +17,21 @@ export interface GotoLink {
 export interface RefAnchor { pageIndex: number; y: number; }
 
 // A line is a references heading if, with every non-letter removed, it is one
-// of these tokens — optionally preceded by a roman-numeral section number
-// ("VII. References"; arabic numbers are digits and vanish with the
-// non-letters). Whole-line (not substring) matching avoids "see the
-// references section" false positives; letters-only comparison keeps the
-// existing tolerance for headings split across runs ("R"+"EFERENCES").
-const HEADING_TOKENS = new Set([
-  'references',
-  'bibliography',
-  'workscited',
-  'referencesandnotes',
-  'referencescited',
-]);
+// of these tokens — optionally preceded by a small roman-numeral section
+// number ("VII. References"; arabic numbers are digits and vanish with the
+// non-letters). The prefix must be a WELL-FORMED numeral in 1..39
+// (x{0,3}(ix|iv|v?i{0,3})) so ordinary words spelled from roman letters
+// ("Mild", "Civil", appendix label "D") cannot smuggle a match. Whole-line
+// anchoring avoids "see the references section" false positives; letters-only
+// comparison keeps tolerance for headings split across runs ("R"+"EFERENCES").
+const HEADING_TOKENS = ['references', 'bibliography', 'workscited', 'referencesandnotes', 'referencescited'];
+const HEADING_RE = new RegExp(`^(?:x{0,3}(?:ix|iv|v?i{0,3}))?(?:${HEADING_TOKENS.join('|')})$`);
 
 // Runs whose y is within this many PDF points share a visual line (same baseline).
 const LINE_TOLERANCE = 3;
 
 export function isReferencesHeading(lineText: string): boolean {
-  const letters = lineText.replace(/[^a-zA-Z]/g, '').toLowerCase();
-  if (HEADING_TOKENS.has(letters)) return true;
-  const m = letters.match(/^[ivxlcdm]{1,7}(.+)$/);
-  return m !== null && HEADING_TOKENS.has(m[1]);
+  return HEADING_RE.test(lineText.replace(/[^a-zA-Z]/g, '').toLowerCase());
 }
 
 /** Group a page's runs into visual lines: text concatenated in reading (x)
