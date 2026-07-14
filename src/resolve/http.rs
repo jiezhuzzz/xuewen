@@ -45,6 +45,18 @@ impl RetryPolicy {
             retry_after_cap: Duration::from_millis(5),
         }
     }
+
+    /// OpenAI-compatible API budget (chat/embeddings): matches the retry
+    /// behavior the LLM clients hand-rolled before consolidating here
+    /// (3 attempts, 500ms doubling), plus Retry-After support for free.
+    pub fn llm() -> Self {
+        Self {
+            max_attempts: 3,
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(8),
+            retry_after_cap: Duration::from_secs(30),
+        }
+    }
 }
 
 /// A `reqwest::Client` wrapper that retries transient `429`/`5xx`/network
@@ -65,6 +77,11 @@ impl HttpClient {
     /// to `send_text`.
     pub fn get(&self, url: &str) -> reqwest::RequestBuilder {
         self.client.get(url)
+    }
+
+    /// Start a POST request (JSON APIs: chat, embeddings) for `send_text`.
+    pub fn post(&self, url: &str) -> reqwest::RequestBuilder {
+        self.client.post(url)
     }
 
     /// GET `url` with retries, returning the body text.
@@ -88,7 +105,20 @@ impl HttpClient {
                         return Ok(resp.text().await?);
                     }
                     if last || !is_retryable_status(status.as_u16()) {
-                        return Err(anyhow!("HTTP {status}"));
+                        // Include a body snippet: API error payloads (e.g. an
+                        // OpenAI "invalid key" JSON) are the useful part.
+                        let snippet: String = resp
+                            .text()
+                            .await
+                            .unwrap_or_default()
+                            .chars()
+                            .take(200)
+                            .collect();
+                        return Err(if snippet.trim().is_empty() {
+                            anyhow!("HTTP {status}")
+                        } else {
+                            anyhow!("HTTP {status}: {snippet}")
+                        });
                     }
                     let delay = self.delay_for(attempt, retry_after(&resp));
                     tokio::time::sleep(delay).await;

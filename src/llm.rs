@@ -2,11 +2,10 @@
 //! callers: the daily TL;DR uses blocking `complete` (with retries); the
 //! paper chat uses SSE `stream` (no retry once streaming has begun).
 
+use crate::resolve::http::{HttpClient, RetryPolicy};
 use anyhow::{anyhow, Result};
 use futures_util::{Stream, StreamExt};
 use std::time::Duration;
-
-const ATTEMPTS: u32 = 3;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChatMessage {
@@ -15,7 +14,9 @@ pub struct ChatMessage {
 }
 
 pub struct LlmClient {
-    http: reqwest::Client,
+    /// Shared retrying transport (`resolve::http`) — one retry/backoff
+    /// implementation for the whole crate, Retry-After included.
+    http: HttpClient,
     base_url: String,
     model: String,
     api_key: Option<String>,
@@ -24,11 +25,12 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(base_url: &str, model: &str, api_key: Option<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .expect("building chat HTTP client");
         Self {
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
-                .build()
-                .expect("building chat HTTP client"),
+            http: HttpClient::new(client, RetryPolicy::llm()),
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             api_key: api_key.filter(|k| !k.trim().is_empty()),
@@ -52,7 +54,7 @@ impl LlmClient {
     fn request(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
         let mut req = self
             .http
-            .post(format!("{}/chat/completions", self.base_url))
+            .post(&format!("{}/chat/completions", self.base_url))
             .json(body);
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
@@ -60,8 +62,8 @@ impl LlmClient {
         req
     }
 
-    /// Blocking completion with retries — behavior moved verbatim from
-    /// `daily::tldr::ChatClient::complete`.
+    /// Blocking completion; transient failures retry via the shared
+    /// `resolve::http` policy (`RetryPolicy::llm`).
     pub async fn complete(&self, system: &str, user: &str) -> Result<String> {
         let mut body = serde_json::json!({
             "model": self.model,
@@ -73,42 +75,16 @@ impl LlmClient {
         if let Some(effort) = &self.reasoning_effort {
             body["reasoning_effort"] = serde_json::json!(effort);
         }
-        let mut delay = Duration::from_millis(500);
-        let mut last_err = None;
-        for attempt in 1..=ATTEMPTS {
-            let req = self.request(&body);
-            match req.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    let v: serde_json::Value = resp.json().await?;
-                    let text = v["choices"][0]["message"]["content"]
-                        .as_str()
-                        .ok_or_else(|| anyhow!("chat API response has no message content"))?;
-                    return Ok(text.trim().to_string());
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    let retriable = status.as_u16() == 429 || status.is_server_error();
-                    let text = resp.text().await.unwrap_or_default();
-                    let err = anyhow!(
-                        "chat API {status}: {}",
-                        text.chars().take(200).collect::<String>()
-                    );
-                    if !retriable || attempt == ATTEMPTS {
-                        return Err(err);
-                    }
-                    last_err = Some(err);
-                }
-                Err(e) => {
-                    if attempt == ATTEMPTS {
-                        return Err(e.into());
-                    }
-                    last_err = Some(e.into());
-                }
-            }
-            tokio::time::sleep(delay).await;
-            delay *= 2;
-        }
-        Err(last_err.expect("loop ran at least once"))
+        let text = self
+            .http
+            .send_text(self.request(&body))
+            .await
+            .map_err(|e| anyhow!("chat API: {e}"))?;
+        let v: serde_json::Value = serde_json::from_str(&text)?;
+        let content = v["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or_else(|| anyhow!("chat API response has no message content"))?;
+        Ok(content.trim().to_string())
     }
 
     /// Stream assistant deltas from a `stream: true` completion. The HTTP
@@ -179,12 +155,47 @@ fn find_double_newline(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\n\n")
 }
 
+/// Strip one Markdown code fence (``` or ```json) that models sometimes wrap
+/// around JSON replies. Shared by every module that parses LLM JSON output.
+pub(crate) fn strip_code_fence(s: &str) -> &str {
+    let s = s.trim();
+    let s = s
+        .strip_prefix("```")
+        .map(|rest| rest.strip_prefix("json").unwrap_or(rest))
+        .unwrap_or(s);
+    s.strip_suffix("```").unwrap_or(s).trim()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures_util::StreamExt;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn complete_retries_on_429_then_succeeds() {
+        // Pins the wiring to the shared retrying transport: one 429, then ok.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(429))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "content": " hi "}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = LlmClient::new(&server.uri(), "test-model", None);
+        assert_eq!(client.complete("s", "u").await.unwrap(), "hi");
+    }
 
     #[tokio::test]
     async fn stream_yields_deltas_until_done() {
@@ -222,12 +233,14 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .and(body_string_contains("\"reasoning_effort\":\"high\""))
-            .respond_with(ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"),
+            )
             .mount(&server)
             .await;
 
-        let client =
-            LlmClient::new(&server.uri(), "test-model", None).with_reasoning_effort(Some("high".into()));
+        let client = LlmClient::new(&server.uri(), "test-model", None)
+            .with_reasoning_effort(Some("high".into()));
         let _stream = client
             .stream(&[ChatMessage {
                 role: "user",

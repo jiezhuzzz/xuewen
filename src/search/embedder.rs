@@ -1,17 +1,27 @@
+use crate::resolve::http::{HttpClient, RetryPolicy};
 use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use std::time::Duration;
 
 const BATCH: usize = 64;
-const ATTEMPTS: u32 = 3;
 
 /// Client for an OpenAI-compatible `/embeddings` endpoint.
 pub struct Embedder {
-    http: reqwest::Client,
+    /// Shared retrying transport (`resolve::http`) — same retry/backoff
+    /// implementation as every other HTTP caller in the crate.
+    http: HttpClient,
     base_url: String,
     model: String,
     dims: usize,
     api_key: Option<String>,
+}
+
+fn embedding_http() -> HttpClient {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .expect("building embedding HTTP client");
+    HttpClient::new(client, RetryPolicy::llm())
 }
 
 impl Embedder {
@@ -22,8 +32,7 @@ impl Embedder {
             return None;
         };
         Some(Self {
-            http: reqwest::Client::builder().timeout(Duration::from_secs(60)).build()
-                .expect("building embedding HTTP client"),
+            http: embedding_http(),
             base_url: r.base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             dims,
@@ -34,7 +43,7 @@ impl Embedder {
     /// Keyless client pointed at a mock server. Test support only.
     pub fn for_tests(base_url: &str, model: &str, dims: usize) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: embedding_http(),
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             dims,
@@ -69,60 +78,37 @@ impl Embedder {
             data: Vec<Item>,
         }
 
-        let url = format!("{}/embeddings", self.base_url);
-        let mut delay = Duration::from_millis(500);
-        let mut last_err = None;
-        for attempt in 1..=ATTEMPTS {
-            let mut req = self
-                .http
-                .post(&url)
-                .json(&serde_json::json!({ "model": self.model, "input": batch }));
-            if let Some(k) = &self.api_key {
-                req = req.bearer_auth(k);
-            }
-            match req.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    let mut body: Body = resp.json().await?;
-                    if body.data.len() != batch.len() {
-                        bail!(
-                            "embedding API returned {} vectors for {} inputs",
-                            body.data.len(),
-                            batch.len()
-                        );
-                    }
-                    body.data.sort_by_key(|d| d.index);
-                    for d in &body.data {
-                        if d.embedding.len() != self.dims {
-                            bail!(
-                                "embedding dims mismatch: API returned {}, config says {} — fix [ai.embedding].dims",
-                                d.embedding.len(),
-                                self.dims
-                            );
-                        }
-                    }
-                    return Ok(body.data.into_iter().map(|d| d.embedding).collect());
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    let retriable = status.as_u16() == 429 || status.is_server_error();
-                    let text = resp.text().await.unwrap_or_default();
-                    let err = anyhow!("embedding API {status}: {}", text.chars().take(200).collect::<String>());
-                    if !retriable || attempt == ATTEMPTS {
-                        return Err(err);
-                    }
-                    last_err = Some(err);
-                }
-                Err(e) => {
-                    if attempt == ATTEMPTS {
-                        return Err(e.into());
-                    }
-                    last_err = Some(e.into());
-                }
-            }
-            tokio::time::sleep(delay).await;
-            delay *= 2;
+        let mut req = self
+            .http
+            .post(&format!("{}/embeddings", self.base_url))
+            .json(&serde_json::json!({ "model": self.model, "input": batch }));
+        if let Some(k) = &self.api_key {
+            req = req.bearer_auth(k);
         }
-        Err(last_err.expect("loop ran at least once"))
+        let text = self
+            .http
+            .send_text(req)
+            .await
+            .map_err(|e| anyhow!("embedding API: {e}"))?;
+        let mut body: Body = serde_json::from_str(&text)?;
+        if body.data.len() != batch.len() {
+            bail!(
+                "embedding API returned {} vectors for {} inputs",
+                body.data.len(),
+                batch.len()
+            );
+        }
+        body.data.sort_by_key(|d| d.index);
+        for d in &body.data {
+            if d.embedding.len() != self.dims {
+                bail!(
+                    "embedding dims mismatch: API returned {}, config says {} — fix [ai.embedding].dims",
+                    d.embedding.len(),
+                    self.dims
+                );
+            }
+        }
+        Ok(body.data.into_iter().map(|d| d.embedding).collect())
     }
 }
 
@@ -146,7 +132,9 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/embeddings"))
             .and(header("authorization", "Bearer sk-test"))
-            .and(body_partial_json(json!({"model": "text-embedding-3-small"})))
+            .and(body_partial_json(
+                json!({"model": "text-embedding-3-small"}),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(embedding_response(2, 4)))
             .expect(1)
             .mount(&server)
