@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { authorLine, refLinks } from './refFormat';
+import { authorLine, refLinks, titleCase } from './refFormat';
 import type { StructuredReference } from './types';
+
+describe('titleCase', () => {
+  it('capitalizes words except small ones', () => {
+    expect(titleCase('mapping global dynamics of benchmark creation and saturation in artificial intelligence'))
+      .toBe('Mapping Global Dynamics of Benchmark Creation and Saturation in Artificial Intelligence');
+  });
+  it('always capitalizes the first and last word, and after a colon', () => {
+    expect(titleCase('the road to autonomy')).toBe('The Road to Autonomy');
+    expect(titleCase('adam: a method for stochastic optimization')).toBe('Adam: A Method for Stochastic Optimization');
+    expect(titleCase('what are we looking for')).toBe('What Are We Looking For');
+  });
+  it('leaves acronyms, identifiers, and mixed-case words untouched', () => {
+    expect(titleCase('PGFUZZ: policy-guided fuzzing for robotic vehicles'))
+      .toBe('PGFUZZ: Policy-Guided Fuzzing for Robotic Vehicles');
+    expect(titleCase('training GPT-4 and eBPF probes on iOS'))
+      .toBe('Training GPT-4 and eBPF Probes on iOS');
+    expect(titleCase('deep learning with differential privacy')).toBe('Deep Learning With Differential Privacy');
+  });
+  it('capitalizes hyphen parts except small ones', () => {
+    expect(titleCase('state-of-the-art symbolic execution')).toBe('State-of-the-Art Symbolic Execution');
+  });
+});
 
 const base: StructuredReference = {
   authors: [], title: null, venue: null, year: null, doi: null, arxiv_id: null, url: null,

@@ -3,7 +3,7 @@
   import { citationHover, cancelHideCitation, hideCitationSoon } from '../lib/citationState.svelte';
   import { openTab } from '../lib/state.svelte';
   import { abbreviateVenue } from '../lib/venue';
-  import { authorLine, refLinks } from '../lib/refFormat';
+  import { authorLine, refLinks, titleCase } from '../lib/refFormat';
 
   const c = $derived(citationHover.current);
   const s = $derived(c?.reference.structured ?? null);
@@ -36,7 +36,7 @@
     class="pointer-events-auto fixed z-50 max-w-sm rounded-xl border border-stone-200 bg-paper p-3 text-[12.5px] shadow-2xl dark:border-stone-800 dark:bg-soot"
   >
     {#if s?.title}
-      <p class="font-medium leading-snug text-ink dark:text-stone-100">{s.title}</p>
+      <p class="font-medium leading-snug text-ink dark:text-stone-100">{titleCase(s.title)}</p>
       {#if s.authors.length > 0}
         <p class="mt-0.5 leading-snug text-stone-500 dark:text-stone-400">{authorLine(s.authors)}</p>
       {/if}
