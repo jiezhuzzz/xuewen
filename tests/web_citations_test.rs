@@ -12,7 +12,7 @@ fn chat_reply(text: &str) -> serde_json::Value {
 #[tokio::test]
 async fn parses_references_and_caches() {
     let upstream = MockServer::start().await;
-    let parsed = r#"[{"authors":["A. Author"],"title":"Adam","venue":"ICLR","year":2015,"doi":null,"arxiv_id":null,"url":null}]"#;
+    let parsed = r#"[{"i":1,"authors":["A. Author"],"title":"Adam","venue":"ICLR","year":2015,"doi":null,"arxiv_id":null,"url":null}]"#;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(parsed)))
