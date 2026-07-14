@@ -119,6 +119,8 @@ pub struct AiConfig {
     pub summary: Option<AiDefaults>,
     /// Daily-feed summaries. Absent ⇒ off.
     pub daily: Option<AiDefaults>,
+    /// Structured reference parsing for PDF citation popovers. Absent ⇒ off.
+    pub citations: Option<AiDefaults>,
 }
 
 impl AiConfig {
@@ -672,5 +674,16 @@ model = "gpt-5.6-terra"
             ..Default::default()
         };
         assert_eq!(ai.resolve(&own).api_key.as_deref(), Some("sk-own"));
+    }
+
+    #[test]
+    fn ai_citations_section_parses_and_is_off_by_default() {
+        let with: crate::config::AiConfig =
+            toml::from_str("model = \"gpt-4o-mini\"\n[citations]\nmodel = \"gpt-5-mini\"").unwrap();
+        let use_ = with.citations.as_ref().expect("[ai.citations] present");
+        assert_eq!(with.resolve(use_).model.as_deref(), Some("gpt-5-mini"));
+
+        let without: crate::config::AiConfig = toml::from_str("model = \"gpt-4o-mini\"").unwrap();
+        assert!(without.citations.is_none());
     }
 }
