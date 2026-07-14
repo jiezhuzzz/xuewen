@@ -117,4 +117,24 @@ describe('loadCitations', () => {
     expect(data.references).toHaveLength(1);
     expect(data.references[0].rawText).toContain('Adam');
   });
+
+  it('finds a heading on the page before the first destination page', async () => {
+    const eng: EngineLike = {
+      getPageAnnotations: (_d, page: any) => task(
+        page.index === 0
+          ? [{ type: 2, rect: { origin: { x: 90, y: 100 }, size: { width: 12, height: 12 } },
+               target: { type: 'destination',
+                 destination: { pageIndex: 1, view: [], zoom: { mode: PdfZoomMode.XYZ, params: { x: 50, y: 770, zoom: 0 } } } } }]
+          : [],
+      ),
+      getPageTextRuns: (_d, page: any) => task(
+        page.index === 0
+          ? { runs: [{ text: 'References', rect: { origin: { x: 50, y: 780 }, size: { width: 90, height: 16 } } }] }
+          : { runs: [{ text: '[1] A. Author. Adam. 2015.', rect: { origin: { x: 50, y: 30 }, size: { width: 300, height: 12 } } }] },
+      ),
+    };
+    const data = await loadCitations(eng, doc);
+    expect(data.references).toHaveLength(1);
+    expect(data.references[0].rawText).toContain('Adam');
+  });
 });

@@ -100,12 +100,13 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
   }
   if (links.length === 0) return { references: [], markers: [] };
 
-  // Pass 2 — the bibliography lives on the pages the citation links point to, so
-  // read text runs (the expensive call) ONLY for those pages (usually a handful),
-  // not every page. Markers already come from the annotations above.
-  const refPageIndexes = [...new Set(links.map((l) => l.destPageIndex))].sort((a, b) => a - b);
+  // Pass 2 — the bibliography lives on the destination pages; ALSO read the
+  // page just before the earliest destination, because the "References"
+  // heading often sits at the bottom of the previous page.
+  const destPages = [...new Set(links.map((l) => l.destPageIndex))].sort((a, b) => a - b);
+  const scanPages = destPages[0] > 0 ? [destPages[0] - 1, ...destPages] : destPages;
   const pages: PageText[] = [];
-  for (const idx of refPageIndexes) {
+  for (const idx of scanPages) {
     const page = doc.pages[idx];
     if (!page) continue;
     const textRuns = await engine.getPageTextRuns(doc, page).toPromise();
