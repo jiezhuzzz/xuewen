@@ -22,6 +22,14 @@ describe('abbreviateVenue', () => {
     expect(abbreviateVenue('NAACL-HLT')).toBe('NAACL');
   });
 
+  it('maps the full ISSTA proceedings name to ISSTA', () => {
+    expect(
+      abbreviateVenue(
+        'Proceedings of the 31st ACM SIGSOFT International Symposium on Software Testing and Analysis',
+      ),
+    ).toBe('ISSTA');
+  });
+
   it('falls back to a trailing parenthetical acronym when unmapped', () => {
     expect(abbreviateVenue('2024 Conference on Made Up Things (CMUT)')).toBe('CMUT');
   });

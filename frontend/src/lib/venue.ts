@@ -48,6 +48,7 @@ const RULES: { pattern: RegExp; abbr: string }[] = [
   { pattern: /data communication|\bsigcomm\b/i, abbr: 'SIGCOMM' },
   { pattern: /international conference on software engineering|\bicse\b/i, abbr: 'ICSE' },
   { pattern: /foundations of software engineering|\bfse\b/i, abbr: 'FSE' },
+  { pattern: /software testing and analysis|\bissta\b/i, abbr: 'ISSTA' },
   { pattern: /human factors in computing systems|\bchi\b/i, abbr: 'CHI' },
 ];
 
