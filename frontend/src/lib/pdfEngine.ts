@@ -8,6 +8,9 @@ import { InteractionManagerPluginPackage } from '@embedpdf/plugin-interaction-ma
 import { DocumentManagerPluginPackage } from '@embedpdf/plugin-document-manager';
 import { ZoomPluginPackage, ZoomMode } from '@embedpdf/plugin-zoom';
 import { TilingPluginPackage } from '@embedpdf/plugin-tiling';
+import { SearchPluginPackage } from '@embedpdf/plugin-search';
+import { ThumbnailPluginPackage } from '@embedpdf/plugin-thumbnail';
+import { BookmarkPluginPackage } from '@embedpdf/plugin-bookmark';
 
 // Load-bearing offline config (see CLAUDE.md "PDF viewer gotchas"):
 //  - worker:true   -> PDFium runs in EmbedPDF's stock blob module worker. The
@@ -50,5 +53,9 @@ export function viewerPlugins(): PluginBatchRegistrations {
     // Defaults (tileSize 768) match the ready-made viewer; only pass config
     // here if a verified option needs changing.
     createPluginRegistration(TilingPluginPackage),
+    // Toolbar features: find-in-document, page thumbnails, document outline.
+    createPluginRegistration(SearchPluginPackage),
+    createPluginRegistration(ThumbnailPluginPackage),
+    createPluginRegistration(BookmarkPluginPackage),
   ];
 }

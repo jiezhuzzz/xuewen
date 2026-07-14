@@ -19,7 +19,10 @@ describe('viewerPlugins', () => {
     const regs = viewerPlugins();
     // Every registration exposes a package manifest with an id.
     const ids = regs.map((r) => r.package.manifest.id);
-    for (const id of ['viewport', 'scroll', 'render', 'selection', 'interaction-manager', 'document-manager', 'tiling']) {
+    for (const id of [
+      'viewport', 'scroll', 'render', 'selection', 'interaction-manager',
+      'document-manager', 'tiling', 'search', 'thumbnail', 'bookmark',
+    ]) {
       expect(ids).toContain(id);
     }
     const docReg = regs.find((r) => r.package.manifest.id === 'document-manager');
