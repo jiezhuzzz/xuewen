@@ -141,20 +141,62 @@ function colOfPoint(pages: PageText[], pageIndex: number, x: number): number {
 }
 
 const BRACKET_GROUP = /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)\]/g;
+/** An unterminated group opening at end of line: "[14,19," or "[24–". */
+const GROUP_TAIL = /\[(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*\s*[,;–—-])\s*$/;
+/** A group continuation at start of line: "44]" or "19, 44]". */
+const GROUP_HEAD = /^\s*(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)\]/;
 
-/** Bracketed-number citation markers in body lines. One marker per bracket
- *  group; a group is a citation only if EVERY number in it (ranges expanded)
- *  resolves to a known entry — this kills math like [0, 1] and stray [17]s. */
+/** Bracketed-number citation markers in body lines. A group is a citation
+ *  only if EVERY number in it (ranges expanded) resolves to a known entry —
+ *  this kills math like [0, 1] and stray [17]s. Each comma-separated member
+ *  of a group gets its OWN marker over its own characters, so hovering "19"
+ *  in "[14,19,37]" shows entry 19, not entry 14 (a range keeps one marker at
+ *  its first entry). A group split across a line break — "[14,19,\n44]" —
+ *  is joined with the next line of the same page/column and validated whole,
+ *  with each fragment's markers placed on its own line. */
 export function findNumberedMarkers(bodyLines: CmLine[], numberOf: Map<number, number>): Marker[] {
   const markers: Marker[] = [];
-  for (const line of bodyLines) {
+
+  // One marker per digit-bearing part of `inner` (the text between the
+  // brackets), each over its own characters. `whole` = the full bracketed
+  // span; single-part groups keep it as their hitbox ("[3]" incl. brackets).
+  const emitParts = (line: CmLine, inner: string, innerStart: number, whole: { start: number; end: number } | null) => {
+    const parts: { text: string; start: number }[] = [];
+    let off = 0;
+    for (const piece of inner.split(/[,;]/)) {
+      if (/\d/.test(piece)) parts.push({ text: piece, start: off });
+      off += piece.length + 1;
+    }
+    for (const p of parts) {
+      const n = parseInt(p.text.match(/\d{1,3}/)![0], 10);
+      const refIndex = numberOf.get(n);
+      if (refIndex === undefined) continue; // group pre-validated; belt & braces
+      let s = innerStart + p.start;
+      let e = s + p.text.length;
+      if (whole && parts.length === 1) ({ start: s, end: e } = whole);
+      const t = line.text.slice(s, e);
+      const rect = rectForSpan(line, s + (t.length - t.trimStart().length), e - (t.length - t.trimEnd().length));
+      if (rect) markers.push({ pageIndex: line.pageIndex, ...rect, refIndex });
+    }
+  };
+
+  for (let i = 0; i < bodyLines.length; i++) {
+    const line = bodyLines[i];
     for (const m of line.text.matchAll(BRACKET_GROUP)) {
       const nums = expandGroup(m[1]);
       if (!nums || nums.some((n) => !numberOf.has(n))) continue;
-      const refIndex = numberOf.get(nums[0])!;
-      const rect = rectForSpan(line, m.index!, m.index! + m[0].length);
-      if (rect) markers.push({ pageIndex: line.pageIndex, ...rect, refIndex });
+      emitParts(line, m[1], m.index! + 1, { start: m.index!, end: m.index! + m[0].length });
     }
+    // Cross-line continuation, joined only within the same page and column.
+    const next = bodyLines[i + 1];
+    if (!next || next.pageIndex !== line.pageIndex || next.col !== line.col) continue;
+    const tail = line.text.match(GROUP_TAIL);
+    const head = tail ? next.text.match(GROUP_HEAD) : null;
+    if (!tail || !head) continue;
+    const nums = expandGroup(tail[1] + head[1]);
+    if (!nums || nums.some((n) => !numberOf.has(n))) continue;
+    emitParts(line, tail[1], line.text.length - tail[0].length + 1, null);
+    emitParts(next, head[1], head[0].length - 1 - head[1].length, null);
   }
   return markers;
 }
