@@ -45,13 +45,20 @@
   let cancelExtractionIdle: (() => void) | null = null;
   $effect(() => {
     const registry = ctx.registry;
-    const doc = docState.current?.document ?? null;
-    if (!registry || !doc || extractedFor === documentId) return;
+    const rawDoc = docState.current?.document ?? null;
+    if (!registry || !rawDoc || extractedFor === documentId) return;
     extractedFor = documentId;
-    pageSizes = doc.pages.map((p) => ({ width: p.size.width, height: p.size.height }));
+    pageSizes = rawDoc.pages.map((p) => ({ width: p.size.width, height: p.size.height }));
     const engine = registry.getEngine();
-    // Extraction is main-thread PDFium work — wait for idle so the first
-    // pages paint before we start crawling annotations/text.
+    // The document/page objects are Svelte $state proxies (EmbedPDF's core
+    // wraps them for reactivity). PDFium now runs in a worker (see
+    // pdfEngine.ts), and every engine call round-trips doc/page through
+    // postMessage — a live Proxy throws DataCloneError there. Snapshot once
+    // into plain data so loadCitations can hand it back to the worker.
+    const doc = $state.snapshot(rawDoc);
+    // Extraction is PDFium work (now off the main thread, in the worker) —
+    // wait for idle so the first pages paint before we start crawling
+    // annotations/text.
     cancelExtractionIdle = runWhenIdle(() => {
       void (async () => {
         try {
