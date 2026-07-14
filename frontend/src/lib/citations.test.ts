@@ -54,6 +54,22 @@ describe('findReferencesStart', () => {
     expect(findReferencesStart(b)).toEqual({ pageIndex: 0, y: 100 });
   });
 
+  it('matches "References Cited"', () => {
+    const pages = [page(0, 600, 800, [{ text: 'References Cited', x: 50, y: 100, width: 140, height: 16 }])];
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 100 });
+  });
+
+  it('does not match ordinary words spelled from roman letters', () => {
+    const pages = [
+      page(0, 600, 800, [
+        { text: 'Mild References', x: 50, y: 100, width: 140, height: 16 },
+        { text: 'Civil References', x: 50, y: 130, width: 140, height: 16 },
+        { text: 'D References', x: 50, y: 160, width: 120, height: 16 },
+      ]),
+    ];
+    expect(findReferencesStart(pages)).toBeNull();
+  });
+
   it('does not match "I. Introduction" or the word inside a sentence', () => {
     const pages = [
       page(0, 600, 800, [
