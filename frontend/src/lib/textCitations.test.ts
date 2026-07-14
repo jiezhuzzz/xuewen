@@ -19,6 +19,37 @@ describe('columnMajorLines', () => {
     expect(lines[0].runs).toHaveLength(2);
     expect(lines[0].runs[1].start).toBe(5); // char offset of 'col line'
   });
+
+  it('reassembles a small-caps heading split across y-buckets (jimenez drop-cap geometry)', () => {
+    // Same Mode-B geometry as citations.test.ts: "R" (y=81, h=14) and
+    // "EFERENCES" (y=83, h=12) share a baseline (bottom 95) but land in
+    // different Math.round(y/3) buckets. columnMajorLines must merge them so the
+    // fallback path's segmentation sees one "REFERENCES" line, not two fragments.
+    const p = page(10, 612, 792, [
+      { text: 'R', x: 108, y: 81, width: 12, height: 14 },
+      { text: 'EFERENCES', x: 117, y: 83, width: 82, height: 12 },
+    ]);
+    const lines = columnMajorLines(p);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].text).toBe('REFERENCES');
+    expect(lines[0].runs).toHaveLength(2);
+    expect(lines[0].runs[1].start).toBe(1); // 'EFERENCES' begins after 'R'
+  });
+
+  it('does not merge a drop-cap heading with same-band text in the OTHER column (kim)', () => {
+    // Two-column IEEE (mid=306): the split "R"+"EFERENCES" heading sits in the
+    // left column while the right column carries body text on the same baseline.
+    // Column-aware clustering must keep them as two distinct lines.
+    const p = page(15, 612, 792, [
+      { text: 'R', x: 55, y: 430, width: 12, height: 14 },
+      { text: 'EFERENCES', x: 64, y: 432, width: 82, height: 12 },
+      { text: 'runtime monitoring with s-taliro', x: 320, y: 431, width: 230, height: 12 },
+    ]);
+    const lines = columnMajorLines(p);
+    expect(lines.map((l) => l.text)).toEqual(['REFERENCES', 'runtime monitoring with s-taliro']);
+    expect(lines[0].col).toBe(0);
+    expect(lines[1].col).toBe(1);
+  });
 });
 
 describe('segmentReferences — numbered', () => {

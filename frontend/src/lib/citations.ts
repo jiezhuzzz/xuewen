@@ -28,31 +28,87 @@ export interface RefAnchor { pageIndex: number; y: number; x: number; }
 const HEADING_TOKENS = ['references', 'bibliography', 'workscited', 'referencesandnotes', 'referencescited'];
 const HEADING_RE = new RegExp(`^(?:x{0,3}(?:ix|iv|v?i{0,3}))?(?:${HEADING_TOKENS.join('|')})$`);
 
-// Runs whose y is within this many PDF points share a visual line (same baseline).
+// Baseline slack (PDF points) for treating two runs' bottoms as the same line.
 export const LINE_TOLERANCE = 3;
 
 export function isReferencesHeading(lineText: string): boolean {
   return HEADING_RE.test(lineText.replace(/[^a-zA-Z]/g, '').toLowerCase());
 }
 
-/** Group a page's runs into visual lines: text concatenated in reading (x)
- *  order, tagged with the line's top y. */
-function pageLines(page: PageText): { y: number; x: number; text: string }[] {
-  const rows = new Map<number, TextRun[]>();
-  for (const r of page.runs) {
-    const key = Math.round(r.y / LINE_TOLERANCE);
-    const arr = rows.get(key) ?? [];
-    arr.push(r);
-    rows.set(key, arr);
+/** One reconstructed visual line: its runs (x-sorted, left→right reading order),
+ *  the column they belong to, and the line's min top-y / min x. */
+export interface ClusteredLine { col: number; y: number; x: number; runs: TextRun[]; }
+
+/**
+ * Group runs into visual lines, COLUMN-AWARE and by BASELINE, not by a fixed
+ * y-bucket. Shared by pageLines (heading detection) and columnMajorLines
+ * (fallback segmentation) so both reconstruct lines the same robust way.
+ *
+ * Two prior failure modes this replaces (measured live — see task-21 report):
+ *  - Column-blind `Math.round(y/LINE_TOLERANCE)` bucketing joined a two-column
+ *    heading with the OTHER column's same-baseline body text, so the joined
+ *    "line" no longer matched the whole-line heading regex. Fixed by clustering
+ *    per `cols` (runs in different columns never merge).
+ *  - Small-caps / drop-cap headings emit the tall initial ("R") as its own run
+ *    with a SMALLER top-y than the rest ("EFERENCES"); `round(y/3)` dropped them
+ *    into adjacent buckets and the heading never reassembled. Their glyphs share
+ *    a BASELINE (equal bottom = y+height), so we cluster by vertical overlap of
+ *    the [y, y+height] extents instead of by top-y. Overlap (not a plain
+ *    bottom-within-LINE_TOLERANCE test) also keeps the existing synthetic
+ *    drop-cap fixture — same top, heights differing by 4 (> LINE_TOLERANCE) —
+ *    passing, since its extents still overlap. LINE_TOLERANCE is retained as a
+ *    baseline-equality shortcut for zero-overlap edge cases.
+ *
+ * Sort-then-sweep (no fixed buckets — adjacent-bucket splits were the bug): sort
+ * by (column, top-y); a run joins the current line when it is the same column and
+ * its vertical extent overlaps the line's accumulated extent by at least half the
+ * shorter height (or their bottoms are within LINE_TOLERANCE). Distinct lines sit
+ * a full line-height apart, so they never merge.
+ */
+export function clusterLines(runs: TextRun[], cols: Map<TextRun, number>): ClusteredLine[] {
+  const sorted = [...runs].sort(
+    (a, b) => (cols.get(a) ?? 0) - (cols.get(b) ?? 0) || a.y - b.y,
+  );
+  const groups: { col: number; top: number; bottom: number; runs: TextRun[] }[] = [];
+  let cur: { col: number; top: number; bottom: number; runs: TextRun[] } | null = null;
+  for (const r of sorted) {
+    const col = cols.get(r) ?? 0;
+    const top = r.y;
+    const bottom = r.y + r.height;
+    if (cur && col === cur.col) {
+      const overlap = Math.min(cur.bottom, bottom) - Math.max(cur.top, top);
+      const shorter = Math.min(cur.bottom - cur.top, r.height);
+      const sameLine = overlap >= shorter / 2 || Math.abs(bottom - cur.bottom) <= LINE_TOLERANCE;
+      if (sameLine) {
+        cur.runs.push(r);
+        cur.top = Math.min(cur.top, top);
+        cur.bottom = Math.max(cur.bottom, bottom);
+        continue;
+      }
+    }
+    cur = { col, top, bottom, runs: [r] };
+    groups.push(cur);
   }
-  return [...rows.values()].map((rs) => {
-    rs.sort((a, b) => a.x - b.x);
+  return groups.map((g) => {
+    g.runs.sort((a, b) => a.x - b.x);
     return {
-      y: Math.min(...rs.map((r) => r.y)),
-      x: Math.min(...rs.map((r) => r.x)),
-      text: rs.map((r) => r.text).join(''),
+      col: g.col,
+      y: Math.min(...g.runs.map((r) => r.y)),
+      x: Math.min(...g.runs.map((r) => r.x)),
+      runs: g.runs,
     };
   });
+}
+
+/** Group a page's runs into visual lines: text concatenated in reading (x)
+ *  order, tagged with the line's top y. Column-aware (see clusterLines). */
+function pageLines(page: PageText): { y: number; x: number; text: string }[] {
+  const cols = assignColumns(page.runs, page.width);
+  return clusterLines(page.runs, cols).map((l) => ({
+    y: l.y,
+    x: l.x,
+    text: l.runs.map((r) => r.text).join(''),
+  }));
 }
 
 /**
