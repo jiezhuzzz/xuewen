@@ -101,8 +101,12 @@ impl CitationsService {
         Ok(parsed)
     }
 
-    /// One LLM call for one chunk; the exact-length validation applies to the
-    /// chunk, where the model can actually count.
+    /// One LLM call for one chunk. Results are INDEX-KEYED, not positional:
+    /// models reliably fail exact-count array contracts (observed live even
+    /// at 25 entries: 18 in → 19 out, messy extracted strings read as two
+    /// entries). Each returned object names its entry via `"i"`; entries the
+    /// model skips stay null, duplicates keep the first, out-of-range are
+    /// dropped — a miscount can no longer poison the whole chunk.
     async fn parse_chunk(&self, refs: &[String]) -> Result<Vec<Option<StructuredReference>>> {
         let numbered: String = refs
             .iter()
@@ -110,15 +114,15 @@ impl CitationsService {
             .map(|(i, r)| format!("{}. {}\n", i + 1, r))
             .collect();
         let user = format!(
-            "Parse each bibliography entry below into an object \
-             {{\"authors\":[\"Given Family\",...],\"title\":string|null,\"venue\":string|null,\
+            "Parse the numbered bibliography entries below. Return a JSON array of \
+             objects, one per entry you can parse. Each object MUST be \
+             {{\"i\":<the entry's number exactly as shown below>,\
+             \"authors\":[\"Given Family\",...],\"title\":string|null,\"venue\":string|null,\
              \"year\":int|null,\"doi\":string|null,\"arxiv_id\":string|null,\"url\":string|null}}.\n\
              venue is the conference/journal name only. doi is the bare DOI (no https://). \
              arxiv_id is like \"1412.6980\".\n\
-             Return a JSON array with EXACTLY {} elements, one per entry in order. \
-             Use null for an entry that is not a parseable bibliography reference.\n\n{}",
-            refs.len(),
-            numbered
+             SKIP entries that are not parseable bibliography references — do not \
+             invent placeholders for them.\n\n{numbered}"
         );
         let text = self.llm.complete(SYSTEM, &user).await?;
         let cleaned = text
@@ -127,17 +131,25 @@ impl CitationsService {
             .trim_start_matches("```")
             .trim_end_matches("```")
             .trim();
-        let parsed: Vec<Option<StructuredReference>> = serde_json::from_str(cleaned)
+        let parsed: Vec<IndexedReference> = serde_json::from_str(cleaned)
             .map_err(|e| anyhow!("citation parse: model returned invalid JSON: {e}"))?;
-        if parsed.len() != refs.len() {
-            return Err(anyhow!(
-                "citation parse: expected {} entries, got {}",
-                refs.len(),
-                parsed.len()
-            ));
+        let mut out: Vec<Option<StructuredReference>> = vec![None; refs.len()];
+        for item in parsed {
+            if item.i >= 1 && item.i <= refs.len() && out[item.i - 1].is_none() {
+                out[item.i - 1] = Some(item.reference);
+            }
         }
-        Ok(parsed)
+        Ok(out)
     }
+}
+
+/// One element of the model's reply: a parsed entry tagged with the 1-based
+/// chunk-local entry number it belongs to.
+#[derive(Deserialize)]
+struct IndexedReference {
+    i: usize,
+    #[serde(flatten)]
+    reference: StructuredReference,
 }
 
 #[cfg(test)]
@@ -151,7 +163,7 @@ mod tests {
         json!({"choices": [{"message": {"role": "assistant", "content": text}}]})
     }
 
-    const PARSED: &str = r#"[{"authors":["D. Kingma","J. Ba"],"title":"Adam: A Method for Stochastic Optimization","venue":"ICLR","year":2015,"doi":null,"arxiv_id":"1412.6980","url":null}, null]"#;
+    const PARSED: &str = r#"[{"i":1,"authors":["D. Kingma","J. Ba"],"title":"Adam: A Method for Stochastic Optimization","venue":"ICLR","year":2015,"doi":null,"arxiv_id":"1412.6980","url":null}]"#;
 
     #[tokio::test]
     async fn parses_via_llm_then_serves_from_cache() {
@@ -196,30 +208,29 @@ mod tests {
     #[tokio::test]
     async fn chunks_large_batches_and_concatenates() {
         let server = MockServer::start().await;
-        fn null_array(n: usize) -> String {
-            format!("[{}]", vec!["null"; n].join(","))
-        }
         // 55 refs -> chunks of 25/25/5, one LLM call each. Chunks 2 and 3 are
         // recognized by their first entry; chunk 1 falls through to the
-        // catch-all mounted last. Each reply length matches the CHUNK — the
-        // whole point: per-chunk validation instead of one fragile 55-count.
+        // catch-all mounted last. Replies use chunk-local indexes; an entry
+        // the model skips (or an empty reply) is simply null in the output.
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .and(body_string_contains("REF-26 "))
-            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(&null_array(25))))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(
+                r#"[{"i":1,"title":"chunk2-first","authors":[],"venue":null,"year":null,"doi":null,"arxiv_id":null,"url":null}]"#,
+            )))
             .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .and(body_string_contains("REF-51 "))
-            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(&null_array(5))))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply("[]")))
             .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(&null_array(25))))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply("[]")))
             .expect(1)
             .mount(&server)
             .await;
@@ -229,6 +240,9 @@ mod tests {
 
         let out = svc.parse("p1", &refs).await.unwrap();
         assert_eq!(out.len(), 55);
+        // chunk-local index 1 of chunk 2 = overall entry 26
+        assert_eq!(out[25].as_ref().unwrap().title.as_deref(), Some("chunk2-first"));
+        assert!(out[0].is_none());
         let refs_json = serde_json::to_string(&refs).unwrap();
         assert!(store::get(&pool, "p1", &refs_json).await.unwrap().is_some());
     }
@@ -236,7 +250,7 @@ mod tests {
     #[tokio::test]
     async fn tolerates_explicit_null_authors() {
         let server = MockServer::start().await;
-        let reply = r#"[{"authors":null,"title":"T","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#;
+        let reply = r#"[{"i":1,"authors":null,"title":"T","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(reply)))
@@ -250,18 +264,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrong_length_array_is_an_error() {
+    async fn unindexed_entries_become_null_and_bad_indexes_are_dropped() {
         let server = MockServer::start().await;
+        // Model omits entry 2, duplicates entry 1, and invents entry 99:
+        // entry 1 = first occurrence wins; entry 2 = null; 99 dropped.
+        let reply = r#"[
+            {"i":1,"title":"First","authors":[],"venue":null,"year":null,"doi":null,"arxiv_id":null,"url":null},
+            {"i":1,"title":"Dup","authors":[],"venue":null,"year":null,"doi":null,"arxiv_id":null,"url":null},
+            {"i":99,"title":"Ghost","authors":[],"venue":null,"year":null,"doi":null,"arxiv_id":null,"url":null}
+        ]"#;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply("[null]")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(reply)))
             .mount(&server)
             .await;
         let pool = crate::citations::store::tests_pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
-        assert!(svc
+        let out = svc
             .parse("p1", &["a".to_string(), "b".to_string()])
             .await
-            .is_err());
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].as_ref().unwrap().title.as_deref(), Some("First"));
+        assert!(out[1].is_none());
     }
 }
