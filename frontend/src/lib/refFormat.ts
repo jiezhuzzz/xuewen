@@ -1,37 +1,10 @@
+import { titleCase } from 'title-case';
 import type { StructuredReference } from './types';
 
-/** Words kept lowercase in title case (articles, conjunctions, short
- *  prepositions — AP-style), unless first/last or after a colon/period. */
-const SMALL_WORDS = new Set([
-  'a', 'an', 'the', 'and', 'but', 'or', 'nor', 'for', 'so', 'yet',
-  'as', 'at', 'by', 'in', 'of', 'on', 'per', 'to', 'up', 'via', 'vs',
-]);
-
 /** Display title case for reference titles that arrive in sentence case.
- *  Only fully-lowercase words are touched — acronyms (PGFUZZ), identifiers
- *  (GPT-4), and mixed-case words (eBPF, McMahan, iOS) pass through — so a
- *  title that already carries intentional casing is never mangled. */
-export function titleCase(title: string): string {
-  const words = title.split(' ');
-  const last = words.length - 1;
-  let afterBreak = false; // previous word ended a clause (colon/period/question)
-  return words
-    .map((word, i) => {
-      const force = i === 0 || i === last || afterBreak;
-      afterBreak = /[:.?!]$/.test(word);
-      // Hyphen parts are words too: "policy-guided" → "Policy-Guided",
-      // "state-of-the-art" → "State-of-the-Art".
-      return word
-        .split('-')
-        .map((part, j) => {
-          if (!/^[a-z]/.test(part) || /[A-Z0-9]/.test(part)) return part; // not fully lowercase
-          if (!(force && j === 0) && SMALL_WORDS.has(part.replace(/[^a-z]/g, ''))) return part;
-          return part.charAt(0).toUpperCase() + part.slice(1);
-        })
-        .join('-');
-    })
-    .join(' ');
-}
+ *  `title-case` preserves intentional casing (PGFUZZ, GPT-4, eBPF, iOS) and
+ *  keeps small words lowercase except first/last or after a colon. */
+export { titleCase };
 
 /** One or two authors verbatim; three or more collapse to "First, …, Last". */
 export function authorLine(authors: string[]): string {
