@@ -240,5 +240,45 @@ export function buildCitationData(links: GotoLink[], pages: PageText[], refStart
     markers.push({ pageIndex: l.pageIndex, x: l.x, y: l.y, width: l.width, height: l.height, refIndex: ref.index });
   }
 
-  return { references, markers };
+  return { references, markers: coalesceMarkers(markers) };
+}
+
+// natbib/hyperref splits one author-year citation into TWO link annotations
+// (the author part and the year part) that share a destination, so
+// "(Kang et al., 2022)" would render as two seemingly distinct hover boxes.
+// Neighboring cites in a group sit just as close (~3pt), so proximity alone
+// cannot distinguish — merging keys on the SAME target reference.
+const MERGE_GAP = 12; // max horizontal gap (PDF points) between fragments
+
+/** Merge markers that target the same reference, share a visual line
+ *  (vertical overlap), and sit within MERGE_GAP horizontally. */
+export function coalesceMarkers(markers: Marker[]): Marker[] {
+  const byGroup = new Map<string, Marker[]>();
+  for (const m of markers) {
+    const key = `${m.pageIndex}:${m.refIndex}`;
+    const arr = byGroup.get(key) ?? [];
+    arr.push(m);
+    byGroup.set(key, arr);
+  }
+  const out: Marker[] = [];
+  for (const group of byGroup.values()) {
+    group.sort((a, b) => a.y - b.y || a.x - b.x);
+    let cur: Marker | null = null;
+    for (const m of group) {
+      const sameLine =
+        cur !== null && m.y < cur.y + cur.height && cur.y < m.y + m.height;
+      if (cur && sameLine && m.x - (cur.x + cur.width) <= MERGE_GAP && m.x >= cur.x) {
+        const right = Math.max(cur.x + cur.width, m.x + m.width);
+        const bottom = Math.max(cur.y + cur.height, m.y + m.height);
+        cur.y = Math.min(cur.y, m.y);
+        cur.width = right - cur.x;
+        cur.height = bottom - cur.y;
+      } else {
+        if (cur) out.push(cur);
+        cur = { ...m };
+      }
+    }
+    if (cur) out.push(cur);
+  }
+  return out;
 }

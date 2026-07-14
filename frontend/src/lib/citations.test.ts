@@ -251,3 +251,45 @@ describe('two-column bibliographies', () => {
     expect(data.references).toHaveLength(2);
   });
 });
+
+describe('split author-year link annotations (natbib/hyperref)', () => {
+  // Real geometry from li2025iris.pdf: "(Kang et al., 2022; Johnson et al.,
+  // 2013)" carries FOUR link annotations — author part + year part per cite,
+  // each pair sharing one destination. One citation must render as ONE
+  // hover box; the neighboring cite (also only ~3pt away) must stay separate
+  // because it targets a different reference.
+  const bib = page(5, 600, 800, [
+    { text: 'References', x: 50, y: 40, width: 90, height: 16 },
+    { text: 'Kang et al. Detecting. 2022.', x: 50, y: 100, width: 250, height: 12 },
+    { text: 'Johnson et al. Why dont. 2013.', x: 50, y: 130, width: 250, height: 12 },
+  ]);
+  const links: GotoLink[] = [
+    // "Kang et al.," + "2022" → same dest
+    { pageIndex: 1, x: 139, y: 645, width: 45, height: 11, destPageIndex: 5, destY: 100, destX: 50 },
+    { pageIndex: 1, x: 187, y: 645, width: 22, height: 11, destPageIndex: 5, destY: 100, destX: 50 },
+    // "Johnson et al.," + "2013" → a different dest, only 3pt to the right
+    { pageIndex: 1, x: 212, y: 645, width: 56, height: 11, destPageIndex: 5, destY: 130, destX: 50 },
+    { pageIndex: 1, x: 271, y: 645, width: 22, height: 11, destPageIndex: 5, destY: 130, destX: 50 },
+  ];
+  const refStart = { pageIndex: 5, y: 40, x: 50 };
+
+  it('coalesces same-line fragments of ONE citation into one marker', () => {
+    const data = buildCitationData(links, [bib], refStart);
+    expect(data.references).toHaveLength(2);
+    expect(data.markers).toHaveLength(2);
+    const kang = data.markers.find((m) => m.refIndex === 0)!;
+    expect(kang.x).toBe(139);
+    expect(kang.x + kang.width).toBeCloseTo(209, 5); // spans author + year
+    const johnson = data.markers.find((m) => m.refIndex === 1)!;
+    expect(johnson.x).toBe(212); // NOT merged into the kang box
+  });
+
+  it('does not merge same-ref markers on different lines', () => {
+    const wrapped: GotoLink[] = [
+      { pageIndex: 1, x: 480, y: 645, width: 45, height: 11, destPageIndex: 5, destY: 100, destX: 50 },
+      { pageIndex: 1, x: 108, y: 660, width: 22, height: 11, destPageIndex: 5, destY: 100, destX: 50 },
+    ];
+    const data = buildCitationData(wrapped, [bib], refStart);
+    expect(data.markers).toHaveLength(2);
+  });
+});
