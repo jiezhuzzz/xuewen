@@ -74,6 +74,78 @@ pub(super) fn universal_fields(entry: &str) -> UniversalFields {
     }
 }
 
+/// Word endings that do NOT close a sentence even before ". ".
+const ABBREVS: &[&str] = &[
+    "proc", "conf", "symp", "int", "intl", "trans", "vol", "no", "pp", "ed", "eds", "univ", "dept",
+    "rev", "jr", "sr", "st",
+];
+
+/// "J." (initials, incl. "D.P"), "(J" and known abbreviations don't end a sentence.
+fn is_initial_or_abbrev(word: &str) -> bool {
+    let w = word.trim_start_matches(['(', '[', '"', '"', '\'']);
+    let alpha = w.chars().filter(|c| c.is_alphabetic()).count();
+    if alpha == 0 {
+        return false;
+    }
+    let all_upper = w
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .all(|c| c.is_uppercase());
+    if all_upper && alpha <= 3 && w.chars().count() <= 5 {
+        return true;
+    }
+    ABBREVS.contains(&w.trim_end_matches('.').to_ascii_lowercase().as_str())
+}
+
+/// Split at ". " boundaries that actually end a sentence.
+pub(super) fn split_sentences(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for (i, c) in s.char_indices() {
+        if c != '.' {
+            continue;
+        }
+        if !s[i + 1..].chars().next().is_none_or(|c| c.is_whitespace()) {
+            continue; // mid-token period: DOI, URL, "1.5"
+        }
+        let prev = s[start..i].split_whitespace().last().unwrap_or("");
+        if is_initial_or_abbrev(prev) {
+            continue;
+        }
+        let seg = s[start..i].trim();
+        if !seg.is_empty() {
+            out.push(seg.to_string());
+        }
+        start = i + 1;
+    }
+    let tail = s[start..].trim().trim_end_matches('.').trim();
+    if !tail.is_empty() {
+        out.push(tail.to_string());
+    }
+    out
+}
+
+/// "A and B", "A, B, and C", "A & B" → individual names; "et al." dropped.
+pub(super) fn split_authors(s: &str) -> Vec<String> {
+    s.replace(" and ", ", ")
+        .replace(" & ", ", ")
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && !t.trim_end_matches('.').eq_ignore_ascii_case("et al"))
+        .map(String::from)
+        .collect()
+}
+
+/// Strict name shape: uppercase present, sane length, no digits/parens.
+pub(super) fn looks_like_name(a: &str) -> bool {
+    let n = a.chars().count();
+    (2..=60).contains(&n)
+        && a.chars().any(|c| c.is_uppercase())
+        && !a
+            .chars()
+            .any(|c| c.is_ascii_digit() || c == '(' || c == ')')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +192,53 @@ mod tests {
     fn universal_fields_absent_when_absent() {
         let u = universal_fields("garbage entry with no fields");
         assert!(u.year.is_none() && u.doi.is_none() && u.arxiv_id.is_none() && u.url.is_none());
+    }
+
+    #[test]
+    fn split_sentences_respects_initials_and_abbrevs() {
+        // "D." and "J." are initials, "Ba." ends the author sentence.
+        assert_eq!(
+            split_sentences("D. P. Kingma and J. Ba. Adam: A method. ICLR, 2015"),
+            vec!["D. P. Kingma and J. Ba", "Adam: A method", "ICLR, 2015"]
+        );
+        // "Proc." and "vol." don't split; "et al." doesn't split.
+        assert_eq!(
+            split_sentences("J. Smith et al. Title here. In Proc. of CCS, vol. 3, 2020"),
+            vec![
+                "J. Smith et al",
+                "Title here",
+                "In Proc. of CCS, vol. 3, 2020"
+            ]
+        );
+        // Periods not followed by whitespace (DOIs, URLs) never split.
+        assert_eq!(
+            split_sentences("See 10.1145/1234.5678 now"),
+            vec!["See 10.1145/1234.5678 now"]
+        );
+    }
+
+    #[test]
+    fn split_authors_handles_and_ampersand_etal() {
+        assert_eq!(
+            split_authors("D. Kingma and J. Ba"),
+            vec!["D. Kingma", "J. Ba"]
+        );
+        assert_eq!(
+            split_authors("Martín Abadi, Andy Chu, and Li Zhang"),
+            vec!["Martín Abadi", "Andy Chu", "Li Zhang"]
+        );
+        assert_eq!(split_authors("A. One & B. Two"), vec!["A. One", "B. Two"]);
+        assert_eq!(split_authors("J. Smith, et al."), vec!["J. Smith"]);
+    }
+
+    #[test]
+    fn name_shape_rejects_junk() {
+        assert!(looks_like_name("D. Kingma"));
+        assert!(looks_like_name("Martín Abadi"));
+        assert!(looks_like_name("KINGMA, D")); // small-caps extraction
+        assert!(!looks_like_name("J. (2015)")); // natbib year glued to initial
+        assert!(!looks_like_name("x"));
+        assert!(!looks_like_name("3rd Workshop"));
+        assert!(!looks_like_name("proceedings of the acm")); // no uppercase
     }
 }
