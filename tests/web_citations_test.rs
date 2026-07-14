@@ -10,13 +10,31 @@ fn chat_reply(text: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn parses_references_and_caches() {
+async fn parses_references_heuristically_without_llm() {
+    let (pool, root) = common::pool_and_root_with_paper("p1").await;
+    // Plain router: no LLM anywhere - heuristics answer.
+    let server = TestServer::new(xuewen::web::build_router(pool, root)).unwrap();
+    let body = json!({"references": [
+        "[1] D. Kingma and J. Ba, \"Adam: A method for stochastic optimization,\" in Proc. of ICLR, 2015."
+    ]});
+    let resp = server.post("/api/papers/p1/citations").json(&body).await;
+    resp.assert_status_ok();
+    let v: serde_json::Value = resp.json();
+    assert_eq!(
+        v["references"][0]["title"],
+        "Adam: A method for stochastic optimization"
+    );
+    assert_eq!(v["references"][0]["year"], 2015);
+}
+
+#[tokio::test]
+async fn parses_leftovers_via_llm_and_caches() {
     let upstream = MockServer::start().await;
-    let parsed = r#"[{"i":1,"authors":["A. Author"],"title":"Adam","venue":"ICLR","year":2015,"doi":null,"arxiv_id":null,"url":null}]"#;
+    let parsed = r#"[{"i":1,"authors":["A. Author"],"title":"Recovered","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(parsed)))
-        .expect(1)
+        .expect(1) // second POST below must hit the cache
         .mount(&upstream)
         .await;
 
@@ -25,34 +43,21 @@ async fn parses_references_and_caches() {
     let server =
         TestServer::new(xuewen::web::build_router_with_citations(pool, root, svc)).unwrap();
 
-    // No year/DOI/arXiv id, so the heuristic parser fails validation and
-    // this entry is a leftover routed to the (mocked) LLM.
-    let body = json!({"references": ["[1] A. Author. Adam. ICLR."]});
+    // Heuristically unparseable (no anchors, no year) -> goes to the LLM.
+    let body = json!({"references": ["%% garbled fragment %%"]});
     let resp = server.post("/api/papers/p1/citations").json(&body).await;
     resp.assert_status_ok();
     let v: serde_json::Value = resp.json();
-    assert_eq!(v["references"][0]["title"], "Adam");
+    assert_eq!(v["references"][0]["title"], "Recovered");
 
-    // Second call: cache hit — the upstream mock's .expect(1) enforces no 2nd LLM call.
     let resp2 = server.post("/api/papers/p1/citations").json(&body).await;
     resp2.assert_status_ok();
 }
 
 #[tokio::test]
-async fn unconfigured_returns_503_and_unknown_paper_404() {
+async fn unknown_paper_is_404() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    // Plain router: no citations service.
-    let server = TestServer::new(xuewen::web::build_router(pool.clone(), root.clone())).unwrap();
-    let resp = server
-        .post("/api/papers/p1/citations")
-        .json(&json!({"references": ["x"]}))
-        .await;
-    resp.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
-
-    let upstream = MockServer::start().await;
-    let svc = xuewen::citations::CitationsService::for_tests(pool.clone(), &upstream.uri(), "m");
-    let server =
-        TestServer::new(xuewen::web::build_router_with_citations(pool, root, svc)).unwrap();
+    let server = TestServer::new(xuewen::web::build_router(pool, root)).unwrap();
     let resp = server
         .post("/api/papers/nope/citations")
         .json(&json!({"references": ["x"]}))
