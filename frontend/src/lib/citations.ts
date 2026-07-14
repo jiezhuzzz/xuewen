@@ -175,8 +175,20 @@ export interface CitationData { references: Reference[]; markers: Marker[]; }
 // this many PDF points vertically (one line of slack).
 const DEST_EPSILON = 6;
 
-interface CmPos { col: number; y: number; x: number; }
-const cmCompare = (a: CmPos, b: CmPos) => a.col - b.col || a.y - b.y || a.x - b.x;
+export interface CmPos { col: number; y: number; x: number; }
+/** Column-major reading order: left column top→bottom, then right. The one
+ *  comparator for "which of two positions reads first" — shared with the
+ *  text-layer fallback (`textCitations.ts`). */
+export const cmCompare = (a: CmPos, b: CmPos) => a.col - b.col || a.y - b.y || a.x - b.x;
+
+/** Which column x falls in on a page whose runs are `runs`: 0 unless the
+ *  page is two-column and x is right of the midline. The one home for the
+ *  "is this two-column, and which side is x on" question. */
+export function columnOfX(runs: TextRun[], pageWidth: number, x: number): number {
+  const cols = assignColumns(runs, pageWidth);
+  const twoCol = [...cols.values()].some((c) => c === 1);
+  return twoCol && x >= pageWidth / 2 ? 1 : 0;
+}
 
 export function buildCitationData(links: GotoLink[], pages: PageText[], refStart: RefAnchor): CitationData {
   // Per-page column assignment + column-major (reading-order) run list.

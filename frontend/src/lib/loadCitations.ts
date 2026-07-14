@@ -1,6 +1,6 @@
 import { PdfActionType, PdfZoomMode, type PdfDocumentObject, type PdfLinkTarget, type PdfPageObject } from '@embedpdf/models';
 import {
-  assignColumns, buildCitationData, findReferencesStart,
+  buildCitationData, columnOfX, findReferencesStart,
   type CitationData, type GotoLink, type PageText, type RefAnchor, type TextRun, type UrlLink,
 } from './citations';
 import {
@@ -87,8 +87,13 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
   // reference's DOI/URL can be attached below).
   const links: GotoLink[] = [];
   const urlLinksByPage = new Map<number, UrlLink[]>();
-  for (const page of doc.pages) {
-    const annos = await engine.getPageAnnotations(doc, page).toPromise();
+  // Pages are independent — fetch all annotation lists concurrently instead
+  // of paying one serialized worker round-trip per page.
+  const annosByPage = await Promise.all(
+    doc.pages.map((page) => engine.getPageAnnotations(doc, page).toPromise()),
+  );
+  for (const [pageIdx, annos] of annosByPage.entries()) {
+    const page = doc.pages[pageIdx];
     for (const a of annos) {
       if (a.type !== LINK) continue;
       const rect = { x: a.rect.origin.x, y: a.rect.origin.y, width: a.rect.size.width, height: a.rect.size.height };
@@ -114,20 +119,27 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
     // heading often sits at the bottom of the previous page.
     const destPages = [...new Set(links.map((l) => l.destPageIndex))].sort((a, b) => a - b);
     const scanPages = destPages[0] > 0 ? [destPages[0] - 1, ...destPages] : destPages;
-    const pages: PageText[] = [];
-    for (const idx of scanPages) {
-      const page = doc.pages[idx];
-      if (!page) continue;
-      const textRuns = await engine.getPageTextRuns(doc, page).toPromise();
-      const runs: TextRun[] = textRuns.runs.map((r) => ({
-        text: r.text,
-        x: r.rect.origin.x,
-        y: r.rect.origin.y,
-        width: r.rect.size.width,
-        height: r.rect.size.height,
-      }));
-      pages.push({ pageIndex: idx, width: page.size.width, height: page.size.height, runs, urlLinks: urlLinksByPage.get(idx) ?? [] });
-    }
+    // Same concurrency as pass 1: the per-page text-run reads are independent.
+    const pages: PageText[] = (
+      await Promise.all(
+        scanPages.map(async (idx) => {
+          const page = doc.pages[idx];
+          if (!page) return null;
+          const textRuns = await engine.getPageTextRuns(doc, page).toPromise();
+          const runs: TextRun[] = textRuns.runs.map((r) => ({
+            text: r.text,
+            x: r.rect.origin.x,
+            y: r.rect.origin.y,
+            width: r.rect.size.width,
+            height: r.rect.size.height,
+          }));
+          return {
+            pageIndex: idx, width: page.size.width, height: page.size.height,
+            runs, urlLinks: urlLinksByPage.get(idx) ?? [],
+          };
+        }),
+      )
+    ).filter((p): p is PageText => p !== null);
 
     const refStart = findReferencesStart(pages);
     if (refStart) {
@@ -207,7 +219,5 @@ async function loadCitationsFromText(
 }
 
 function colOfAnchor(p: PageText, a: RefAnchor): number {
-  const cols = assignColumns(p.runs, p.width);
-  const twoCol = [...cols.values()].some((c) => c === 1);
-  return twoCol && a.x >= p.width / 2 ? 1 : 0;
+  return columnOfX(p.runs, p.width, a.x);
 }
