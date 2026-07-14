@@ -157,14 +157,14 @@ pub(super) enum Style {
 
 /// IEEE titles are quoted (straight or curly).
 pub(super) static QUOTED_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"[""]([^"""]{4,}?)[""]"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"["\u{201C}]([^"\u{201C}\u{201D}]{4,}?)["\u{201D}]"#).unwrap());
 /// ACM: leading author segment, then ". YYYY. ", then the rest.
 pub(super) static ACM_HEAD_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)^(.{3,300}?)\.\s+((19|20)\d{2})\.\s+(.+)$").unwrap());
 /// LNCS entries start "Lastname, F." — full signature also needs the ".:"
 /// that closes the author block.
 static LNCS_START_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\p{Lu}[\p{L}''-]+,\s*\p{Lu}\.").unwrap());
+    LazyLock::new(|| Regex::new(r"^\p{Lu}[\p{L}'\u{2019}-]+,\s*\p{Lu}\.").unwrap());
 
 fn style_of_entry(e: &str) -> Style {
     if QUOTED_RE.is_match(e) {
@@ -390,5 +390,15 @@ mod tests {
     fn empty_entries_detect_nothing() {
         assert_eq!(detect_style(&[], None), None);
         assert_eq!(detect_style(&[], Some("ACM CCS")), None);
+    }
+
+    #[test]
+    fn style_signatures_accept_curly_punctuation() {
+        // Curly-quoted IEEE title (U+201C/U+201D) must vote Ieee.
+        let e1 = "A. Author, \u{201C}A curly quoted title,\u{201D} in Proc. X, 2020.";
+        assert_eq!(detect_style(&[e1], None), Some(Style::Ieee));
+        // Curly apostrophe (U+2019) in an LNCS lead surname must vote Lncs.
+        let e2 = "O\u{2019}Brien, K.: Some title here. In: ESORICS (2019)";
+        assert_eq!(detect_style(&[e2], None), Some(Style::Lncs));
     }
 }
