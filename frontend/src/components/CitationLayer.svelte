@@ -35,7 +35,7 @@
      is a % of the page so it tracks zoom automatically. pointer-events only on
      the boxes so text selection underneath still works. -->
 <div class="pointer-events-none absolute inset-0">
-  {#each markers as m (`${m.x},${m.y}`)}
+  {#each markers as m (`${m.x},${m.y},${m.refIndex}`)}
     <span
       role="link"
       tabindex="0"
