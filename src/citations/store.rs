@@ -3,14 +3,20 @@
 use anyhow::Result;
 use sqlx::SqlitePool;
 
-/// Cached parse for `paper_id`, only if the stored input matches exactly.
-pub async fn get(pool: &SqlitePool, paper_id: &str, refs_json: &str) -> Result<Option<String>> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT refs, parsed FROM citation_parses WHERE paper_id = ?")
+/// Cached (parsed, provenance) for `paper_id`, only if the stored input
+/// matches exactly. Provenance is the `model` column: `heuristic-v1` or
+/// `heuristic-v1+<model>`.
+pub async fn get(
+    pool: &SqlitePool,
+    paper_id: &str,
+    refs_json: &str,
+) -> Result<Option<(String, String)>> {
+    let row: Option<(String, String, String)> =
+        sqlx::query_as("SELECT refs, parsed, model FROM citation_parses WHERE paper_id = ?")
             .bind(paper_id)
             .fetch_optional(pool)
             .await?;
-    Ok(row.and_then(|(refs, parsed)| (refs == refs_json).then_some(parsed)))
+    Ok(row.and_then(|(refs, parsed, model)| (refs == refs_json).then_some((parsed, model))))
 }
 
 /// Insert or replace a paper's cached parse.
@@ -85,8 +91,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            get(&pool, "p1", r#"["a","b"]"#).await.unwrap().as_deref(),
-            Some(r#"[null,null]"#)
+            get(&pool, "p1", r#"["a","b"]"#).await.unwrap(),
+            Some((r#"[null,null]"#.to_string(), "m".to_string()))
         );
         // Different input (changed PDF) ⇒ miss.
         assert!(get(&pool, "p1", r#"["a","c"]"#).await.unwrap().is_none());
@@ -95,8 +101,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            get(&pool, "p1", r#"["a","c"]"#).await.unwrap().as_deref(),
-            Some(r#"[null]"#)
+            get(&pool, "p1", r#"["a","c"]"#).await.unwrap(),
+            Some((r#"[null]"#.to_string(), "m".to_string()))
         );
     }
 

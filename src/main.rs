@@ -515,10 +515,10 @@ async fn main() -> Result<()> {
             if chat.is_none() {
                 tracing::info!("paper chat disabled (no usable [[ai.chat.models]])");
             }
-            let citations = xuewen::citations::CitationsService::from_config(pool.clone(), &cfg);
-            if citations.is_none() {
-                tracing::info!("citation parsing disabled (no [ai.citations])");
-            }
+            let citations = Some(xuewen::citations::CitationsService::from_config(
+                pool.clone(),
+                &cfg,
+            ));
             web::serve(
                 &host,
                 port,

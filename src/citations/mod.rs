@@ -40,8 +40,14 @@ where
 
 pub struct CitationsService {
     pool: SqlitePool,
-    llm: crate::llm::LlmClient,
+    /// LLM fallback for entries the heuristic can't parse; `None` (no
+    /// `[ai.citations]`) leaves those entries null.
+    llm: Option<crate::llm::LlmClient>,
 }
+
+/// Provenance tag stored in the cache's `model` column. Bump the version to
+/// force reparse after heuristic improvements.
+const HEURISTIC_VERSION: &str = "heuristic-v1";
 
 /// Max bibliography entries per LLM call. Large batches make the model drop
 /// or merge entries (observed live: 111 in → 69 out; 68 → 52), which trips
@@ -53,53 +59,114 @@ const SYSTEM: &str = "You convert bibliography entries from research papers into
 Output ONLY a JSON array — no prose, no markdown fences.";
 
 impl CitationsService {
-    /// `None` when `[ai.citations]` is absent (silently) or present but
-    /// missing a model/API key (warns) — mirrors SummaryService.
-    pub fn from_config(pool: SqlitePool, cfg: &Config) -> Option<Arc<Self>> {
-        let use_ = cfg.ai.citations.as_ref()?;
-        let r = cfg.ai.resolve(use_);
-        let (Some(model), Some(key)) = (r.model.clone(), r.api_key.clone()) else {
-            tracing::warn!("[ai.citations] has no model or API key — citation parsing disabled");
-            return None;
-        };
-        let llm = crate::llm::LlmClient::new(&r.base_url, &model, Some(key))
-            .with_reasoning_effort(r.reasoning_effort.clone());
-        Some(Arc::new(Self { pool, llm }))
+    /// Always available — the heuristic needs no config. `[ai.citations]`
+    /// adds the LLM fallback; absent (silently) or present but missing a
+    /// model/API key (warns) → heuristics only.
+    pub fn from_config(pool: SqlitePool, cfg: &Config) -> Arc<Self> {
+        let llm = cfg.ai.citations.as_ref().and_then(|use_| {
+            let r = cfg.ai.resolve(use_);
+            match (r.model.clone(), r.api_key.clone()) {
+                (Some(model), Some(key)) => Some(
+                    crate::llm::LlmClient::new(&r.base_url, &model, Some(key))
+                        .with_reasoning_effort(r.reasoning_effort.clone()),
+                ),
+                _ => {
+                    tracing::warn!(
+                        "[ai.citations] has no model or API key — LLM fallback disabled"
+                    );
+                    None
+                }
+            }
+        });
+        if llm.is_none() {
+            tracing::info!("citation parsing: heuristics only (no [ai.citations] LLM fallback)");
+        }
+        Arc::new(Self { pool, llm })
+    }
+
+    /// Heuristics-only service (no LLM). Production path when
+    /// `[ai.citations]` is absent; also used by test routers.
+    pub fn heuristic_only(pool: SqlitePool) -> Arc<Self> {
+        Arc::new(Self { pool, llm: None })
     }
 
     /// Keyless client pointed at a mock server. Test support only.
     pub fn for_tests(pool: SqlitePool, base_url: &str, model: &str) -> Arc<Self> {
         Arc::new(Self {
             pool,
-            llm: crate::llm::LlmClient::new(base_url, model, None),
+            llm: Some(crate::llm::LlmClient::new(base_url, model, None)),
         })
     }
 
-    /// Parse `refs` for `paper_id`: exact-input cache hit, or LLM calls in
-    /// `CHUNK_SIZE` batches whose concatenation is cached. The result is
-    /// index-aligned with `refs`.
+    /// Parse `refs` for `paper_id`: exact-input cache hit, else heuristics
+    /// (style vote seeded by `venue`), then the LLM — in `CHUNK_SIZE`
+    /// batches — for only the entries heuristics couldn't parse. The result
+    /// is index-aligned with `refs`.
     pub async fn parse(
         &self,
         paper_id: &str,
         refs: &[String],
+        venue: Option<&str>,
     ) -> Result<Vec<Option<StructuredReference>>> {
         let refs_json = serde_json::to_string(refs)?;
-        if let Some(cached) = store::get(&self.pool, paper_id, &refs_json).await? {
-            return Ok(serde_json::from_str(&cached)?);
+        if let Some((cached, provenance)) = store::get(&self.pool, paper_id, &refs_json).await? {
+            let parsed: Vec<Option<StructuredReference>> = serde_json::from_str(&cached)?;
+            // A heuristics-only row that still has nulls is upgradeable once
+            // an LLM is configured — fall through and reparse.
+            let upgradeable = self.llm.is_some()
+                && provenance == HEURISTIC_VERSION
+                && parsed.iter().any(|p| p.is_none());
+            if !upgradeable {
+                return Ok(parsed);
+            }
         }
-        let mut parsed = Vec::with_capacity(refs.len());
-        for chunk in refs.chunks(CHUNK_SIZE) {
-            parsed.extend(self.parse_chunk(chunk).await?);
+        let mut parsed = heuristic::parse_all(refs, venue);
+        let leftover: Vec<usize> = parsed
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| p.is_none().then_some(i))
+            .collect();
+        let mut provenance = HEURISTIC_VERSION.to_string();
+        if let Some(llm) = &self.llm {
+            if !leftover.is_empty() {
+                let leftover_refs: Vec<String> =
+                    leftover.iter().map(|&i| refs[i].clone()).collect();
+                match Self::parse_leftovers(llm, &leftover_refs).await {
+                    Ok(results) => {
+                        for (&slot, r) in leftover.iter().zip(results) {
+                            parsed[slot] = r;
+                        }
+                        provenance = format!("{HEURISTIC_VERSION}+{}", llm.model());
+                    }
+                    Err(e) => {
+                        // Partial result, cache skipped: the next open of
+                        // this paper retries the LLM part.
+                        tracing::warn!("citation LLM fallback failed: {e}");
+                        return Ok(parsed);
+                    }
+                }
+            }
         }
         store::upsert(
             &self.pool,
             paper_id,
             &refs_json,
             &serde_json::to_string(&parsed)?,
-            self.llm.model(),
+            &provenance,
         )
         .await?;
         Ok(parsed)
+    }
+
+    async fn parse_leftovers(
+        llm: &crate::llm::LlmClient,
+        refs: &[String],
+    ) -> Result<Vec<Option<StructuredReference>>> {
+        let mut out = Vec::with_capacity(refs.len());
+        for chunk in refs.chunks(CHUNK_SIZE) {
+            out.extend(Self::parse_chunk(llm, chunk).await?);
+        }
+        Ok(out)
     }
 
     /// One LLM call for one chunk. Results are INDEX-KEYED, not positional:
@@ -108,7 +175,10 @@ impl CitationsService {
     /// entries). Each returned object names its entry via `"i"`; entries the
     /// model skips stay null, duplicates keep the first, out-of-range are
     /// dropped — a miscount can no longer poison the whole chunk.
-    async fn parse_chunk(&self, refs: &[String]) -> Result<Vec<Option<StructuredReference>>> {
+    async fn parse_chunk(
+        llm: &crate::llm::LlmClient,
+        refs: &[String],
+    ) -> Result<Vec<Option<StructuredReference>>> {
         let numbered: String = refs
             .iter()
             .enumerate()
@@ -125,7 +195,7 @@ impl CitationsService {
              SKIP entries that are not parseable bibliography references — do not \
              invent placeholders for them.\n\n{numbered}"
         );
-        let text = self.llm.complete(SYSTEM, &user).await?;
+        let text = llm.complete(SYSTEM, &user).await?;
         let cleaned = text
             .trim()
             .trim_start_matches("```json")
@@ -183,17 +253,17 @@ mod tests {
             "garbage".to_string(),
         ];
 
-        let out = svc.parse("p1", &refs).await.unwrap();
+        let out = svc.parse("p1", &refs, None).await.unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].as_ref().unwrap().year, Some(2015));
         assert!(out[1].is_none());
 
-        let again = svc.parse("p1", &refs).await.unwrap(); // no second LLM call (mock .expect(1))
+        let again = svc.parse("p1", &refs, None).await.unwrap(); // no second LLM call (mock .expect(1))
         assert_eq!(again, out);
     }
 
     #[tokio::test]
-    async fn malformed_llm_output_errors_and_caches_nothing() {
+    async fn malformed_llm_output_returns_partial_and_caches_nothing() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
@@ -202,7 +272,10 @@ mod tests {
             .await;
         let pool = crate::citations::store::tests_pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
-        assert!(svc.parse("p1", &["x".to_string()]).await.is_err());
+        // LLM failure → heuristic partial (here: all-None) with NO cache
+        // write, so the next open retries.
+        let out = svc.parse("p1", &["x".to_string()], None).await.unwrap();
+        assert_eq!(out, vec![None]);
         assert!(store::get(&pool, "p1", r#"["x"]"#).await.unwrap().is_none());
     }
 
@@ -241,7 +314,7 @@ mod tests {
         let pool = crate::citations::store::tests_pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
 
-        let out = svc.parse("p1", &refs).await.unwrap();
+        let out = svc.parse("p1", &refs, None).await.unwrap();
         assert_eq!(out.len(), 55);
         // chunk-local index 1 of chunk 2 = overall entry 26
         assert_eq!(
@@ -264,7 +337,7 @@ mod tests {
             .await;
         let pool = crate::citations::store::tests_pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
-        let out = svc.parse("p1", &["x".to_string()]).await.unwrap();
+        let out = svc.parse("p1", &["x".to_string()], None).await.unwrap();
         assert_eq!(out[0].as_ref().unwrap().title.as_deref(), Some("T"));
         assert!(out[0].as_ref().unwrap().authors.is_empty());
     }
@@ -287,11 +360,96 @@ mod tests {
         let pool = crate::citations::store::tests_pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
         let out = svc
-            .parse("p1", &["a".to_string(), "b".to_string()])
+            .parse("p1", &["a".to_string(), "b".to_string()], None)
             .await
             .unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].as_ref().unwrap().title.as_deref(), Some("First"));
         assert!(out[1].is_none());
+    }
+
+    const IEEE_REF: &str = r#"[1] K. Kim and T. Kim, "PGFUZZ: Policy-guided fuzzing for robotic vehicles," in Proceedings of NDSS, 2021."#;
+    const IEEE_REF2: &str = r#"[2] D. Kingma and J. Ba, "Adam: A method for stochastic optimization," in Proc. of ICLR, 2015."#;
+    const GARBLED: &str = r#"[3] %%GARBLED FRAGMENT%% "with a quote," but nothing else"#;
+
+    #[tokio::test]
+    async fn heuristics_parse_without_any_llm() {
+        // No MockServer at all: heuristics must not do I/O.
+        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let svc = CitationsService::heuristic_only(pool.clone());
+        let refs = vec![IEEE_REF.to_string(), IEEE_REF2.to_string()];
+        let out = svc.parse("p1", &refs, None).await.unwrap();
+        assert_eq!(
+            out[0].as_ref().unwrap().title.as_deref(),
+            Some("PGFUZZ: Policy-guided fuzzing for robotic vehicles")
+        );
+        assert_eq!(out[1].as_ref().unwrap().year, Some(2015));
+        let (_, provenance) = store::get(&pool, "p1", &serde_json::to_string(&refs).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(provenance, "heuristic-v1");
+    }
+
+    #[tokio::test]
+    async fn llm_receives_only_the_leftovers() {
+        let server = MockServer::start().await;
+        // "1. [3] %%GARBLED…" proves the leftover list was renumbered from 1
+        // — i.e. the two heuristic successes were NOT sent.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_string_contains("1. [3] %%GARBLED"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(
+                r#"[{"i":1,"authors":["G. Author"],"title":"Recovered Title","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#,
+            )))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
+        let refs = vec![
+            IEEE_REF.to_string(),
+            IEEE_REF2.to_string(),
+            GARBLED.to_string(),
+        ];
+        let out = svc.parse("p1", &refs, None).await.unwrap();
+        assert!(out[0].is_some() && out[1].is_some()); // heuristic
+        assert_eq!(
+            out[2].as_ref().unwrap().title.as_deref(),
+            Some("Recovered Title")
+        );
+        let (_, provenance) = store::get(&pool, "p1", &serde_json::to_string(&refs).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(provenance, "heuristic-v1+m");
+    }
+
+    #[tokio::test]
+    async fn heuristic_only_cache_upgrades_once_llm_is_configured() {
+        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let refs = vec![IEEE_REF.to_string(), GARBLED.to_string()];
+        // Pass 1: heuristics only → entry 2 is null, cached as heuristic-v1.
+        let out = CitationsService::heuristic_only(pool.clone())
+            .parse("p1", &refs, None)
+            .await
+            .unwrap();
+        assert!(out[1].is_none());
+        // Pass 2: LLM configured → the heuristic-v1+nulls row reparses.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(
+                r#"[{"i":1,"authors":["G. Author"],"title":"Recovered Title","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#,
+            )))
+            .expect(1) // pass 3 below must be a cache hit
+            .mount(&server)
+            .await;
+        let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
+        let out2 = svc.parse("p1", &refs, None).await.unwrap();
+        assert!(out2[1].is_some());
+        // Pass 3: upgraded row (provenance has +m) is a plain cache hit.
+        let out3 = svc.parse("p1", &refs, None).await.unwrap();
+        assert_eq!(out3, out2);
     }
 }
