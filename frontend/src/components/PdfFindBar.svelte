@@ -41,13 +41,19 @@
   function close(): void {
     setFind(documentId, false);
   }
-  function onKeydown(e: KeyboardEvent): void {
+  // Owns its Esc anywhere inside the bar (input AND the prev/next/close
+  // buttons) — the global cascade (shortcuts.ts) runs before the
+  // editable-target check and would close info/zen instead.
+  function onBarKeydown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
-      // Owns its Esc — the global cascade (shortcuts.ts) runs before the
-      // editable-target check and would close info/zen instead.
       e.stopPropagation();
       close();
-    } else if (e.key === 'Enter') {
+    }
+  }
+  // Enter stays on the input only: Enter on a focused button must keep
+  // activating that button, not cycle matches.
+  function onKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
       e.preventDefault();
       if (e.shiftKey) prev();
       else next();
@@ -58,8 +64,14 @@
     'rounded-lg p-1.5 text-stone-600 hover:bg-parchment hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent dark:text-stone-300 dark:hover:bg-stone-800';
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -- the div is
+     not an interaction target; it only delegates Esc bubbling up from the
+     focused input/buttons so the bar can close without the global shortcut
+     handler also firing. -->
 <div
+  role="search"
   class="absolute left-1/2 top-14 z-20 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-stone-200 bg-paper/90 px-1.5 py-1 shadow backdrop-blur dark:border-stone-800 dark:bg-soot/90"
+  onkeydown={onBarKeydown}
 >
   <input
     bind:this={inputEl}
