@@ -9,6 +9,8 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
+use super::StructuredReference;
+
 /// `[12]` / `12.` entry markers left on entries by the frontend extraction.
 /// The `12.` form requires trailing whitespace so "1.5 Gbps…" survives.
 static MARKER_RE: LazyLock<Regex> =
@@ -214,6 +216,45 @@ pub(super) fn detect_style(entries: &[&str], venue: Option<&str>) -> Option<Styl
     venue.and_then(venue_family_style)
 }
 
+/// Venue tail noise: ", vol …", ", pp …", ", 2015", ", doi …".
+static VENUE_CUT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i),\s*(vol\b|no\.|pp\.|p\.|pages\b|doi\b|(19|20)\d{2}\b)").unwrap()
+});
+
+/// Trim a venue fragment: leading "In "/"In: ", trailing noise, punctuation.
+fn clean_venue(v: &str) -> Option<String> {
+    let v = v.trim();
+    let v = v
+        .strip_prefix("In: ")
+        .or_else(|| v.strip_prefix("in: "))
+        .unwrap_or(v);
+    let v = v
+        .strip_prefix("In ")
+        .or_else(|| v.strip_prefix("in "))
+        .unwrap_or(v);
+    let cut = VENUE_CUT_RE.find(v).map_or(v.len(), |m| m.start());
+    let v = v[..cut].trim().trim_end_matches([',', '.']).trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+/// IEEE: `A. Author and B. Author, "Title," in Venue, year.` The quoted
+/// title is the anchor; year comes from the universal pass.
+pub(super) fn parse_ieee(entry: &str) -> StructuredReference {
+    let Some(c) = QUOTED_RE.captures(entry) else {
+        return StructuredReference::default();
+    };
+    let m = c.get(0).unwrap();
+    let title = c[1].trim().trim_end_matches([',', '.']).trim().to_string();
+    let authors_part = entry[..m.start()].trim().trim_end_matches(',').trim();
+    let rest = entry[m.end()..].trim_start_matches([',', '.', ' ']);
+    StructuredReference {
+        authors: split_authors(authors_part),
+        title: Some(title),
+        venue: clean_venue(rest),
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,5 +441,39 @@ mod tests {
         // Curly apostrophe (U+2019) in an LNCS lead surname must vote Lncs.
         let e2 = "O\u{2019}Brien, K.: Some title here. In: ESORICS (2019)";
         assert_eq!(detect_style(&[e2], None), Some(Style::Lncs));
+    }
+
+    #[test]
+    fn parses_ieee_entries() {
+        let r = parse_ieee(
+            r#"K. Kim, T. Kim, and E. Fernandez, "PGFUZZ: Policy-guided fuzzing for robotic vehicles," in Proceedings of the Network and Distributed System Security Symposium (NDSS), 2021."#,
+        );
+        assert_eq!(
+            r.title.as_deref(),
+            Some("PGFUZZ: Policy-guided fuzzing for robotic vehicles")
+        );
+        assert_eq!(r.authors, vec!["K. Kim", "T. Kim", "E. Fernandez"]);
+        assert_eq!(
+            r.venue.as_deref(),
+            Some("Proceedings of the Network and Distributed System Security Symposium (NDSS)")
+        );
+
+        // Journal form: venue cut before ", vol."; curly quotes.
+        let j = parse_ieee(
+            "A. Author, \u{201C}A journal paper title,\u{201D} IEEE Transactions on Software Engineering, vol. 47, no. 3, pp. 1\u{2013}20, 2021.",
+        );
+        assert_eq!(j.title.as_deref(), Some("A journal paper title"));
+        assert_eq!(
+            j.venue.as_deref(),
+            Some("IEEE Transactions on Software Engineering")
+        );
+    }
+
+    #[test]
+    fn ieee_without_quotes_yields_default() {
+        assert_eq!(
+            parse_ieee("No quotes here at all, 2020."),
+            StructuredReference::default()
+        );
     }
 }
