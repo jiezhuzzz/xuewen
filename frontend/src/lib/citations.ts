@@ -66,7 +66,18 @@ export interface ClusteredLine { col: number; y: number; x: number; runs: TextRu
  * a full line-height apart, so they never merge.
  */
 export function clusterLines(runs: TextRun[], cols: Map<TextRun, number>): ClusteredLine[] {
-  const sorted = [...runs].sort(
+  // Rotated/vertical page furniture — e.g. IEEE Xplore's sidebar stamp, a
+  // 10×431pt run observed live (empc) — vertically overlaps EVERY body line
+  // in its column, and the accumulated-extent sweep below would chain the
+  // whole column into one franken-line, shuffling citation groups across
+  // paragraphs. A run far taller than the page's typical line AND taller
+  // than it is wide cannot be horizontal body text: drop it. (Median is per
+  // call, so a page whose only run is tall keeps it; drop-caps are ~1.2×,
+  // nowhere near the 5× bar.)
+  const heights = runs.map((r) => r.height).sort((a, b) => a - b);
+  const median = heights[Math.floor((heights.length - 1) / 2)] ?? 0;
+  const usable = runs.filter((r) => !(r.height > 5 * median && r.height > r.width));
+  const sorted = [...usable].sort(
     (a, b) => (cols.get(a) ?? 0) - (cols.get(b) ?? 0) || a.y - b.y,
   );
   const groups: { col: number; top: number; bottom: number; runs: TextRun[] }[] = [];
