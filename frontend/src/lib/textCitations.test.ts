@@ -104,4 +104,31 @@ describe('segmentReferences — author-year (hanging indent)', () => {
     ]);
     expect(segmentReferences([notBib], refStart)).toBeNull();
   });
+
+  it('segments two-column author-year bibliographies per column', () => {
+    // Left column: starts x=50, one continuation line at x=68. Right column:
+    // starts x=320, one continuation line at x=338. Globally the x=50 bucket
+    // (heading + 2 entry starts) outranks x=320 (2 entry starts), so the old
+    // global top-2-buckets logic picks {50, 320} as candidates and then the
+    // year-share tiebreak (right column is 100% years vs left's 67%, since
+    // "References" has no year) selects x=320 as the SOLE start column —
+    // dropping both left-column entries entirely and returning only 2
+    // references instead of 4. Per-column detection picks each column's own
+    // start-x independently and recovers all 4 entries.
+    const bib = page(2, 600, 800, [
+      { text: 'References', x: 50, y: 40, width: 90, height: 16 },
+      { text: 'Kingma, D. (2015). Adam: a method', x: 50, y: 80, width: 220, height: 12 },
+      { text: 'for stochastic optimization. ICLR.', x: 68, y: 100, width: 200, height: 12 },
+      { text: 'Devlin, J. (2019). BERT. NAACL.', x: 50, y: 130, width: 220, height: 12 },
+      { text: 'He, K. (2016). ResNet. CVPR.', x: 320, y: 40, width: 200, height: 12 },
+      { text: 'Vaswani, A. (2017). Attention is all', x: 320, y: 70, width: 220, height: 12 },
+      { text: 'you need. NeurIPS.', x: 338, y: 90, width: 140, height: 12 },
+    ]);
+    const seg = segmentReferences([bib], { pageIndex: 2, y: 40, x: 50 })!;
+    expect(seg).not.toBeNull();
+    expect(seg.style).toBe('authoryear');
+    expect(seg.references).toHaveLength(4);
+    expect(seg.references[2].rawText).toBe('He, K. (2016). ResNet. CVPR.');
+    expect(seg.references[3].rawText).toBe('Vaswani, A. (2017). Attention is all you need. NeurIPS.');
+  });
 });
