@@ -15,13 +15,31 @@ import type {
   StructuredReference,
 } from './types';
 
-export async function listPapers(f: Filters): Promise<PaperSummary[]> {
+/** `{error: "..."}` from the response body when present, else
+ *  `${fallback}: ${status}`. The one home for API error extraction. */
+async function errorFromResponse(res: Response, fallback: string): Promise<never> {
+  let msg = `${fallback}: ${res.status}`;
+  try {
+    const j = await res.json();
+    if (j && typeof j.error === 'string') msg = j.error;
+  } catch {
+    /* non-JSON error body */
+  }
+  throw new Error(msg);
+}
+
+/** The list-filter query params shared by /api/papers and /api/papers/export. */
+function filterParams(f: Filters): URLSearchParams {
   const params = new URLSearchParams();
   if (f.q.trim()) params.set('q', f.q.trim());
   if (f.status !== 'all') params.set('status', f.status);
   params.set('sort', f.sort);
   if (f.project && f.project !== 'all') params.set('project', f.project);
-  const res = await fetch(`/api/papers?${params.toString()}`);
+  return params;
+}
+
+export async function listPapers(f: Filters): Promise<PaperSummary[]> {
+  const res = await fetch(`/api/papers?${filterParams(f).toString()}`);
   if (!res.ok) throw new Error(`list failed: ${res.status}`);
   return res.json();
 }
@@ -51,16 +69,7 @@ export async function importPaper(file: File): Promise<ImportResult> {
   const body = new FormData();
   body.append('file', file, file.name);
   const res = await fetch('/api/papers', { method: 'POST', body });
-  if (!res.ok) {
-    let msg = `import failed: ${res.status}`;
-    try {
-      const j = await res.json();
-      if (j && typeof j.error === 'string') msg = j.error;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(msg);
-  }
+  if (!res.ok) return errorFromResponse(res, 'import failed');
   return res.json();
 }
 
@@ -70,16 +79,7 @@ export async function importUrl(input: string): Promise<ImportResult> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ input }),
   });
-  if (!res.ok) {
-    let msg = `import failed: ${res.status}`;
-    try {
-      const j = await res.json();
-      if (j && typeof j.error === 'string') msg = j.error;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(msg);
-  }
+  if (!res.ok) return errorFromResponse(res, 'import failed');
   return res.json();
 }
 
@@ -115,16 +115,7 @@ export async function identifyPaper(id: string, body: IdentifyBody): Promise<Pap
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    let msg = `identify failed: ${res.status}`;
-    try {
-      const j = await res.json();
-      if (j && typeof j.error === 'string') msg = j.error;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(msg);
-  }
+  if (!res.ok) return errorFromResponse(res, 'identify failed');
   return res.json();
 }
 
@@ -134,24 +125,13 @@ export async function listProjects(): Promise<Project[]> {
   return res.json();
 }
 
-async function projectError(res: Response, fallback: string): Promise<never> {
-  let msg = `${fallback}: ${res.status}`;
-  try {
-    const j = await res.json();
-    if (j && typeof j.error === 'string') msg = j.error;
-  } catch {
-    /* non-JSON error body */
-  }
-  throw new Error(msg);
-}
-
 export async function createProject(name: string, note: string | null): Promise<Project> {
   const res = await fetch('/api/projects', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name, note }),
   });
-  if (!res.ok) return projectError(res, 'create project failed');
+  if (!res.ok) return errorFromResponse(res, 'create project failed');
   return res.json();
 }
 
@@ -164,7 +144,7 @@ export async function updateProject(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) return projectError(res, 'update project failed');
+  if (!res.ok) return errorFromResponse(res, 'update project failed');
   return res.json();
 }
 
@@ -196,11 +176,7 @@ export async function exportPaper(id: string, fmt: BibFormat): Promise<string> {
 }
 
 export function exportUrl(f: Filters, fmt: BibFormat): string {
-  const params = new URLSearchParams();
-  if (f.q.trim()) params.set('q', f.q.trim());
-  if (f.status !== 'all') params.set('status', f.status);
-  if (f.project && f.project !== 'all') params.set('project', f.project);
-  params.set('sort', f.sort);
+  const params = filterParams(f);
   params.set('format', fmt);
   return `/api/papers/export?${params.toString()}`;
 }
@@ -243,6 +219,43 @@ export async function getSearchStatus(): Promise<SearchStatus> {
   const res = await fetch('/api/search/status');
   if (!res.ok) throw new Error(`search status failed: ${res.status}`);
   return res.json();
+}
+
+// --- chat (HTTP layer only; session/stream bookkeeping lives in chat.svelte.ts) ---
+
+export async function getChatModels(): Promise<{ available: boolean; models: unknown[] }> {
+  const res = await fetch('/api/chat/models');
+  if (!res.ok) throw new Error(`chat models failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getChatThread(paperId: string): Promise<unknown[]> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/chat`);
+  if (!res.ok) throw new Error(`chat thread failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteChatThread(paperId: string): Promise<void> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/chat`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`clear chat failed: ${res.status}`);
+}
+
+/** POST a chat message; returns the raw streaming Response (SSE body) —
+ *  the only endpoint whose caller needs the stream, so it alone hands the
+ *  Response back instead of parsed JSON. */
+export async function postChatMessage(
+  paperId: string,
+  body: { model_id: string | null; message: string },
+  signal: AbortSignal,
+): Promise<Response> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(`request failed (${res.status})`);
+  return res;
 }
 
 /** Parse extracted reference strings via the backend LLM service. Returns

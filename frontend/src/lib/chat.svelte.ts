@@ -1,3 +1,4 @@
+import { deleteChatThread, getChatModels, getChatThread, postChatMessage } from './api';
 import { readSse } from './sse';
 import { viewer } from './state.svelte';
 
@@ -53,9 +54,7 @@ let localId = -1;
 
 export async function loadChatModels(): Promise<void> {
   try {
-    const resp = await fetch('/api/chat/models');
-    if (!resp.ok) throw new Error(String(resp.status));
-    const body = (await resp.json()) as { available: boolean; models: ChatModelInfo[] };
+    const body = (await getChatModels()) as { available: boolean; models: ChatModelInfo[] };
     chat.models = body.models;
     chat.available = body.available && body.models.length > 0;
     const saved = localStorage.getItem('xuewen-chat-model');
@@ -89,9 +88,7 @@ export async function loadThread(paperId: string): Promise<void> {
   chat.busy = false;
   chat.error = null;
   try {
-    const resp = await fetch(`/api/papers/${encodeURIComponent(paperId)}/chat`);
-    if (!resp.ok) throw new Error(String(resp.status));
-    const rows = (await resp.json()) as ChatTurn[];
+    const rows = (await getChatThread(paperId)) as ChatTurn[];
     if (my === session) chat.messages = rows;
   } catch {
     if (my === session) {
@@ -115,14 +112,12 @@ export async function sendChatMessage(): Promise<void> {
   let failure: string | null = null;
   let completed = false;
   try {
-    const resp = await fetch(`/api/papers/${encodeURIComponent(chat.paperId)}/chat`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model_id: chat.modelId, message: text }),
-      signal: myAborter.signal,
-    });
-    if (!resp.ok || !resp.body) throw new Error(`request failed (${resp.status})`);
-    await readSse(resp.body, (e) => {
+    const resp = await postChatMessage(
+      chat.paperId,
+      { model_id: chat.modelId, message: text },
+      myAborter.signal,
+    );
+    await readSse(resp.body!, (e) => {
       if (my !== session) return;
       if (e.event === 'delta') {
         chat.streaming = (chat.streaming ?? '') + (JSON.parse(e.data).text ?? '');
@@ -178,10 +173,7 @@ export function stopChatStream(): void {
 export async function clearChatThread(): Promise<void> {
   if (!chat.paperId) return;
   try {
-    const resp = await fetch(`/api/papers/${encodeURIComponent(chat.paperId)}/chat`, {
-      method: 'DELETE',
-    });
-    if (!resp.ok) throw new Error(String(resp.status));
+    await deleteChatThread(chat.paperId);
     chat.messages = [];
     chat.error = null;
   } catch {
