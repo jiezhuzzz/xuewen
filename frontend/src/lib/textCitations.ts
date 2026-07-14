@@ -188,7 +188,7 @@ function expandGroup(group: string): number[] | null {
 
 /** Rect covering line chars [start, end): union of the runs' slices, with a
  *  proportional cut inside partially-covered runs. */
-function rectForSpan(
+export function rectForSpan(
   line: CmLine,
   start: number,
   end: number,
@@ -208,4 +208,77 @@ function rectForSpan(
   }
   if (x1 === Infinity) return null;
   return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+}
+
+export interface AyCandidate {
+  pageIndex: number; x: number; y: number; width: number; height: number;
+  citeText: string;
+}
+
+const PAREN_CITE = /\(([^()]{0,200}?(?:19|20)\d{2}[a-z]?[^()]{0,40})\)/g;
+const NARRATIVE_CITE = /\b([A-Z][\p{L}''-]+(?:\s+(?:and|&)\s+[A-Z][\p{L}''-]+|\s+et\s+al\.?)?)\s*\(\s*((?:19|20)\d{2})[a-z]?\s*\)/gu;
+
+/** Candidate author-year citation spans in body lines (not yet resolved). */
+export function findAuthorYearCandidates(bodyLines: CmLine[]): AyCandidate[] {
+  const out: AyCandidate[] = [];
+  for (const line of bodyLines) {
+    const spans: { start: number; end: number; citeText: string }[] = [];
+    for (const m of line.text.matchAll(NARRATIVE_CITE)) {
+      spans.push({ start: m.index!, end: m.index! + m[0].length, citeText: `${m[1]}, ${m[2]}` });
+    }
+    for (const m of line.text.matchAll(PAREN_CITE)) {
+      // skip if inside an already-captured narrative span
+      if (spans.some((s) => m.index! >= s.start && m.index! < s.end)) continue;
+      spans.push({ start: m.index!, end: m.index! + m[0].length, citeText: m[1] });
+    }
+    for (const s of spans) {
+      const rect = rectForSpan(line, s.start, s.end);
+      if (rect) out.push({ pageIndex: line.pageIndex, ...rect, citeText: s.citeText });
+    }
+  }
+  return out;
+}
+
+/** First-author surname (lowercased) + year from a raw bibliography entry
+ *  head — entries virtually always begin with the first author's name. */
+export function entryHeadInfo(rawText: string): { surname: string | null; year: number | null } {
+  const year = rawText.match(/(?:19|20)\d{2}/);
+  const name = rawText.match(/^[^A-Za-z]*([A-Z][\p{L}''-]+)/u);
+  return { surname: name ? name[1].toLowerCase() : null, year: year ? parseInt(year[0], 10) : null };
+}
+
+/** Resolve candidates against the segmented entries: structured
+ *  (first-author surname + year) when parsed, raw entry head otherwise.
+ *  One marker per candidate whose first sub-cite resolves. */
+export function resolveAuthorYearMarkers(cands: AyCandidate[], refs: Reference[]): Marker[] {
+  const index = refs.map((r) => {
+    if (r.structured?.authors?.length || r.structured?.year != null) {
+      const first = r.structured.authors[0] ?? '';
+      const parts = first.trim().split(/\s+/);
+      return {
+        refIndex: r.index,
+        surname: (parts[parts.length - 1] ?? '').toLowerCase() || entryHeadInfo(r.rawText).surname,
+        year: r.structured.year ?? entryHeadInfo(r.rawText).year,
+      };
+    }
+    const head = entryHeadInfo(r.rawText);
+    return { refIndex: r.index, surname: head.surname, year: head.year };
+  });
+
+  const markers: Marker[] = [];
+  for (const c of cands) {
+    let resolved: number | null = null;
+    for (const sub of c.citeText.split(';')) {
+      const year = sub.match(/(?:19|20)\d{2}/);
+      if (!year) continue;
+      const y = parseInt(year[0], 10);
+      const words = (sub.match(/[A-Z][\p{L}''-]+/gu) ?? []).map((w) => w.toLowerCase());
+      const hit = index.find((e) => e.year === y && e.surname !== null && words.includes(e.surname));
+      if (hit) { resolved = hit.refIndex; break; }
+    }
+    if (resolved !== null) {
+      markers.push({ pageIndex: c.pageIndex, x: c.x, y: c.y, width: c.width, height: c.height, refIndex: resolved });
+    }
+  }
+  return markers;
 }
