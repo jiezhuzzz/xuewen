@@ -70,6 +70,7 @@
      handler also firing. -->
 <div
   role="search"
+  aria-label="Find in document"
   class="absolute left-1/2 top-14 z-20 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-stone-200 bg-paper/90 px-1.5 py-1 shadow backdrop-blur dark:border-stone-800 dark:bg-soot/90"
   onkeydown={onBarKeydown}
 >

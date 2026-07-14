@@ -50,6 +50,13 @@
   let idleExpired = $state(false);
   let pillEl: HTMLDivElement | undefined = $state();
 
+  // A stale hot-zone from a previous zen session must not hold the pill
+  // visible on re-entry — onWindowMove only updates hotZone while zen is
+  // active, so without this it freezes at its last value across exit/re-entry.
+  $effect(() => {
+    if (!ui.zen) hotZone = false;
+  });
+
   const hold = $derived<ToolbarHold>({
     zen: ui.zen,
     hotZone,
@@ -91,6 +98,11 @@
 
 <svelte:window onpointermove={onWindowMove} />
 
+<!-- svelte-ignore a11y_interactive_supports_focus -- every control inside
+     the pill is individually tabbable via normal document tab order; the
+     toolbar container itself is not a tab stop. A roving-tabindex pass for
+     arrow-key navigation between controls is a filed follow-up, not done
+     here. -->
 <div
   bind:this={pillEl}
   role="toolbar"
