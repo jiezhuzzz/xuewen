@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 
+use crate::resolve::collapse_ws;
 use crate::resolve::http::HttpClient;
 
 /// A new arXiv paper parsed from the announcement feed.
@@ -26,10 +27,6 @@ pub async fn fetch_feed(
         categories.join("+")
     );
     http.get_text(&url).await
-}
-
-fn collapse_ws(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// "2507.01234v2" -> "2507.01234"; ids without a version pass through.
@@ -72,9 +69,13 @@ pub fn parse_feed(xml: &str, include_cross_list: bool) -> Result<Vec<Candidate>>
             continue;
         }
 
-        let Some(raw_id) = child_text("id") else { continue };
+        let Some(raw_id) = child_text("id") else {
+            continue;
+        };
         let arxiv_id = strip_version(raw_id.trim_start_matches("oai:arXiv.org:"));
-        let Some(title) = child_text("title") else { continue };
+        let Some(title) = child_text("title") else {
+            continue;
+        };
 
         // Summary looks like "arXiv:...v1 Announce Type: new Abstract: <text>".
         let raw_summary = child_text("summary").unwrap_or_default();
@@ -183,7 +184,10 @@ Abstract: New version.</summary>
     fn extracts_fields_and_strips_noise() {
         let c = &parse_feed(FEED, false).unwrap()[0];
         assert_eq!(c.title, "Attention Is Still All You Need");
-        assert_eq!(c.abstract_text, "We revisit attention and find it sufficient.");
+        assert_eq!(
+            c.abstract_text,
+            "We revisit attention and find it sufficient."
+        );
         assert_eq!(c.authors, vec!["Ada Lovelace", "Alan Turing"]);
         assert_eq!(c.categories, vec!["cs.AI", "cs.LG"]);
     }

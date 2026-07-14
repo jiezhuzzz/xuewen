@@ -3937,6 +3937,7 @@ dependencies = [
  "hex",
  "mime_guess",
  "notify",
+ "percent-encoding",
  "printpdf",
  "regex",
  "reqwest",

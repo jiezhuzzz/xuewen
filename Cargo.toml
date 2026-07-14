@@ -11,6 +11,7 @@ uuid = { version = "1", features = ["v7", "v5"] }
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
+percent-encoding = "2" # already transitive via reqwest/url; promoted for direct use
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

@@ -50,6 +50,24 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Base state with every optional service off (heuristics-only
+    /// citations, no ingest/search/daily/chat, default UI prefs). The
+    /// `build_router*` helpers below flip on just what they need.
+    fn base(pool: SqlitePool, library_root: PathBuf) -> Self {
+        let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
+        Self {
+            pool,
+            library_root,
+            ingest: None,
+            proxy_login_url: None,
+            search: None,
+            daily: None,
+            chat: None,
+            citations,
+            ui: crate::config::UiConfig::default(),
+        }
+    }
+
     /// Nudge the background indexer after a mutation. No-op without search.
     pub fn wake_search(&self) {
         if let Some(s) = &self.search {
@@ -60,18 +78,7 @@ impl AppState {
 
 /// Assemble the read-only web router (no import). Used directly by tests.
 pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
-    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
-    router_with(AppState {
-        pool,
-        library_root,
-        ingest: None,
-        proxy_login_url: None,
-        search: None,
-        daily: None,
-        chat: None,
-        citations,
-        ui: crate::config::UiConfig::default(),
-    })
+    router_with(AppState::base(pool, library_root))
 }
 
 /// Assemble the full web router, including the import endpoint.
@@ -80,18 +87,9 @@ pub fn build_router_with_ingest(
     library_root: PathBuf,
     ingest: Arc<Ingest>,
 ) -> Router {
-    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
-    router_with(AppState {
-        pool,
-        library_root,
-        ingest: Some(ingest),
-        proxy_login_url: None,
-        search: None,
-        daily: None,
-        chat: None,
-        citations,
-        ui: crate::config::UiConfig::default(),
-    })
+    let mut state = AppState::base(pool, library_root);
+    state.ingest = Some(ingest);
+    router_with(state)
 }
 
 /// Full router with import + a configured proxy prefix. Used by tests.
@@ -101,18 +99,10 @@ pub fn build_router_with_ingest_proxy(
     ingest: Arc<Ingest>,
     proxy_login_url: Option<String>,
 ) -> Router {
-    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
-    router_with(AppState {
-        pool,
-        library_root,
-        ingest: Some(ingest),
-        proxy_login_url,
-        search: None,
-        daily: None,
-        chat: None,
-        citations,
-        ui: crate::config::UiConfig::default(),
-    })
+    let mut state = AppState::base(pool, library_root);
+    state.ingest = Some(ingest);
+    state.proxy_login_url = proxy_login_url;
+    router_with(state)
 }
 
 /// Read-only router plus a live search service. Used by tests.
@@ -121,18 +111,9 @@ pub fn build_router_with_search(
     library_root: PathBuf,
     search: Arc<crate::search::SearchService>,
 ) -> Router {
-    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
-    router_with(AppState {
-        pool,
-        library_root,
-        ingest: None,
-        proxy_login_url: None,
-        search: Some(search),
-        daily: None,
-        chat: None,
-        citations,
-        ui: crate::config::UiConfig::default(),
-    })
+    let mut state = AppState::base(pool, library_root);
+    state.search = Some(search);
+    router_with(state)
 }
 
 /// Read-only router plus a daily-recommendations service. Used by tests.
@@ -141,18 +122,9 @@ pub fn build_router_with_daily(
     library_root: PathBuf,
     daily: Arc<crate::daily::DailyService>,
 ) -> Router {
-    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
-    router_with(AppState {
-        pool,
-        library_root,
-        ingest: None,
-        proxy_login_url: None,
-        search: None,
-        daily: Some(daily),
-        chat: None,
-        citations,
-        ui: crate::config::UiConfig::default(),
-    })
+    let mut state = AppState::base(pool, library_root);
+    state.daily = Some(daily);
+    router_with(state)
 }
 
 /// Read-only router plus a configured chat service. Used by tests.
@@ -161,18 +133,9 @@ pub fn build_router_with_chat(
     library_root: PathBuf,
     chat: Arc<crate::chat::ChatService>,
 ) -> Router {
-    let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
-    router_with(AppState {
-        pool,
-        library_root,
-        ingest: None,
-        proxy_login_url: None,
-        search: None,
-        daily: None,
-        chat: Some(chat),
-        citations,
-        ui: crate::config::UiConfig::default(),
-    })
+    let mut state = AppState::base(pool, library_root);
+    state.chat = Some(chat);
+    router_with(state)
 }
 
 /// Test router with the citations service wired (everything else off).
@@ -181,17 +144,9 @@ pub fn build_router_with_citations(
     library_root: PathBuf,
     citations: Arc<crate::citations::CitationsService>,
 ) -> Router {
-    router_with(AppState {
-        pool,
-        library_root,
-        ingest: None,
-        proxy_login_url: None,
-        search: None,
-        daily: None,
-        chat: None,
-        citations,
-        ui: crate::config::UiConfig::default(),
-    })
+    let mut state = AppState::base(pool, library_root);
+    state.citations = citations;
+    router_with(state)
 }
 
 fn router_with(state: AppState) -> Router {

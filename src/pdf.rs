@@ -2,13 +2,10 @@ use anyhow::{anyhow, Result};
 use std::path::Path;
 use std::process::Command;
 
-/// Extract text from pages 1..=`last_page` using the `pdftotext` binary.
-pub fn extract_text(path: &Path, last_page: u32) -> Result<String> {
+/// Run `pdftotext <extra-args…> <path> -` and return stdout.
+fn run_pdftotext(path: &Path, extra_args: &[&str]) -> Result<String> {
     let out = Command::new("pdftotext")
-        .arg("-f")
-        .arg("1")
-        .arg("-l")
-        .arg(last_page.to_string())
+        .args(extra_args)
         .arg(path)
         .arg("-") // write to stdout
         .output()
@@ -22,21 +19,15 @@ pub fn extract_text(path: &Path, last_page: u32) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Extract text from pages 1..=`last_page` using the `pdftotext` binary.
+pub fn extract_text(path: &Path, last_page: u32) -> Result<String> {
+    run_pdftotext(path, &["-f", "1", "-l", &last_page.to_string()])
+}
+
 /// Extract text from the whole document (no page limit), pages separated by
 /// form feeds (`\f`), using the `pdftotext` binary.
 pub fn extract_text_all(path: &Path) -> Result<String> {
-    let out = Command::new("pdftotext")
-        .arg(path)
-        .arg("-") // write to stdout
-        .output()
-        .map_err(|e| anyhow!("failed to run pdftotext (is poppler-utils installed?): {e}"))?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "pdftotext failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    run_pdftotext(path, &[])
 }
 
 #[cfg(test)]

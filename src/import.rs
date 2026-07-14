@@ -230,16 +230,15 @@ pub struct Fetcher {
 /// Percent-encode a URL for use as the `?url=` value of the EZproxy login.
 /// Encodes everything except the RFC3986 unreserved set.
 pub fn encode_target(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
+    use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+    // NON_ALPHANUMERIC minus the RFC3986 unreserved marks = encode everything
+    // except [A-Za-z0-9._~-], matching EZproxy's expectations.
+    const TARGET: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'~');
+    utf8_percent_encode(s, TARGET).to_string()
 }
 
 impl Fetcher {
