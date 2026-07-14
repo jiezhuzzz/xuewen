@@ -75,6 +75,7 @@ pub(super) fn universal_fields(entry: &str) -> UniversalFields {
 }
 
 /// Word endings that do NOT close a sentence even before ". ".
+// "al" is intentionally absent: the period after "et al." genuinely ends an author segment.
 const ABBREVS: &[&str] = &[
     "proc", "conf", "symp", "int", "intl", "trans", "vol", "no", "pp", "ed", "eds", "univ", "dept",
     "rev", "jr", "sr", "st",
@@ -82,7 +83,7 @@ const ABBREVS: &[&str] = &[
 
 /// "J." (initials, incl. "D.P"), "(J" and known abbreviations don't end a sentence.
 fn is_initial_or_abbrev(word: &str) -> bool {
-    let w = word.trim_start_matches(['(', '[', '"', '"', '\'']);
+    let w = word.trim_start_matches(['(', '[', '\u{201C}', '\u{201D}', '\'']);
     let alpha = w.chars().filter(|c| c.is_alphabetic()).count();
     if alpha == 0 {
         return false;
@@ -201,7 +202,7 @@ mod tests {
             split_sentences("D. P. Kingma and J. Ba. Adam: A method. ICLR, 2015"),
             vec!["D. P. Kingma and J. Ba", "Adam: A method", "ICLR, 2015"]
         );
-        // "Proc." and "vol." don't split; "et al." doesn't split.
+        // "Proc." and "vol." don't split; "et al." does — it genuinely ends the author list.
         assert_eq!(
             split_sentences("J. Smith et al. Title here. In Proc. of CCS, vol. 3, 2020"),
             vec![
@@ -214,6 +215,18 @@ mod tests {
         assert_eq!(
             split_sentences("See 10.1145/1234.5678 now"),
             vec!["See 10.1145/1234.5678 now"]
+        );
+    }
+
+    #[test]
+    fn curly_quote_before_abbrev_does_not_split() {
+        // A leading curly quote before an abbreviation must not cause a split.
+        assert_eq!(
+            split_sentences("See \u{201C}Proc. of CCS\u{201D} for details. Second sentence"),
+            vec![
+                "See \u{201C}Proc. of CCS\u{201D} for details",
+                "Second sentence"
+            ]
         );
     }
 
