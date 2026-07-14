@@ -37,6 +37,34 @@ describe('findReferencesStart', () => {
     expect(findReferencesStart(pages)).toEqual({ pageIndex: 5, y: 300 });
   });
 
+  it('matches numbered headings: "7 References"', () => {
+    const pages = [page(0, 600, 800, [{ text: '7 References', x: 50, y: 200, width: 120, height: 16 }])];
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200 });
+  });
+
+  it('matches roman-numbered headings: "VII. References"', () => {
+    const pages = [page(0, 600, 800, [{ text: 'VII. References', x: 50, y: 200, width: 140, height: 16 }])];
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 0, y: 200 });
+  });
+
+  it('matches "References and Notes" and "Works Cited"', () => {
+    const a = [page(0, 600, 800, [{ text: 'References and Notes', x: 50, y: 100, width: 180, height: 16 }])];
+    const b = [page(0, 600, 800, [{ text: 'Works Cited', x: 50, y: 100, width: 100, height: 16 }])];
+    expect(findReferencesStart(a)).toEqual({ pageIndex: 0, y: 100 });
+    expect(findReferencesStart(b)).toEqual({ pageIndex: 0, y: 100 });
+  });
+
+  it('does not match "I. Introduction" or the word inside a sentence', () => {
+    const pages = [
+      page(0, 600, 800, [
+        { text: 'I. Introduction', x: 50, y: 100, width: 140, height: 16 },
+        { text: 'as listed in the references below', x: 50, y: 130, width: 260, height: 12 },
+        { text: 'preferences', x: 50, y: 160, width: 100, height: 12 },
+      ]),
+    ];
+    expect(findReferencesStart(pages)).toBeNull();
+  });
+
   it('ignores the word inside a sentence (not a heading)', () => {
     const pages = [page(0, 600, 800, [
       { text: 'see the references section for details', x: 50, y: 100, width: 260, height: 12 },
