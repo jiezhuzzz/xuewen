@@ -712,6 +712,7 @@ mod tests {
         // ACM validation and stay None.
         let out = parse_all(&refs, Some("ACM CCS"));
         assert!(out[1].is_some());
+        assert!(out[0].is_none() && out[2].is_none());
     }
 
     #[test]

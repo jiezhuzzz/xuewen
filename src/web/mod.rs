@@ -94,7 +94,7 @@ pub fn build_router_with_ingest(
     })
 }
 
-/// Full router with import + a configured proxy prefix. Used by `serve`.
+/// Full router with import + a configured proxy prefix. Used by tests.
 pub fn build_router_with_ingest_proxy(
     pool: SqlitePool,
     library_root: PathBuf,
