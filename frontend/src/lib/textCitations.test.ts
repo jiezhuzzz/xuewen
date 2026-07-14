@@ -202,4 +202,19 @@ describe('author-year markers', () => {
     const cands = findAuthorYearCandidates([line('since (2015) alone means nothing')]);
     expect(resolveAuthorYearMarkers(cands, refs as never)).toHaveLength(0);
   });
+
+  it('handles typographic (curly) apostrophes in surnames', () => {
+    const curlyRefs = [
+      { index: 0, destPageIndex: 2, destY: 80, rawText: 'O’Brien, P. (2020). A Paper.' },
+    ];
+    const cands = findAuthorYearCandidates([line('as shown (O’Brien, 2020) here')]);
+    expect(cands).toHaveLength(1);
+    const ms = resolveAuthorYearMarkers(cands, curlyRefs as never);
+    expect(ms).toHaveLength(1);
+    expect(ms[0].refIndex).toBe(0);
+  });
+
+  it('entryHeadInfo keeps curly-apostrophe surnames whole', () => {
+    expect(entryHeadInfo('O’Brien, P. (2020). A Paper.')).toEqual({ surname: 'o’brien', year: 2020 });
+  });
 });
