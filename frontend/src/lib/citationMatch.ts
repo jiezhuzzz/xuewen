@@ -16,9 +16,9 @@ const MIN_TITLE_LEN = 12;
 
 /**
  * For each reference, the id of the first library paper whose normalized title
- * occurs verbatim inside the normalized reference text. References almost always
- * contain the cited paper's exact title, so substring containment is reliable
- * and needs no reference parsing.
+ * occurs verbatim inside the normalized reference text (or matches the structured
+ * title if available). References almost always contain the cited paper's exact
+ * title, so substring containment is reliable and needs no reference parsing.
  */
 export function matchReferences<P extends { id: string; title: string | null }>(
   refs: Reference[],
@@ -29,8 +29,16 @@ export function matchReferences<P extends { id: string; title: string | null }>(
     .map((p) => ({ paper: p, title: normalizeTitle(p.title as string) }))
     .filter((p) => p.title.length >= MIN_TITLE_LEN);
 
+  const byNormTitle = new Map(normed.map((p) => [p.title, p.paper]));
+
   const out = new Map<number, P>();
   for (const r of refs) {
+    const parsedTitle = r.structured?.title ? normalizeTitle(r.structured.title) : null;
+    const exact = parsedTitle && parsedTitle.length >= MIN_TITLE_LEN ? byNormTitle.get(parsedTitle) : undefined;
+    if (exact) {
+      out.set(r.index, exact);
+      continue;
+    }
     const hay = normalizeTitle(r.rawText);
     const hit = normed.find((p) => hay.includes(p.title));
     if (hit) out.set(r.index, hit.paper);

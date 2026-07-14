@@ -42,4 +42,20 @@ describe('matchReferences', () => {
     const refs = [ref(0, 'anything at all')];
     expect(matchReferences(refs, papers).has(0)).toBe(false);
   });
+
+  it('matches on the structured title even when the raw text differs', () => {
+    const refs = [{
+      ...ref(0, '[7] Kingma+Ba, 3rd Intl Conf on Learning Repr, San Diego, 2015.'),
+      structured: {
+        authors: ['D. Kingma'], title: 'Adam: A Method for Stochastic Optimization',
+        venue: 'ICLR', year: 2015, doi: null, arxiv_id: null, url: null,
+      },
+    }];
+    expect(matchReferences(refs, papers).get(0)?.id).toBe('p-adam');
+  });
+
+  it('structured null still falls back to substring matching', () => {
+    const refs = [{ ...ref(0, 'x Adam: A Method for Stochastic Optimization x'), structured: null }];
+    expect(matchReferences(refs, papers).get(0)?.id).toBe('p-adam');
+  });
 });
