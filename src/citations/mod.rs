@@ -109,18 +109,33 @@ impl CitationsService {
         venue: Option<&str>,
     ) -> Result<Vec<Option<StructuredReference>>> {
         let refs_json = serde_json::to_string(refs)?;
+        // Cached rows with nulls can be upgradeable; the non-null entries of
+        // an upgradeable row seed the re-parse so they are never degraded.
+        let mut seed: Option<Vec<Option<StructuredReference>>> = None;
         if let Some((cached, provenance)) = store::get(&self.pool, paper_id, &refs_json).await? {
             let parsed: Vec<Option<StructuredReference>> = serde_json::from_str(&cached)?;
-            // A heuristics-only row that still has nulls is upgradeable once
-            // an LLM is configured — fall through and reparse.
-            let upgradeable = self.llm.is_some()
-                && provenance == HEURISTIC_VERSION
-                && parsed.iter().any(|p| p.is_none());
+            let has_nulls = parsed.iter().any(|p| p.is_none());
+            // Two upgrade triggers for a null-bearing row:
+            //  - a row from an older parser generation (legacy pure-LLM rows,
+            //    or any future HEURISTIC_VERSION bump): heuristics never saw
+            //    it, so re-parse even without an LLM;
+            //  - a heuristics-only row once an LLM is configured.
+            let older_generation = !provenance.starts_with(HEURISTIC_VERSION);
+            let upgradeable = has_nulls
+                && (older_generation || (self.llm.is_some() && provenance == HEURISTIC_VERSION));
             if !upgradeable {
                 return Ok(parsed);
             }
+            seed = Some(parsed);
         }
         let mut parsed = heuristic::parse_all(refs, venue);
+        if let Some(seed) = seed {
+            for (slot, old) in parsed.iter_mut().zip(seed) {
+                if old.is_some() {
+                    *slot = old; // cached parse wins over a fresh heuristic one
+                }
+            }
+        }
         let leftover: Vec<usize> = parsed
             .iter()
             .enumerate()
@@ -454,20 +469,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_llm_provenance_rows_are_served_not_upgraded() {
+    async fn legacy_rows_with_nulls_reparse_and_keep_llm_entries() {
         // A cache row from the pure-LLM era (model column = raw model name)
-        // containing nulls must be a plain cache hit even with an LLM
-        // configured -- only exact "heuristic-v1" provenance is upgradeable.
+        // containing nulls was written before heuristics existed (live bug:
+        // the old model-miscount era dropped 60% of a paper's entries and the
+        // row was served forever). Such rows re-parse once with the current
+        // generation: heuristics fill what they can, but cached NON-null
+        // entries are kept — a legacy LLM parse is never degraded.
         let pool = crate::citations::store::tests_pool_with_paper("p1").await;
-        let refs = vec!["x".to_string()];
+        // GARBLED votes Ieee (quoted) but fails validation, so the style vote
+        // clears 60% while the entry itself stays heuristically unparseable.
+        let refs = vec![IEEE_REF.to_string(), GARBLED.to_string()];
         let refs_json = serde_json::to_string(&refs).unwrap();
-        store::upsert(&pool, "p1", &refs_json, "[null]", "gpt-4o-mini")
+        let legacy = r#"[null,{"authors":["L. Legacy"],"title":"Legacy Keep","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#;
+        store::upsert(&pool, "p1", &refs_json, legacy, "gpt-4o-mini")
             .await
             .unwrap();
-        let server = MockServer::start().await; // no mocks: any LLM call 404s -> Err -> test fails below
-        let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
+        // No LLM at all: the upgrade must still fire (heuristics need no LLM).
+        let out = CitationsService::heuristic_only(pool.clone())
+            .parse("p1", &refs, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            out[0].as_ref().unwrap().title.as_deref(),
+            Some("PGFUZZ: Policy-guided fuzzing for robotic vehicles")
+        );
+        assert_eq!(
+            out[1].as_ref().unwrap().title.as_deref(),
+            Some("Legacy Keep")
+        );
+        let (_, provenance) = store::get(&pool, "p1", &refs_json).await.unwrap().unwrap();
+        assert_eq!(provenance, "heuristic-v1"); // row rewritten to current gen
+    }
+
+    #[tokio::test]
+    async fn legacy_rows_without_nulls_are_served_as_is() {
+        // A fully-parsed legacy row has nothing to gain from re-parsing —
+        // serve it untouched (and never re-call the LLM for it).
+        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let refs = vec!["x".to_string()]; // heuristically unparseable
+        let refs_json = serde_json::to_string(&refs).unwrap();
+        let legacy = r#"[{"authors":["L. Legacy"],"title":"Legacy Keep","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#;
+        store::upsert(&pool, "p1", &refs_json, legacy, "gpt-4o-mini")
+            .await
+            .unwrap();
+        let server = MockServer::start().await; // no mocks: an LLM call would 404 -> Err
+        let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
         let out = svc.parse("p1", &refs, None).await.unwrap();
-        assert_eq!(out, vec![None]); // served from cache, no LLM call, no error
+        assert_eq!(
+            out[0].as_ref().unwrap().title.as_deref(),
+            Some("Legacy Keep")
+        );
+        let (_, provenance) = store::get(&pool, "p1", &refs_json).await.unwrap().unwrap();
+        assert_eq!(provenance, "gpt-4o-mini"); // row untouched
     }
 
     #[tokio::test]
