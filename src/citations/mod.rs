@@ -84,8 +84,8 @@ impl CitationsService {
         Arc::new(Self { pool, llm })
     }
 
-    /// Heuristics-only service (no LLM). Production path when
-    /// `[ai.citations]` is absent; also used by test routers.
+    /// Heuristics-only service (no LLM). Test-router support; production
+    /// goes through `from_config`, which handles the no-LLM case itself.
     pub fn heuristic_only(pool: SqlitePool) -> Arc<Self> {
         Arc::new(Self { pool, llm: None })
     }
@@ -451,5 +451,44 @@ mod tests {
         // Pass 3: upgraded row (provenance has +m) is a plain cache hit.
         let out3 = svc.parse("p1", &refs, None).await.unwrap();
         assert_eq!(out3, out2);
+    }
+
+    #[tokio::test]
+    async fn legacy_llm_provenance_rows_are_served_not_upgraded() {
+        // A cache row from the pure-LLM era (model column = raw model name)
+        // containing nulls must be a plain cache hit even with an LLM
+        // configured -- only exact "heuristic-v1" provenance is upgradeable.
+        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let refs = vec!["x".to_string()];
+        let refs_json = serde_json::to_string(&refs).unwrap();
+        store::upsert(&pool, "p1", &refs_json, "[null]", "gpt-4o-mini")
+            .await
+            .unwrap();
+        let server = MockServer::start().await; // no mocks: any LLM call 404s -> Err -> test fails below
+        let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
+        let out = svc.parse("p1", &refs, None).await.unwrap();
+        assert_eq!(out, vec![None]); // served from cache, no LLM call, no error
+    }
+
+    #[tokio::test]
+    async fn llm_failure_during_upgrade_preserves_old_cache_row() {
+        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let refs = vec![IEEE_REF.to_string(), GARBLED.to_string()];
+        // Seed an upgradeable row: heuristics-only provenance with a null.
+        CitationsService::heuristic_only(pool.clone())
+            .parse("p1", &refs, None)
+            .await
+            .unwrap();
+        let refs_json = serde_json::to_string(&refs).unwrap();
+        let before = store::get(&pool, "p1", &refs_json).await.unwrap().unwrap();
+        assert_eq!(before.1, "heuristic-v1");
+        // LLM configured but broken (no mock -> 404): upgrade attempt must
+        // return the fresh heuristic partial and leave the old row intact.
+        let server = MockServer::start().await;
+        let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
+        let out = svc.parse("p1", &refs, None).await.unwrap();
+        assert!(out[0].is_some() && out[1].is_none());
+        let after = store::get(&pool, "p1", &refs_json).await.unwrap().unwrap();
+        assert_eq!(after, before);
     }
 }
