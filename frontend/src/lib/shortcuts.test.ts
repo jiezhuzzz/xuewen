@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { handleKeydown, isEditable } from './shortcuts';
 import { chat } from './chat.svelte';
 import { identifyState, library, selection, ui, viewer } from './state.svelte';
+import { reader } from './readerState.svelte';
 import type { PaperSummary } from './types';
 
 function paper(id: string): PaperSummary {
@@ -33,6 +34,7 @@ beforeEach(() => {
   identifyState.open = false;
   chat.open = false;
   chat.available = false;
+  for (const k of Object.keys(reader.find)) delete reader.find[k];
 });
 
 describe('isEditable', () => {
@@ -208,5 +210,29 @@ describe('handleKeydown', () => {
     expect(ui.sidebarOpen).toBe(true);
     handleKeydown(key('Escape')); // the modal owns Esc
     expect(ui.importOpen).toBe(true); // handler must not touch it
+  });
+
+  it('cmd+f opens the find bar for the active paper', () => {
+    viewer.tabs = [{ id: 'a', title: 'A' }];
+    viewer.activeId = 'a';
+    const e = key('f', { metaKey: true, cancelable: true });
+    handleKeydown(e);
+    expect(reader.find['a']).toBe(true);
+    expect(e.defaultPrevented).toBe(true); // the browser find must not fire
+  });
+
+  it('cmd+f on the Library view leaves the browser find alone', () => {
+    viewer.activeId = null;
+    const e = key('f', { metaKey: true, cancelable: true });
+    handleKeydown(e);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('cmd+f is inert while a modal is open', () => {
+    viewer.tabs = [{ id: 'a', title: 'A' }];
+    viewer.activeId = 'a';
+    ui.importOpen = true;
+    handleKeydown(key('f', { metaKey: true, cancelable: true }));
+    expect(reader.find['a']).toBeUndefined();
   });
 });

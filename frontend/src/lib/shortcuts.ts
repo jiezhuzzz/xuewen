@@ -1,5 +1,6 @@
 import { tick } from 'svelte';
 import { chat, toggleChat } from './chat.svelte';
+import { openFind } from './readerState.svelte';
 import {
   closeTab,
   identifyState,
@@ -64,6 +65,14 @@ export function handleKeydown(e: KeyboardEvent): void {
     return;
   }
   if (anyModalOpen()) return;
+  // ⌘F finds in the open PDF; on the Library view the browser find is fine.
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    if (viewer.activeId) {
+      e.preventDefault();
+      openFind(viewer.activeId);
+    }
+    return;
+  }
   if (e.key === 'Escape') {
     if (ui.paletteOpen) ui.paletteOpen = false;
     else if (chat.open) chat.open = false;

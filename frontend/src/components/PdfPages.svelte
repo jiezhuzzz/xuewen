@@ -9,6 +9,8 @@
   import { PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
   import { TilingLayer } from '@embedpdf/plugin-tiling/svelte';
   import PdfToolbar from './PdfToolbar.svelte';
+  import PdfFindBar from './PdfFindBar.svelte';
+  import { SearchLayer } from '@embedpdf/plugin-search/svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
   import { libraryTitleIndex, matchReferences } from '../lib/citationMatch';
@@ -16,6 +18,7 @@
   import { runWhenIdle } from '../lib/idle';
   import { mergeStructured } from '../lib/refMerge';
   import { resolveAuthorYearMarkers } from '../lib/textCitations';
+  import { reader } from '../lib/readerState.svelte';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
 
@@ -110,6 +113,13 @@
       <RenderLayer {documentId} pageIndex={page.pageIndex} scale={1} class="pointer-events-none" />
       <TilingLayer {documentId} pageIndex={page.pageIndex} class="pointer-events-none" />
       <SelectionLayer {documentId} pageIndex={page.pageIndex} />
+      <SearchLayer
+        {documentId}
+        pageIndex={page.pageIndex}
+        class="pointer-events-none"
+        highlightColor="rgba(180, 83, 9, 0.28)"
+        activeHighlightColor="rgba(180, 83, 9, 0.55)"
+      />
       <CitationLayer
         pageIndex={page.pageIndex}
         pageWidthPt={pageSizes[page.pageIndex]?.width ?? page.width}
@@ -127,6 +137,9 @@
       <div class="flex h-full">
         <div class="relative min-w-0 flex-1">
           <PdfToolbar {documentId} />
+          {#if reader.find[documentId]}
+            <PdfFindBar {documentId} />
+          {/if}
           <Viewport {documentId} class="h-full w-full">
             <Scroller {documentId} {renderPage} />
           </Viewport>
