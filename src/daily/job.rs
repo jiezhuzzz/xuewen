@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
+use futures_util::StreamExt;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -7,15 +8,17 @@ use super::{feed, score, store, tldr, DailyService, ARXIV_ABS_BASE, ARXIV_PDF_BA
 
 /// Pages of the PDF fed to the summary prompt.
 const SUMMARY_PDF_PAGES: u32 = 12;
+/// Candidates summarized concurrently (each = PDF fetch + LLM call). Bounded
+/// so a run doesn't hammer arXiv or trip the LLM rate limit.
+const SUMMARY_CONCURRENCY: usize = 4;
 const PDF_MAX_BYTES: usize = 30 * 1024 * 1024;
 const PDF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// Hard ceiling on one daily run; a wedged remote call must not hold the
 /// run guard (and thus the scheduler) hostage forever.
 const RUN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
 
-static GITHUB_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").unwrap()
-});
+static GITHUB_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").unwrap());
 
 /// First GitHub repository URL in the text; trailing sentence punctuation
 /// the PDF extraction glues on is trimmed.
@@ -48,19 +51,22 @@ async fn run_once_with_deadline(
 ) -> store::DailyRun {
     let outcome = match tokio::time::timeout(deadline, pipeline(svc, batch_date)).await {
         Ok(r) => r,
-        Err(_) => Err(anyhow!(
-            "daily run timed out after {}s",
-            deadline.as_secs()
-        )),
+        Err(_) => Err(anyhow!("daily run timed out after {}s", deadline.as_secs())),
     };
     let (status, found, error) = match outcome {
         Ok(PipelineOutcome { found: 0, .. }) => ("empty", 0, None),
-        Ok(PipelineOutcome { found, kept, summaries_failed }) => {
+        Ok(PipelineOutcome {
+            found,
+            kept,
+            summaries_failed,
+        }) => {
             let error = if summaries_failed > 0 {
                 tracing::warn!(
                     "daily run {batch_date}: {summaries_failed}/{kept} summaries failed"
                 );
-                Some(format!("{summaries_failed}/{kept} summaries failed — see logs"))
+                Some(format!(
+                    "{summaries_failed}/{kept} summaries failed — see logs"
+                ))
             } else {
                 None
             };
@@ -99,7 +105,11 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<PipelineOutcom
     candidates.retain(|c| !known.contains(&c.arxiv_id));
     let found = candidates.len() as i64;
     if candidates.is_empty() {
-        return Ok(PipelineOutcome { found: 0, kept: 0, summaries_failed: 0 });
+        return Ok(PipelineOutcome {
+            found: 0,
+            kept: 0,
+            summaries_failed: 0,
+        });
     }
 
     let Some(profile) = score::build_profile(&svc.pool, &svc.vectors).await? else {
@@ -130,41 +140,56 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<PipelineOutcom
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(svc.cfg.max_papers);
 
-    let mut rows = Vec::with_capacity(scored.len());
-    let mut summaries_failed = 0;
-    for (i, (s, c)) in scored.into_iter().enumerate() {
-        let full_text = match fetch_pdf_text(svc, &c.arxiv_id).await {
-            Ok(t) => Some(t),
-            Err(e) => {
-                tracing::warn!("PDF text for {}: {e:#}", c.arxiv_id);
-                None
-            }
-        };
-        let code_url = full_text.as_deref().and_then(find_code_url);
-        let summary = tldr::generate_summary(&svc.chat, &c.title, &c.abstract_text, full_text.as_deref())
-            .await;
-        if summary.is_none() {
-            summaries_failed += 1;
-        }
-        rows.push(store::DailyPaper {
-            batch_date: batch_date.to_string(),
-            rank: i as i64 + 1,
-            arxiv_id: c.arxiv_id.clone(),
-            title: c.title,
-            authors: c.authors,
-            abstract_text: c.abstract_text,
-            categories: c.categories,
-            score: s as f64,
-            tldr: summary.as_ref().map(|sum| sum.tldr.clone()),
-            summary,
-            code_url,
-            abs_url: format!("{ARXIV_ABS_BASE}/{}", c.arxiv_id),
-            pdf_url: format!("{ARXIV_PDF_BASE}/{}", c.arxiv_id),
-        });
-    }
+    // Each candidate is independent (network PDF fetch + LLM summary), so fan
+    // out with bounded concurrency; `buffered` preserves rank order.
+    let rows: Vec<store::DailyPaper> = futures_util::stream::iter(
+        scored
+            .into_iter()
+            .enumerate()
+            .map(|(i, (s, c))| async move {
+                let full_text = match fetch_pdf_text(svc, &c.arxiv_id).await {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        tracing::warn!("PDF text for {}: {e:#}", c.arxiv_id);
+                        None
+                    }
+                };
+                let code_url = full_text.as_deref().and_then(find_code_url);
+                let summary = tldr::generate_summary(
+                    &svc.chat,
+                    &c.title,
+                    &c.abstract_text,
+                    full_text.as_deref(),
+                )
+                .await;
+                store::DailyPaper {
+                    batch_date: batch_date.to_string(),
+                    rank: i as i64 + 1,
+                    arxiv_id: c.arxiv_id.clone(),
+                    title: c.title,
+                    authors: c.authors,
+                    abstract_text: c.abstract_text,
+                    categories: c.categories,
+                    score: s as f64,
+                    tldr: summary.as_ref().map(|sum| sum.tldr.clone()),
+                    summary,
+                    code_url,
+                    abs_url: format!("{ARXIV_ABS_BASE}/{}", c.arxiv_id),
+                    pdf_url: format!("{ARXIV_PDF_BASE}/{}", c.arxiv_id),
+                }
+            }),
+    )
+    .buffered(SUMMARY_CONCURRENCY)
+    .collect()
+    .await;
+    let summaries_failed = rows.iter().filter(|r| r.summary.is_none()).count();
     let kept = rows.len();
     store::replace_batch(&svc.pool, batch_date, &rows).await?;
-    Ok(PipelineOutcome { found, kept, summaries_failed })
+    Ok(PipelineOutcome {
+        found,
+        kept,
+        summaries_failed,
+    })
 }
 
 /// Download the paper's PDF and return the text of its first pages,
@@ -368,14 +393,20 @@ Abstract: Very similar to the library.</summary>
         let (date, papers) = store::latest_batch(&pool).await.unwrap().unwrap();
         assert_eq!(date, "2026-07-10");
         assert_eq!(papers.len(), 2);
-        assert_eq!(papers[0].arxiv_id, "2507.00003", "parallel candidate ranks first");
+        assert_eq!(
+            papers[0].arxiv_id, "2507.00003",
+            "parallel candidate ranks first"
+        );
         assert_eq!(papers[0].rank, 1);
         assert!(papers[0].score > papers[1].score);
         assert_eq!(papers[0].tldr.as_deref(), Some("A TLDR."));
         let s = papers[0].summary.as_ref().expect("summary stored");
         assert_eq!(s.tldr, "A TLDR.");
         assert_eq!(s.problem, "Gap.");
-        assert!(papers[0].code_url.is_none(), "PDFs 404 -> no text -> no code link");
+        assert!(
+            papers[0].code_url.is_none(),
+            "PDFs 404 -> no text -> no code link"
+        );
         assert_eq!(papers[0].abs_url, "https://arxiv.org/abs/2507.00003");
         assert_eq!(papers[0].pdf_url, "https://arxiv.org/pdf/2507.00003");
         let recorded = store::get_run(&pool, "2026-07-10").await.unwrap().unwrap();
@@ -426,7 +457,9 @@ Abstract: Very similar to the library.</summary>
         assert_eq!(run.status, "ok");
         assert!(run.error.unwrap().contains("2/2 summaries failed"));
         let (_, papers) = store::latest_batch(&pool).await.unwrap().unwrap();
-        assert!(papers.iter().all(|p| p.summary.is_none() && p.tldr.is_none()));
+        assert!(papers
+            .iter()
+            .all(|p| p.summary.is_none() && p.tldr.is_none()));
     }
 
     #[tokio::test]
@@ -443,8 +476,8 @@ Abstract: Very similar to the library.</summary>
             .mount(&server)
             .await;
         let svc = service(&server, pool.clone());
-        let run = run_once_with_deadline(&svc, "2026-07-10", std::time::Duration::from_millis(50))
-            .await;
+        let run =
+            run_once_with_deadline(&svc, "2026-07-10", std::time::Duration::from_millis(50)).await;
         assert_eq!(run.status, "failed");
         assert!(run.error.unwrap().contains("timed out"));
         // The failure is recorded, so the scheduler's hourly retry will fire.
