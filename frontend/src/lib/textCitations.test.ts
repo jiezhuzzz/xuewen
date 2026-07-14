@@ -178,10 +178,45 @@ describe('findNumberedMarkers', () => {
     expect(ms[0].refIndex).toBe(2);
   });
 
-  it('expands lists and ranges to the first entry, one marker per group', () => {
+  it('gives each list member its own marker; a range keeps one at its first entry', () => {
+    // Live bug (empc, S&P'25): [9,15,22,40,46,47]-style groups produced ONE
+    // marker at the first ref, so the other members were never hoverable
+    // anywhere in the paper.
     const ms = findNumberedMarkers([line('prior work [3, 5] and [1–4]')], numberOf);
-    expect(ms).toHaveLength(2);
-    expect(ms.map((m) => m.refIndex)).toEqual([2, 0]);
+    expect(ms).toHaveLength(3);
+    expect(ms.map((m) => m.refIndex)).toEqual([2, 4, 0]);
+  });
+
+  it('gives each list member a rect over its own number', () => {
+    const l = line('cf. [3, 5] here'); // '3' at char 5, '5' at char 8; 5px/char
+    const ms = findNumberedMarkers([l], numberOf);
+    expect(ms.map((m) => m.refIndex)).toEqual([2, 4]);
+    expect(ms[0].x).toBeCloseTo(50 + 5 * 5, 1);
+    expect(ms[0].width).toBeCloseTo(5, 1);
+    expect(ms[1].x).toBeCloseTo(50 + 8 * 5, 1);
+    expect(ms[1].width).toBeCloseTo(5, 1);
+  });
+
+  it('joins a bracket group split across a line break (same page and column)', () => {
+    // Live bug (empc): "…techniques [14,19,37,\n44]…" matched nothing — none
+    // of the four refs got a marker from this cite.
+    const a = line('techniques [3,', 50, 100);
+    const b = line('5] and more', 50, 115);
+    const ms = findNumberedMarkers([a, b], numberOf);
+    expect(ms.map((m) => m.refIndex)).toEqual([2, 4]);
+    expect(ms[0].y).toBe(100); // the '3,' part sits on line a
+    expect(ms[1].y).toBe(115); // the '5]' part sits on line b
+  });
+
+  it('validates a joined group as a whole and respects line adjacency', () => {
+    // [0,\n1] is still math, not a citation.
+    const a = line('interval [0,', 50, 100);
+    const b = line('1] normalization', 50, 115);
+    expect(findNumberedMarkers([a, b], numberOf)).toHaveLength(0);
+    // A column break between the fragments means no join.
+    const c = line('techniques [3,', 50, 100);
+    const d = { ...line('5] and more', 50, 115), col: 1 };
+    expect(findNumberedMarkers([c, d], numberOf)).toHaveLength(0);
   });
 
   it('rejects math intervals like [0, 1] and out-of-range numbers', () => {
