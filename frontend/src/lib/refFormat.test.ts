@@ -17,7 +17,8 @@ describe('titleCase', () => {
       .toBe('PGFUZZ: Policy-Guided Fuzzing for Robotic Vehicles');
     expect(titleCase('training GPT-4 and eBPF probes on iOS'))
       .toBe('Training GPT-4 and eBPF Probes on iOS');
-    expect(titleCase('deep learning with differential privacy')).toBe('Deep Learning With Differential Privacy');
+    // Chicago-style: "with" stays lowercase (title-case package behavior).
+    expect(titleCase('deep learning with differential privacy')).toBe('Deep Learning with Differential Privacy');
   });
   it('capitalizes hyphen parts except small ones', () => {
     expect(titleCase('state-of-the-art symbolic execution')).toBe('State-of-the-Art Symbolic Execution');
