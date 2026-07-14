@@ -8,7 +8,7 @@
   import { SelectionLayer } from '@embedpdf/plugin-selection/svelte';
   import { PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
   import { TilingLayer } from '@embedpdf/plugin-tiling/svelte';
-  import PdfControls from './PdfControls.svelte';
+  import PdfToolbar from './PdfToolbar.svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
   import { libraryTitleIndex, matchReferences } from '../lib/citationMatch';
@@ -124,10 +124,14 @@
 <DocumentContent {documentId}>
   {#snippet children(doc)}
     {#if doc.isLoaded}
-      <PdfControls {documentId} />
-      <Viewport {documentId} class="h-full w-full">
-        <Scroller {documentId} {renderPage} />
-      </Viewport>
+      <div class="flex h-full">
+        <div class="relative min-w-0 flex-1">
+          <PdfToolbar {documentId} />
+          <Viewport {documentId} class="h-full w-full">
+            <Scroller {documentId} {renderPage} />
+          </Viewport>
+        </div>
+      </div>
     {:else if doc.isError}
       <p class="p-4 text-sm text-red-600 dark:text-red-400">Failed to load document.</p>
     {:else}
