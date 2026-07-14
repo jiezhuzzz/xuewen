@@ -46,4 +46,21 @@ describe('segmentReferences — numbered', () => {
     ]);
     expect(segmentReferences([tiny], { pageIndex: 0, y: 40, x: 50 })).toBeNull();
   });
+
+  it('includes right-column entries above the heading y (column-major, two-column page)', () => {
+    // 600pt page, mid=300: heading + [1] in the LEFT column, [2] in the RIGHT
+    // column at y=30 — above the heading's y=60, but AFTER it in reading order.
+    const bib = page(2, 600, 800, [
+      { text: 'References', x: 50, y: 60, width: 90, height: 16 },
+      { text: '[1] Left entry. 2020.', x: 50, y: 100, width: 180, height: 12 },
+      { text: '[2] Right entry above heading y. 2021.', x: 320, y: 30, width: 240, height: 12 },
+    ]);
+    const seg = segmentReferences([bib], { pageIndex: 2, y: 60, x: 50 })!;
+    expect(seg).not.toBeNull();
+    expect(seg.style).toBe('numbered');
+    expect(seg.references).toHaveLength(2);
+    expect(seg.numberOf.get(1)).toBe(0);
+    expect(seg.numberOf.get(2)).toBe(1);
+    expect(seg.references[1].rawText).toBe('[2] Right entry above heading y. 2021.');
+  });
 });
