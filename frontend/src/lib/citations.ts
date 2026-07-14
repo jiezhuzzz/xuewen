@@ -87,12 +87,16 @@ export function assignColumns(runs: TextRun[], pageWidth: number): Map<TextRun, 
   return out;
 }
 
+import type { StructuredReference } from './types';
+
 export interface Reference {
   index: number;
   destPageIndex: number;
   destY: number;
   rawText: string;
   externalUrl?: string;
+  /** LLM-parsed fields; undefined = not (yet) parsed, null = unparseable. */
+  structured?: StructuredReference | null;
 }
 export interface Marker {
   pageIndex: number; x: number; y: number; width: number; height: number;

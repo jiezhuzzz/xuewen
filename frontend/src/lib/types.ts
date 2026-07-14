@@ -121,3 +121,15 @@ export interface SearchStatus {
   semantic_available: boolean;
   reason: string | null;
 }
+
+/** One bibliography entry parsed to fields by [ai.citations] (wire format
+ *  shared with src/citations/mod.rs on the backend). */
+export interface StructuredReference {
+  authors: string[];
+  title: string | null;
+  venue: string | null;
+  year: number | null;
+  doi: string | null;
+  arxiv_id: string | null;
+  url: string | null;
+}
