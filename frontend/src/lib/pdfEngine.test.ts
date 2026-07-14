@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { ENGINE_OPTIONS, viewerPlugins } from './pdfEngine';
 
 describe('ENGINE_OPTIONS', () => {
-  it('is offline + main-thread (load-bearing)', () => {
-    expect(ENGINE_OPTIONS.worker).toBe(false);
-    expect(ENGINE_OPTIONS.wasmUrl).toBe('/pdfium.wasm');
+  it('is offline + runs PDFium in a worker (load-bearing)', () => {
+    expect(ENGINE_OPTIONS.worker).toBe(true);
+    // Resolved to a fully-qualified same-origin URL (not a bare path) — the
+    // stock blob worker's self.location is a blob: URL, which can't resolve
+    // a path-absolute fetch like '/pdfium.wasm' against it. See pdfEngine.ts.
+    expect(ENGINE_OPTIONS.wasmUrl).toBe(new URL('/pdfium.wasm', location.origin).href);
+    expect(ENGINE_OPTIONS.wasmUrl.endsWith('/pdfium.wasm')).toBe(true);
     expect(ENGINE_OPTIONS.fontFallback).toBeNull();
   });
 });

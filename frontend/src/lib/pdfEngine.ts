@@ -10,13 +10,18 @@ import { ZoomPluginPackage, ZoomMode } from '@embedpdf/plugin-zoom';
 import { TilingPluginPackage } from '@embedpdf/plugin-tiling';
 
 // Load-bearing offline config (see CLAUDE.md "PDF viewer gotchas"):
-//  - worker:false  -> PDFium on the main thread (the blob worker never loads
-//    our self-hosted wasm in this plain-Vite build; default hangs on "Loading…")
-//  - wasmUrl       -> self-hosted /pdfium.wasm (default is a jsDelivr CDN, breaks offline)
+//  - worker:true   -> PDFium runs in EmbedPDF's stock blob module worker. The
+//    worker's self.location is a blob: URL, which cannot resolve a
+//    path-absolute fetch like '/pdfium.wasm' (Chromium throws "Failed to
+//    parse URL from /pdfium.wasm" — there's no hierarchical path on a blob:
+//    base to graft it onto). Passing a fully-qualified URL sidesteps that
+//    entirely, since it needs no base-relative resolution.
+//  - wasmUrl       -> self-hosted, resolved to an absolute same-origin URL
+//    (default is a jsDelivr CDN, which breaks offline)
 //  - fontFallback:null -> no external font fetches
 export const ENGINE_OPTIONS = {
-  wasmUrl: '/pdfium.wasm',
-  worker: false,
+  wasmUrl: new URL('/pdfium.wasm', location.origin).href,
+  worker: true,
   fontFallback: null,
 } as const;
 
