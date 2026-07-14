@@ -84,11 +84,16 @@ fn default_daily_retention_days() -> u32 {
 /// into `[ai]` and each use-section so its fields sit at that section's level.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AiDefaults {
-    #[serde(default)] pub base_url: Option<String>,
-    #[serde(default)] pub api_key: Option<String>,
-    #[serde(default)] pub api_key_env: Option<String>,
-    #[serde(default)] pub model: Option<String>,
-    #[serde(default)] pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 /// A use's endpoint resolved against the `[ai]` defaults + built-ins.
@@ -104,7 +109,8 @@ pub struct Resolved {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct AiConfig {
-    #[serde(flatten)] pub defaults: AiDefaults,
+    #[serde(flatten)]
+    pub defaults: AiDefaults,
     /// Semantic-search embeddings. Absent ⇒ semantic search off.
     pub embedding: Option<EmbeddingConfig>,
     /// Paper chat. No models ⇒ chat off.
@@ -135,19 +141,29 @@ impl AiConfig {
 
 /// Inline key wins; else the named env var; empty ⇒ None.
 pub fn resolve_key(inline: Option<String>, api_key_env: &str) -> Option<String> {
-    inline.or_else(|| std::env::var(api_key_env).ok()).filter(|k| !k.trim().is_empty())
+    inline
+        .or_else(|| std::env::var(api_key_env).ok())
+        .filter(|k| !k.trim().is_empty())
 }
 
-fn default_ai_base_url() -> String { "https://api.openai.com/v1".to_string() }
-fn default_api_key_env() -> String { "OPENAI_API_KEY".to_string() }
+fn default_ai_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+fn default_api_key_env() -> String {
+    "OPENAI_API_KEY".to_string()
+}
 
 /// Semantic-search embeddings (`[ai.embedding]`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmbeddingConfig {
-    #[serde(flatten)] pub endpoint: AiDefaults,
-    #[serde(default = "default_embed_dims")] pub dims: usize,
+    #[serde(flatten)]
+    pub endpoint: AiDefaults,
+    #[serde(default = "default_embed_dims")]
+    pub dims: usize,
 }
-fn default_embed_dims() -> usize { 1536 }
+fn default_embed_dims() -> usize {
+    1536
+}
 
 impl EmbeddingConfig {
     /// The embedding model: its own override, or the built-in default.
@@ -169,7 +185,12 @@ pub struct ChatConfig {
     pub max_context_chars: usize,
 }
 impl Default for ChatConfig {
-    fn default() -> Self { Self { models: Vec::new(), max_context_chars: 60_000 } }
+    fn default() -> Self {
+        Self {
+            models: Vec::new(),
+            max_context_chars: 60_000,
+        }
+    }
 }
 
 /// One selectable chat model (`[[ai.chat.models]]`).
@@ -177,7 +198,8 @@ impl Default for ChatConfig {
 pub struct ChatModelConfig {
     /// Shown in the UI dropdown; display-only.
     pub label: String,
-    #[serde(flatten)] pub endpoint: AiDefaults,
+    #[serde(flatten)]
+    pub endpoint: AiDefaults,
 }
 
 /// UI preferences (`[ui]`), surfaced to the frontend via `/api/settings`.
@@ -190,7 +212,9 @@ pub struct UiConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { fold_abstract: true }
+        Self {
+            fold_abstract: true,
+        }
     }
 }
 
@@ -413,7 +437,10 @@ model    = "qwen3:32b"
         )
         .unwrap();
         assert_eq!(cfg.ai.chat.models.len(), 2);
-        assert_eq!(cfg.ai.chat.models[1].endpoint.model.as_deref(), Some("qwen3:32b"));
+        assert_eq!(
+            cfg.ai.chat.models[1].endpoint.model.as_deref(),
+            Some("qwen3:32b")
+        );
         assert_eq!(cfg.ai.chat.max_context_chars, 60_000);
         // Endpoint fields resolve through [ai] defaults + built-ins.
         let r0 = cfg.ai.resolve(&cfg.ai.chat.models[0].endpoint);
@@ -504,17 +531,25 @@ database_url = "sqlite:/d/x.db"
         assert_eq!(r.model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(r.reasoning_effort.as_deref(), Some("high"));
         // Use override wins.
-        let r2 = ai.resolve(&AiDefaults { model: Some("gpt-5.6-terra".into()), ..Default::default() });
+        let r2 = ai.resolve(&AiDefaults {
+            model: Some("gpt-5.6-terra".into()),
+            ..Default::default()
+        });
         assert_eq!(r2.model.as_deref(), Some("gpt-5.6-terra"));
         // Built-in base_url when [ai] omits it.
         let bare = AiConfig::default();
-        assert_eq!(bare.resolve(&AiDefaults::default()).base_url, "https://api.openai.com/v1");
+        assert_eq!(
+            bare.resolve(&AiDefaults::default()).base_url,
+            "https://api.openai.com/v1"
+        );
     }
 
     #[test]
     fn ai_sections_parse_with_flatten_and_inheritance() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        write!(f, r#"
+        write!(
+            f,
+            r#"
 inbox_dir = "/d/i"
 library_root = "/d/l"
 database_url = "sqlite:/d/x.db"
@@ -535,28 +570,48 @@ model = "gpt-5.6-terra"
 [ai.summary]
 
 [ai.daily]
-"#).unwrap();
+"#
+        )
+        .unwrap();
         let cfg = Config::load(f.path()).unwrap();
         let ai = &cfg.ai;
         assert_eq!(ai.defaults.model.as_deref(), Some("gpt-4o-mini"));
         // embedding overrides model, keeps its own model
-        assert_eq!(ai.embedding.as_ref().unwrap().endpoint.model.as_deref(), Some("text-embedding-3-small"));
+        assert_eq!(
+            ai.embedding.as_ref().unwrap().endpoint.model.as_deref(),
+            Some("text-embedding-3-small")
+        );
         assert_eq!(ai.embedding.as_ref().unwrap().dims, 1536);
         // chat model present with its own model
         assert_eq!(ai.chat.models[0].label, "Terra");
-        assert_eq!(ai.chat.models[0].endpoint.model.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(
+            ai.chat.models[0].endpoint.model.as_deref(),
+            Some("gpt-5.6-terra")
+        );
         assert_eq!(ai.chat.max_context_chars, 60_000);
         // present-but-empty summary/daily ⇒ Some(defaults), inherit via resolve
         assert!(ai.summary.is_some());
-        assert_eq!(ai.resolve(ai.summary.as_ref().unwrap()).model.as_deref(), Some("gpt-4o-mini"));
-        assert_eq!(ai.resolve(ai.summary.as_ref().unwrap()).reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            ai.resolve(ai.summary.as_ref().unwrap()).model.as_deref(),
+            Some("gpt-4o-mini")
+        );
+        assert_eq!(
+            ai.resolve(ai.summary.as_ref().unwrap())
+                .reasoning_effort
+                .as_deref(),
+            Some("high")
+        );
         assert!(ai.daily.is_some());
     }
 
     #[test]
     fn ai_absent_means_features_off() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        write!(f, "inbox_dir=\"/d/i\"\nlibrary_root=\"/d/l\"\ndatabase_url=\"sqlite:/d/x.db\"\n").unwrap();
+        write!(
+            f,
+            "inbox_dir=\"/d/i\"\nlibrary_root=\"/d/l\"\ndatabase_url=\"sqlite:/d/x.db\"\n"
+        )
+        .unwrap();
         let cfg = Config::load(f.path()).unwrap();
         assert!(cfg.ai.embedding.is_none());
         assert!(cfg.ai.chat.models.is_empty());
@@ -567,10 +622,16 @@ model = "gpt-5.6-terra"
     #[test]
     fn embedding_model_uses_own_or_builtin_never_ai_default() {
         use super::{AiDefaults, EmbeddingConfig};
-        let e = EmbeddingConfig { endpoint: AiDefaults::default(), dims: 1536 };
+        let e = EmbeddingConfig {
+            endpoint: AiDefaults::default(),
+            dims: 1536,
+        };
         assert_eq!(e.model(), "text-embedding-3-small"); // no inherit, built-in
         let e2 = EmbeddingConfig {
-            endpoint: AiDefaults { model: Some("my-embed".into()), ..Default::default() },
+            endpoint: AiDefaults {
+                model: Some("my-embed".into()),
+                ..Default::default()
+            },
             dims: 1536,
         };
         assert_eq!(e2.model(), "my-embed"); // own override
@@ -583,20 +644,33 @@ model = "gpt-5.6-terra"
             env!("CARGO_MANIFEST_DIR"),
             "/xuewen.example.toml"
         )));
-        assert!(cfg.is_ok(), "xuewen.example.toml must parse: {:?}", cfg.err());
+        assert!(
+            cfg.is_ok(),
+            "xuewen.example.toml must parse: {:?}",
+            cfg.err()
+        );
     }
 
     #[test]
     fn ai_resolve_inherits_shared_inline_api_key() {
         use super::{AiConfig, AiDefaults};
         let ai = AiConfig {
-            defaults: AiDefaults { api_key: Some("sk-shared".into()), ..Default::default() },
+            defaults: AiDefaults {
+                api_key: Some("sk-shared".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         // A use with no key of its own inherits the [ai] inline key.
-        assert_eq!(ai.resolve(&AiDefaults::default()).api_key.as_deref(), Some("sk-shared"));
+        assert_eq!(
+            ai.resolve(&AiDefaults::default()).api_key.as_deref(),
+            Some("sk-shared")
+        );
         // A use's own inline key wins.
-        let own = AiDefaults { api_key: Some("sk-own".into()), ..Default::default() };
+        let own = AiDefaults {
+            api_key: Some("sk-own".into()),
+            ..Default::default()
+        };
         assert_eq!(ai.resolve(&own).api_key.as_deref(), Some("sk-own"));
     }
 }
