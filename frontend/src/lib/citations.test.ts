@@ -92,6 +92,59 @@ describe('findReferencesStart', () => {
     const pages = [page(0, 600, 800, [{ text: 'Just body text here', x: 50, y: 100, width: 150, height: 12 }])];
     expect(findReferencesStart(pages)).toBeNull();
   });
+
+  // Regressions from the task-21 live sweep: the two heading-line reconstruction
+  // failure modes measured against real PDFs (devlin/jimenez/kim). See
+  // .superpowers/sdd/task-21-report.md. Geometry numbers below are the live-probed
+  // values (Mode B x/y/h are exact; Mode A y + text are exact, per-run x reflects
+  // the two-column layout since the probe JSON logged only the joined line text).
+
+  it('Mode A: column-aware — a two-column heading is not joined with the other column (devlin)', () => {
+    // devlin p9: "References" (left col, y=62) and the first entry
+    // "Kevin Clark, Minh-Thang Luong, Christopher D Manning…" (right col) share
+    // the same y-band. Column-blind bucketing joins them into a non-heading line,
+    // so the heading is missed entirely (0 markers live). Column-aware clustering
+    // keeps them apart. Page 612pt wide (US Letter), gutter at mid=306.
+    const pages = [
+      page(9, 612, 792, [
+        { text: 'References', x: 53, y: 62, width: 78, height: 14 },
+        { text: 'Kevin Clark, Minh-Thang Luong, Christopher D Manning, and Quoc V. Le. ELECTRA:', x: 317, y: 62, width: 230, height: 12 },
+        { text: 'body text on the left column', x: 53, y: 90, width: 200, height: 12 },
+      ]),
+    ];
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 9, y: 62, x: 53 });
+  });
+
+  it('Mode B: baseline clustering — a small-caps heading split across y-buckets reassembles (jimenez)', () => {
+    // jimenez p10: the big initial "R" (x=108, y=81, h=14) and "EFERENCES"
+    // (x=117, y=83, h=12) share a BASELINE (both bottom at y+h=95) but have
+    // different top-y, so Math.round(y/3) puts them in buckets 27 vs 28 and the
+    // heading never reassembles (0 markers live). Overlap/baseline clustering
+    // merges them because their vertical extents [81,95] and [83,95] overlap.
+    const pages = [
+      page(10, 612, 792, [
+        { text: 'R', x: 108, y: 81, width: 12, height: 14 },
+        { text: 'EFERENCES\r\n', x: 117, y: 83, width: 82, height: 12 },
+        { text: '[1] Josh Achiam et al. GPT-4 technical report. 2023.', x: 108, y: 99, width: 300, height: 12 },
+      ]),
+    ];
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 10, y: 81, x: 108 });
+  });
+
+  it('kim: both modes at once — drop-cap heading split AND right-column text in the same band', () => {
+    // kim p15 (two-column IEEE): "R" (y=430) + "EFERENCES" (y=432) is a split
+    // small-caps heading in the left column; the same y-band also holds
+    // right-column body text. Heights inferred to share the baseline (bottom 444),
+    // matching the jimenez drop-cap pattern (probe logged tops only for kim).
+    const pages = [
+      page(15, 612, 792, [
+        { text: 'R', x: 55, y: 430, width: 12, height: 14 },
+        { text: 'EFERENCES', x: 64, y: 432, width: 82, height: 12 },
+        { text: 'runtime monitoring with s-taliro,” in International Conference on Runtime', x: 320, y: 431, width: 230, height: 12 },
+      ]),
+    ];
+    expect(findReferencesStart(pages)).toEqual({ pageIndex: 15, y: 430, x: 55 });
+  });
 });
 
 describe('buildCitationData', () => {

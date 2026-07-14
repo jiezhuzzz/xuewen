@@ -1,5 +1,6 @@
 import {
   assignColumns,
+  clusterLines,
   isReferencesHeading,
   LINE_TOLERANCE,
   type Marker,
@@ -18,34 +19,20 @@ export interface CmLine {
   runs: { run: TextRun; start: number; end: number }[];
 }
 
-/** Visual lines in column-major reading order, with char-offset→run mapping. */
+/** Visual lines in column-major reading order, with char-offset→run mapping.
+ *  Lines are reconstructed by the shared column-aware baseline clustering
+ *  (see clusterLines) so drop-cap/small-caps headings reassemble correctly. */
 export function columnMajorLines(page: PageText): CmLine[] {
   const cols = assignColumns(page.runs, page.width);
-  const rows = new Map<string, TextRun[]>();
-  for (const r of page.runs) {
-    const key = `${cols.get(r)}:${Math.round(r.y / LINE_TOLERANCE)}`;
-    const arr = rows.get(key) ?? [];
-    arr.push(r);
-    rows.set(key, arr);
-  }
-  const lines: CmLine[] = [];
-  for (const rs of rows.values()) {
-    rs.sort((a, b) => a.x - b.x);
+  const lines: CmLine[] = clusterLines(page.runs, cols).map((l) => {
     let text = '';
     const runs: CmLine['runs'] = [];
-    for (const run of rs) {
+    for (const run of l.runs) {
       runs.push({ run, start: text.length, end: text.length + run.text.length });
       text += run.text;
     }
-    lines.push({
-      pageIndex: page.pageIndex,
-      col: cols.get(rs[0]) ?? 0,
-      y: Math.min(...rs.map((r) => r.y)),
-      x: Math.min(...rs.map((r) => r.x)),
-      text,
-      runs,
-    });
-  }
+    return { pageIndex: page.pageIndex, col: l.col, y: l.y, x: l.x, text, runs };
+  });
   return lines.sort((a, b) => a.col - b.col || a.y - b.y || a.x - b.x);
 }
 
