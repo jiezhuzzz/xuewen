@@ -57,3 +57,18 @@ async fn unconfigured_returns_503_and_unknown_paper_404() {
         .await;
     resp.assert_status_not_found();
 }
+
+#[tokio::test]
+async fn empty_references_is_bad_request() {
+    let upstream = MockServer::start().await;
+    let (pool, root) = common::pool_and_root_with_paper("p1").await;
+    let svc = xuewen::citations::CitationsService::for_tests(pool.clone(), &upstream.uri(), "m");
+    let server =
+        TestServer::new(xuewen::web::build_router_with_citations(pool, root, svc)).unwrap();
+
+    let resp = server
+        .post("/api/papers/p1/citations")
+        .json(&json!({"references": []}))
+        .await;
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+}
