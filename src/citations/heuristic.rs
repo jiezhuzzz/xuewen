@@ -255,6 +255,23 @@ pub(super) fn parse_ieee(entry: &str) -> StructuredReference {
     }
 }
 
+/// ACM: `Authors. YYYY. Title. In Venue. Publisher, pages.` The ". YYYY. "
+/// anchor separates authors from the rest; title is the first sentence.
+pub(super) fn parse_acm(entry: &str) -> StructuredReference {
+    let Some(c) = ACM_HEAD_RE.captures(entry) else {
+        return StructuredReference::default();
+    };
+    let year = c[2].parse::<i64>().ok();
+    let segs = split_sentences(&c[4]);
+    StructuredReference {
+        authors: split_authors(c[1].trim()),
+        title: segs.first().map(|t| t.trim().to_string()),
+        venue: segs.get(1).and_then(|v| clean_venue(v)),
+        year,
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +490,35 @@ mod tests {
     fn ieee_without_quotes_yields_default() {
         assert_eq!(
             parse_ieee("No quotes here at all, 2020."),
+            StructuredReference::default()
+        );
+    }
+
+    #[test]
+    fn parses_acm_entries() {
+        let r = parse_acm(
+            "Mart\u{ED}n Abadi, Andy Chu, Ian Goodfellow, H. Brendan McMahan, Ilya Mironov, Kunal Talwar, and Li Zhang. 2016. Deep Learning with Differential Privacy. In Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security (CCS '16). ACM, 308\u{2013}318.",
+        );
+        assert_eq!(
+            r.title.as_deref(),
+            Some("Deep Learning with Differential Privacy")
+        );
+        assert_eq!(r.year, Some(2016));
+        assert_eq!(
+            r.authors.first().map(String::as_str),
+            Some("Mart\u{ED}n Abadi")
+        );
+        assert_eq!(r.authors.last().map(String::as_str), Some("Li Zhang"));
+        assert_eq!(
+            r.venue.as_deref(),
+            Some("Proceedings of the 2016 ACM SIGSAC Conference on Computer and Communications Security (CCS '16)")
+        );
+    }
+
+    #[test]
+    fn acm_without_year_anchor_yields_default() {
+        assert_eq!(
+            parse_acm("D. Kingma and J. Ba. Adam: A method. ICLR, 2015."),
             StructuredReference::default()
         );
     }
