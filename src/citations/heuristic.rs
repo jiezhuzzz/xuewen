@@ -272,6 +272,43 @@ pub(super) fn parse_acm(entry: &str) -> StructuredReference {
     }
 }
 
+static PAREN_YEAR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(((19|20)\d{2})\)").unwrap());
+
+/// LNCS: `Last, F., Last, F.: Title. In: Venue, pp. x-y. Publisher (YYYY)`.
+/// The ".:" closing the author block is the anchor.
+pub(super) fn parse_lncs(entry: &str) -> StructuredReference {
+    let Some(pos) = entry.find(".:") else {
+        return StructuredReference::default();
+    };
+    // "Kingma, D.P., Ba, J" splits on ',' into surname/initial tokens;
+    // consecutive pairs re-join into "Kingma, D.P.".
+    let authors: Vec<String> = entry[..pos + 1]
+        .split(',')
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .chunks(2)
+        .map(|pair| pair.join(", "))
+        .collect();
+    let rest = entry[pos + 2..].trim();
+    let segs = split_sentences(rest);
+    let venue = rest
+        .find("In:")
+        .map(|i| &rest[i + 3..])
+        .and_then(clean_venue);
+    let year = PAREN_YEAR_RE
+        .captures_iter(rest)
+        .last()
+        .and_then(|c| c[1].parse::<i64>().ok());
+    StructuredReference {
+        authors,
+        title: segs.first().map(|t| t.trim().to_string()),
+        venue,
+        year,
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,6 +556,34 @@ mod tests {
     fn acm_without_year_anchor_yields_default() {
         assert_eq!(
             parse_acm("D. Kingma and J. Ba. Adam: A method. ICLR, 2015."),
+            StructuredReference::default()
+        );
+    }
+
+    #[test]
+    fn parses_lncs_entries() {
+        let r = parse_lncs(
+            "Ateniese, G., Magri, B., Venturi, D., Andrade, E.: Redactable blockchain \u{2013} or \u{2013} rewriting history in bitcoin and friends. In: 2017 IEEE European Symposium on Security and Privacy (EuroS&P), pp. 111\u{2013}126. IEEE (2017)",
+        );
+        assert_eq!(
+            r.title.as_deref(),
+            Some("Redactable blockchain \u{2013} or \u{2013} rewriting history in bitcoin and friends")
+        );
+        assert_eq!(
+            r.authors,
+            vec!["Ateniese, G.", "Magri, B.", "Venturi, D.", "Andrade, E."]
+        );
+        assert_eq!(
+            r.venue.as_deref(),
+            Some("2017 IEEE European Symposium on Security and Privacy (EuroS&P)")
+        );
+        assert_eq!(r.year, Some(2017));
+    }
+
+    #[test]
+    fn lncs_without_colon_yields_default() {
+        assert_eq!(
+            parse_lncs("D. Kingma and J. Ba. Adam. ICLR, 2015."),
             StructuredReference::default()
         );
     }
