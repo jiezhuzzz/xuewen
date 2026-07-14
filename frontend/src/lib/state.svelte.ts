@@ -20,6 +20,7 @@ import {
 } from './api';
 import { invalidateLibraryTitleIndex } from './citationMatch';
 import { dur } from './motion';
+import { dropReaderState } from './readerState.svelte';
 import type {
   BibFormat,
   Candidate,
@@ -350,6 +351,7 @@ export function closeTab(id: string): void {
   const idx = viewer.tabs.findIndex((t) => t.id === id);
   if (idx === -1) return;
   viewer.tabs.splice(idx, 1);
+  dropReaderState(id);
   if (viewer.activeId === id) {
     viewer.activeId = viewer.tabs[Math.max(0, idx - 1)]?.id ?? null;
   }
