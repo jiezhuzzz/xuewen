@@ -10,6 +10,7 @@
   import { PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
   import { TilingLayer } from '@embedpdf/plugin-tiling/svelte';
   import PdfToolbar from './PdfToolbar.svelte';
+  import PdfQuickActions from './PdfQuickActions.svelte';
   import PdfFindBar from './PdfFindBar.svelte';
   import PdfSidePanel from './PdfSidePanel.svelte';
   import { SearchLayer } from '@embedpdf/plugin-search/svelte';
@@ -152,6 +153,7 @@
         {/if}
         <div class="relative min-w-0 flex-1" bind:this={pillHost}>
           <PdfToolbar {documentId} {pill} />
+          <PdfQuickActions {pill} />
           {#if reader.find[documentId]}
             <PdfFindBar {documentId} />
           {/if}

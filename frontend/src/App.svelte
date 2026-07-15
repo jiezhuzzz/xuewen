@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import { Spring } from 'svelte/motion';
   import { fly, slide } from 'svelte/transition';
-  import ChatBubble from './components/ChatBubble.svelte';
   import ChatPanel from './components/ChatPanel.svelte';
   import CommandPalette from './components/CommandPalette.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
@@ -108,7 +107,6 @@
               <InfoPanel id={viewer.activeId} />
             {/key}
           {/if}
-          {#if chat.available && !chat.open && !viewer.infoOpen}<ChatBubble />{/if}
           {#if chat.open}<ChatPanel />{/if}
         </div>
         {#if viewer.activeId === null}
