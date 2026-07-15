@@ -250,11 +250,7 @@ pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
     }
 }
 
-pub async fn create_project(
-    pool: &SqlitePool,
-    name: &str,
-    _note: Option<&str>,
-) -> Result<Project> {
+pub async fn create_project(pool: &SqlitePool, name: &str) -> Result<Project> {
     let project = Project {
         id: uuid::Uuid::now_v7().to_string(),
         name: name.to_string(),
@@ -294,12 +290,7 @@ pub async fn get_project(pool: &SqlitePool, id: &str) -> Result<Option<Project>>
     Ok(p)
 }
 
-pub async fn update_project(
-    pool: &SqlitePool,
-    id: &str,
-    name: &str,
-    _note: Option<&str>,
-) -> Result<bool> {
+pub async fn update_project(pool: &SqlitePool, id: &str, name: &str) -> Result<bool> {
     let res = sqlx::query("UPDATE projects SET name = ? WHERE id = ?")
         .bind(name)
         .bind(id)
@@ -538,13 +529,18 @@ fn escape_like(term: &str) -> String {
 
 /// List papers with optional case-insensitive search (`q` over title+authors),
 /// optional status filter, and a whitelisted sort. Unknown status/sort values
-/// are ignored (never an error).
+/// are ignored (never an error). `tag`/`starred` mirror the filters
+/// `search::store::papers_by_ids_ordered` applies for the search endpoint
+/// (tag matches the exact name or any `name/*` child; `starred` only
+/// restricts when `Some(true)`).
 pub async fn list_papers(
     pool: &SqlitePool,
     q: Option<&str>,
     status: Option<&str>,
     sort: Option<&str>,
     project: Option<&str>,
+    tag: Option<&str>,
+    starred: Option<bool>,
 ) -> Result<Vec<Paper>> {
     let mut qb: QueryBuilder<sqlx::Sqlite> =
         QueryBuilder::new("SELECT * FROM papers WHERE deleted_at IS NULL");
@@ -563,6 +559,19 @@ pub async fn list_papers(
         qb.push(" AND id IN (SELECT paper_id FROM paper_projects WHERE project_id = ")
             .push_bind(pid.to_string())
             .push(")");
+    }
+    if let Some(tag) = tag.map(str::trim).filter(|s| !s.is_empty()) {
+        // NOTE: a tag name containing a literal `%`/`_` would over-match under
+        // LIKE (no escaping applied) — same known caveat as the search filter.
+        qb.push(" AND id IN (SELECT pt.paper_id FROM paper_tags pt \
+                 JOIN tags t ON t.id = pt.tag_id WHERE t.name = ")
+            .push_bind(tag.to_string())
+            .push(" OR t.name LIKE ")
+            .push_bind(format!("{tag}/%"))
+            .push(")");
+    }
+    if starred == Some(true) {
+        qb.push(" AND starred = 1");
     }
     // Whitelisted ORDER BY (never interpolate raw user input).
     let order = match sort {
@@ -858,48 +867,50 @@ mod tests {
         insert_paper(&pool, &b).await.unwrap();
 
         // No filters → both, default sort year DESC (2017 before 2016).
-        let all = list_papers(&pool, None, None, None, None).await.unwrap();
+        let all = list_papers(&pool, None, None, None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].meta.year, Some(2017));
 
         // q matches title (case-insensitive) or authors.
-        let hits = list_papers(&pool, Some("residual"), None, None, None)
+        let hits = list_papers(&pool, Some("residual"), None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, a.id);
-        let by_author = list_papers(&pool, Some("vaswani"), None, None, None)
+        let by_author = list_papers(&pool, Some("vaswani"), None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(by_author.len(), 1);
         assert_eq!(by_author[0].id, b.id);
 
         // status filter.
-        let resolved = list_papers(&pool, None, Some("resolved"), None, None)
+        let resolved = list_papers(&pool, None, Some("resolved"), None, None, None, None)
             .await
             .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].id, a.id);
 
         // q + status together (covers the AND branch).
-        let combined = list_papers(&pool, Some("attention"), Some("needs_review"), None, None)
+        let combined = list_papers(&pool, Some("attention"), Some("needs_review"), None, None, None, None)
             .await
             .unwrap();
         assert_eq!(combined.len(), 1);
         assert_eq!(combined[0].id, b.id);
-        let none = list_papers(&pool, Some("attention"), Some("resolved"), None, None)
+        let none = list_papers(&pool, Some("attention"), Some("resolved"), None, None, None, None)
             .await
             .unwrap();
         assert!(none.is_empty());
 
         // year_asc sort.
-        let asc = list_papers(&pool, None, None, Some("year_asc"), None)
+        let asc = list_papers(&pool, None, None, Some("year_asc"), None, None, None)
             .await
             .unwrap();
         assert_eq!(asc[0].meta.year, Some(2016));
 
         // An unknown status is ignored (not an error) → both rows.
-        let bogus = list_papers(&pool, None, Some("nonsense"), None, None)
+        let bogus = list_papers(&pool, None, Some("nonsense"), None, None, None, None)
             .await
             .unwrap();
         assert_eq!(bogus.len(), 2);
@@ -916,7 +927,9 @@ mod tests {
         insert_paper(&pool, &b).await.unwrap();
 
         // "%" must match only the literal percent title, not act as a wildcard.
-        let hits = list_papers(&pool, Some("100%"), None, None, None).await.unwrap();
+        let hits = list_papers(&pool, Some("100%"), None, None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, a.id);
     }
@@ -969,7 +982,9 @@ mod tests {
         // Soft-delete a: hidden from list/stats/all_papers; b remains.
         assert!(soft_delete(&pool, &a.id).await.unwrap());
         assert!(!soft_delete(&pool, &a.id).await.unwrap()); // idempotent: already trashed
-        let listed = list_papers(&pool, None, None, None, None).await.unwrap();
+        let listed = list_papers(&pool, None, None, None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, b.id);
         assert_eq!(stats(&pool).await.unwrap().0, 1); // total counts only active
@@ -1079,7 +1094,13 @@ mod tests {
             .unwrap()
             .deleted_at
             .is_none());
-        assert_eq!(list_papers(&pool, None, None, None, None).await.unwrap().len(), 1);
+        assert_eq!(
+            list_papers(&pool, None, None, None, None, None, None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -1097,11 +1118,11 @@ mod tests {
     async fn project_crud_and_unique_name() {
         let (_dir, pool) = temp_pool().await;
 
-        let p = create_project(&pool, "Survey", Some("draft")).await.unwrap();
+        let p = create_project(&pool, "Survey").await.unwrap();
         assert_eq!(p.name, "Survey");
 
         // Case-insensitive unique name.
-        let dup = create_project(&pool, "survey", None).await;
+        let dup = create_project(&pool, "survey").await;
         assert!(dup.is_err());
         assert!(is_unique_violation(&dup.unwrap_err()));
 
@@ -1111,8 +1132,8 @@ mod tests {
         assert_eq!(list[0].project.id, p.id);
         assert_eq!(list[0].paper_count, 0);
 
-        // Update name + note.
-        assert!(update_project(&pool, &p.id, "Survey v2", Some("final")).await.unwrap());
+        // Update name.
+        assert!(update_project(&pool, &p.id, "Survey v2").await.unwrap());
         let got = get_project(&pool, &p.id).await.unwrap().unwrap();
         assert_eq!(got.name, "Survey v2");
 
@@ -1131,7 +1152,7 @@ mod tests {
         insert_paper(&pool, &sample_paper("01890000-0000-7000-8000-0000000000a2", "hb"))
             .await
             .unwrap();
-        let proj = create_project(&pool, "P", None).await.unwrap();
+        let proj = create_project(&pool, "P").await.unwrap();
 
         // Add is idempotent.
         add_paper_to_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
@@ -1169,7 +1190,7 @@ mod tests {
         assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 1);
 
         // Filter returns only members.
-        let filtered = list_papers(&pool, None, None, None, Some(&proj.id))
+        let filtered = list_papers(&pool, None, None, None, Some(&proj.id), None, None)
             .await
             .unwrap();
         assert_eq!(filtered.len(), 1);
@@ -1204,7 +1225,7 @@ mod tests {
     #[tokio::test]
     async fn find_one_project_by_name_then_prefix() {
         let (_dir, pool) = temp_pool().await;
-        let p = create_project(&pool, "My Survey", None).await.unwrap();
+        let p = create_project(&pool, "My Survey").await.unwrap();
 
         // Exact, case-insensitive name.
         assert_eq!(find_one_project(&pool, "my survey").await.unwrap().id, p.id);

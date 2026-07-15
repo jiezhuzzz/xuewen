@@ -951,7 +951,7 @@ async fn projects_crud_membership_and_filter() {
     // Create.
     let resp = server
         .post("/api/projects")
-        .json(&serde_json::json!({"name": "Survey", "note": "draft"}))
+        .json(&serde_json::json!({"name": "Survey"}))
         .await;
     resp.assert_status(axum::http::StatusCode::CREATED);
     let proj: serde_json::Value = resp.json();
@@ -1198,7 +1198,7 @@ async fn exports_bibtex_and_biblatex() {
     db::insert_paper(&pool, &paper("bbbb2222", "Attention Is All You Need", PaperStatus::Resolved))
         .await
         .unwrap();
-    let proj = db::create_project(&pool, "Survey", None).await.unwrap();
+    let proj = db::create_project(&pool, "Survey").await.unwrap();
     db::add_paper_to_project(&pool, "aaaa1111", &proj.id).await.unwrap();
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
 
@@ -1251,7 +1251,7 @@ async fn paper_rows_carry_starred_tags_and_projects() {
         .unwrap();
     db::set_paper_starred(&pool, "aaaa1111", true).await.unwrap();
     let tag = db::add_paper_tag(&pool, "aaaa1111", "vision").await.unwrap();
-    let proj = db::create_project(&pool, "Survey", None).await.unwrap();
+    let proj = db::create_project(&pool, "Survey").await.unwrap();
     db::add_paper_to_project(&pool, "aaaa1111", &proj.id).await.unwrap();
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
 
@@ -1279,6 +1279,40 @@ async fn paper_rows_carry_starred_tags_and_projects() {
         detail["projects"],
         serde_json::json!([{"id": proj.id, "name": "Survey"}])
     );
+}
+
+#[tokio::test]
+async fn list_filters_by_tag_prefix_and_starred() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    db::insert_paper(&pool, &paper("bbbb2222", "Attention Is All You Need", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    db::add_paper_tag(&pool, "aaaa1111", "security/fuzzing").await.unwrap();
+    db::set_paper_starred(&pool, "bbbb2222", true).await.unwrap();
+    let proj = db::create_project(&pool, "Survey").await.unwrap();
+    db::add_paper_to_project(&pool, "aaaa1111", &proj.id).await.unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // ?tag= matches by prefix -> only the tagged paper.
+    let by_tag: Vec<serde_json::Value> =
+        server.get("/api/papers?tag=security").await.json();
+    assert_eq!(by_tag.len(), 1);
+    assert_eq!(by_tag[0]["id"], "aaaa1111");
+
+    // ?starred=true -> only the starred paper (serde parses the bool).
+    let starred: Vec<serde_json::Value> =
+        server.get("/api/papers?starred=true").await.json();
+    assert_eq!(starred.len(), 1);
+    assert_eq!(starred[0]["id"], "bbbb2222");
+
+    // ?project= still works unchanged.
+    let by_project: Vec<serde_json::Value> =
+        server.get(&format!("/api/papers?project={}", proj.id)).await.json();
+    assert_eq!(by_project.len(), 1);
+    assert_eq!(by_project[0]["id"], "aaaa1111");
 }
 
 mod search_api {
