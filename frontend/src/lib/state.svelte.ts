@@ -18,6 +18,8 @@ import {
   listTags,
   removePaperFromProject,
   removeTag,
+  renameTag as apiRenameTag,
+  deleteTag as apiDeleteTag,
   searchPapers,
   setStar,
   updateProject,
@@ -322,6 +324,7 @@ export async function createNewProject(name: string): Promise<Project> {
 export async function renameProject(id: string, patch: { name?: string }): Promise<void> {
   await updateProject(id, patch);
   await loadProjects();
+  await loadPapers();
 }
 
 export async function removeProject(id: string): Promise<void> {
@@ -384,6 +387,29 @@ export async function removeTagFromPaper(paperId: string, tagId: string): Promis
   detailRefresh.n += 1;
   await loadTags();
   if (filters.tag) await loadPapers();
+}
+
+/// Rename a tag globally (not per-paper): refresh the tags store and reload
+/// the paper list so row chips pick up the new name. If the renamed tag was
+/// the active filter, clear it (the filter is name-keyed, so it would no
+/// longer match under the old name).
+export async function renameTag(id: string, name: string): Promise<void> {
+  const tag = tags.items.find((t) => t.id === id);
+  await apiRenameTag(id, name);
+  if (tag && filters.tag === tag.name) filters.tag = undefined;
+  await loadTags();
+  await loadPapers();
+}
+
+/// Delete a tag from every paper carrying it (GC'd tag row included), then
+/// refresh the tags store and paper list, clearing the tag filter if it was
+/// the one deleted.
+export async function deleteTag(id: string): Promise<void> {
+  const tag = tags.items.find((t) => t.id === id);
+  await apiDeleteTag(id);
+  if (tag && filters.tag === tag.name) filters.tag = undefined;
+  await loadTags();
+  await loadPapers();
 }
 
 let kwDebounce: ReturnType<typeof setTimeout> | undefined;
