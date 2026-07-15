@@ -77,6 +77,8 @@ async fn imported_pdf_becomes_keyword_searchable_by_body_text() {
             semantic: true,
             status: None,
             project: None,
+            tag: None,
+            starred: None,
         })
         .await
         .unwrap();

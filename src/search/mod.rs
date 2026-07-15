@@ -27,6 +27,8 @@ pub struct SearchRequest {
     pub semantic: bool,
     pub status: Option<String>,
     pub project: Option<String>,
+    pub tag: Option<String>,
+    pub starred: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +179,8 @@ impl SearchService {
             &fused,
             req.status.as_deref(),
             req.project.as_deref(),
+            req.tag.as_deref(),
+            req.starred,
         )
         .await?;
 
@@ -367,7 +371,7 @@ mod tests {
 
         let out = svc.search(&SearchRequest {
             q: "fuzzing".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None,
+            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
         }).await.unwrap();
 
         assert!(!out.semantic.available); // no embedder configured
@@ -390,7 +394,7 @@ mod tests {
         }).unwrap();
         let out = svc.search(&SearchRequest {
             q: "fuzzing".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: false, status: None, project: None,
+            keyword: true, semantic: false, status: None, project: None, tag: None, starred: None,
         }).await.unwrap();
         assert!(out.results.is_empty(), "trashed paper leaked through hydration");
     }
@@ -432,7 +436,7 @@ mod tests {
 
         let out = svc.search(&SearchRequest {
             q: "fuzzing".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None,
+            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
         }).await.unwrap();
 
         assert!(out.semantic.available);
@@ -472,7 +476,7 @@ mod tests {
 
         let out = svc.search(&SearchRequest {
             q: "different words entirely".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None,
+            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
         }).await.unwrap();
 
         assert_eq!(out.results.len(), 1);
@@ -501,7 +505,7 @@ mod tests {
 
         let out = svc.search(&SearchRequest {
             q: "fuzzing".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None,
+            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
         }).await.unwrap();
 
         assert!(!out.semantic.available);
@@ -516,7 +520,7 @@ mod tests {
         let out = svc.search(&SearchRequest {
             q: "lovelace".into(),
             fields: fts::FieldSel { title: false, authors: true, abstract_text: false, body: false },
-            keyword: true, semantic: true, status: None, project: None,
+            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
         }).await.unwrap();
         // Semantic was requested but is meaningless for authors-only.
         assert!(!out.semantic.available);
@@ -565,7 +569,7 @@ mod tests {
         let out = svc.search(&SearchRequest {
             q: "ada".into(),
             fields: fts::FieldSel { title: false, authors: true, abstract_text: false, body: false },
-            keyword: true, semantic: true, status: None, project: None,
+            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
         }).await.unwrap();
 
         assert!(!out.semantic.available, "semantic should be disabled for authors-only");
@@ -624,7 +628,7 @@ mod tests {
 
         let out = svc.search(&SearchRequest {
             q: "different words entirely".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None,
+            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
         }).await.unwrap();
 
         assert_eq!(out.results.len(), 1);
