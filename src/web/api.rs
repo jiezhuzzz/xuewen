@@ -26,6 +26,8 @@ pub struct ListParams {
     pub status: Option<String>,
     pub sort: Option<String>,
     pub project: Option<String>,
+    pub tag: Option<String>,
+    pub starred: Option<bool>,
 }
 
 /// Fill each row's `tags`/`projects` from its memberships. A per-paper loop is
@@ -85,6 +87,8 @@ pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams
         p.status.as_deref(),
         p.sort.as_deref(),
         p.project.as_deref(),
+        p.tag.as_deref(),
+        p.starred,
     )
     .await
     {
@@ -545,13 +549,11 @@ pub async fn clear_proxy_cookie(State(app): State<AppState>) -> Response {
 #[derive(Deserialize)]
 pub struct CreateProjectBody {
     pub name: String,
-    pub note: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateProjectBody {
     pub name: Option<String>,
-    pub note: Option<String>,
 }
 
 pub async fn list_projects(State(app): State<AppState>) -> Response {
@@ -572,12 +574,7 @@ pub async fn create_project(
     if name.is_empty() {
         return bad_request("empty name");
     }
-    let note = body
-        .note
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    match db::create_project(&app.pool, name, note).await {
+    match db::create_project(&app.pool, name).await {
         Ok(project) => (StatusCode::CREATED, Json(project)).into_response(),
         Err(e) if db::is_unique_violation(&e) => (
             StatusCode::CONFLICT,
@@ -604,30 +601,14 @@ pub async fn update_project(
             return internal_error();
         }
     };
-    // Merge: an omitted/blank name keeps the old one; an omitted note keeps the
-    // old one, while an explicit blank note clears it.
+    // Merge: an omitted/blank name keeps the old one.
     let name = body
         .name
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(&existing.name);
-    let note = match &body.note {
-        Some(n) => {
-            let t = n.trim();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
-        }
-        // `note` no longer exists on `Project` (Task 4 dropped the column); this
-        // whole merge-fallback becomes dead once Task 9 removes the `_note`
-        // param and its callers. `None` here is inert either way since
-        // `db::update_project` ignores its `_note` argument.
-        None => None,
-    };
-    match db::update_project(&app.pool, &id, name, note).await {
+    match db::update_project(&app.pool, &id, name).await {
         Ok(_) => match db::get_project(&app.pool, &id).await {
             Ok(Some(p)) => Json(p).into_response(),
             _ => internal_error(),
@@ -827,6 +808,8 @@ pub struct ExportParams {
     pub status: Option<String>,
     pub sort: Option<String>,
     pub project: Option<String>,
+    pub tag: Option<String>,
+    pub starred: Option<bool>,
 }
 
 fn parse_format(s: Option<&str>) -> export::BibFormat {
@@ -872,6 +855,8 @@ pub async fn export_papers(State(app): State<AppState>, Query(p): Query<ExportPa
         p.status.as_deref(),
         p.sort.as_deref(),
         p.project.as_deref(),
+        p.tag.as_deref(),
+        p.starred,
     )
     .await
     {
@@ -903,6 +888,8 @@ pub struct SearchParams {
     pub engines: Option<String>,
     pub status: Option<String>,
     pub project: Option<String>,
+    pub tag: Option<String>,
+    pub starred: Option<bool>,
 }
 
 /// Hybrid search. `fields`/`engines` are CSV lists; absent or unknown-only
@@ -923,9 +910,8 @@ pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchPa
         semantic,
         status: p.status,
         project: p.project,
-        // TODO(task 6): thread tag/starred query params through `SearchParams`.
-        tag: None,
-        starred: None,
+        tag: p.tag,
+        starred: p.starred,
     };
     match svc.search(&req).await {
         Ok(out) => {

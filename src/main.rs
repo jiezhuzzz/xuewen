@@ -146,10 +146,19 @@ enum Command {
         #[command(subcommand)]
         cmd: ProjectCmd,
     },
+    /// Manage topical tags.
+    Tag {
+        #[command(subcommand)]
+        cmd: TagCmd,
+    },
+    /// Star a paper.
+    Star { paper: String },
+    /// Un-star a paper.
+    Unstar { paper: String },
     /// Export papers as BibTeX or BibLaTeX.
     Export {
         /// Paper id (exact or unique prefix) for a single entry.
-        #[arg(conflicts_with_all = ["all", "project"])]
+        #[arg(conflicts_with_all = ["all", "project", "tag", "starred"])]
         id: Option<String>,
         /// Export the whole (non-trashed) library.
         #[arg(long, conflicts_with = "project")]
@@ -157,6 +166,12 @@ enum Command {
         /// Export all papers in this project (name or id).
         #[arg(long)]
         project: Option<String>,
+        /// Filter batch exports to papers carrying this tag (or its prefix).
+        #[arg(long)]
+        tag: Option<String>,
+        /// Filter batch exports to starred papers only.
+        #[arg(long)]
+        starred: bool,
         /// Filter batch exports by a search term (title/author).
         #[arg(long)]
         query: Option<String>,
@@ -219,12 +234,7 @@ enum ProjectCmd {
     /// List projects with paper counts.
     List,
     /// Create a new project.
-    New {
-        name: String,
-        /// Optional free-text note (e.g. the manuscript's working title).
-        #[arg(long)]
-        note: Option<String>,
-    },
+    New { name: String },
     /// Delete a project (papers are kept).
     Rm { project: String },
     /// Add one or more papers to a project.
@@ -237,6 +247,22 @@ enum ProjectCmd {
     Remove { project: String, paper: String },
     /// List the papers in a project.
     Show { project: String },
+}
+
+#[derive(Subcommand)]
+enum TagCmd {
+    /// List tags with paper counts.
+    List,
+    /// Add a tag to a paper (created if new).
+    Add { paper: String, name: String },
+    /// Remove a tag from a paper.
+    Remove { paper: String, name: String },
+    /// Rename a tag.
+    Rename { old: String, new: String },
+    /// Delete a tag from all papers.
+    Rm { name: String },
+    /// List papers carrying a tag (or its prefix).
+    Show { name: String },
 }
 
 #[derive(Subcommand)]
@@ -598,17 +624,15 @@ async fn main() -> Result<()> {
                     println!("no projects");
                 }
                 for s in projects {
-                    // `note` no longer exists on `Project` (Task 4 dropped the
-                    // column); Task 9 removes the now-dead `note` CLI flag.
                     println!("{}  ({} papers)", s.project.name, s.paper_count);
                 }
             }
-            ProjectCmd::New { name, note } => {
+            ProjectCmd::New { name } => {
                 let name = name.trim();
                 if name.is_empty() {
                     anyhow::bail!("project name cannot be empty");
                 }
-                let p = db::create_project(&pool, name, note.as_deref()).await?;
+                let p = db::create_project(&pool, name).await?;
                 println!("created project {} ({})", p.name, p.id);
             }
             ProjectCmd::Rm { project } => {
@@ -637,7 +661,8 @@ async fn main() -> Result<()> {
             }
             ProjectCmd::Show { project } => {
                 let proj = db::find_one_project(&pool, &project).await?;
-                let papers = db::list_papers(&pool, None, None, None, Some(&proj.id)).await?;
+                let papers =
+                    db::list_papers(&pool, None, None, None, Some(&proj.id), None, None).await?;
                 println!("{} — {} paper(s)", proj.name, papers.len());
                 for p in papers {
                     println!(
@@ -648,10 +673,87 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Command::Tag { cmd } => match cmd {
+            TagCmd::List => {
+                let tags = db::list_tags_with_counts(&pool).await?;
+                if tags.is_empty() {
+                    println!("no tags");
+                }
+                for s in tags {
+                    println!("{}  ({} papers)", s.tag.name, s.paper_count);
+                }
+            }
+            TagCmd::Add { paper, name } => {
+                let paper = db::find_one(&pool, &paper).await?;
+                let label = paper.cite_key.as_deref().unwrap_or(&paper.id);
+                let tag = db::add_paper_tag(&pool, &paper.id, &name).await?;
+                println!("added tag {} to {label}", tag.name);
+            }
+            TagCmd::Remove { paper, name } => {
+                let paper = db::find_one(&pool, &paper).await?;
+                let label = paper.cite_key.as_deref().unwrap_or(&paper.id);
+                let tag = db::find_tag_by_name(&pool, &name)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("no tag named {name:?}"))?;
+                if db::remove_paper_tag(&pool, &paper.id, &tag.id).await? {
+                    println!("removed tag {} from {label}", tag.name);
+                } else {
+                    println!("{label} did not carry tag {}", tag.name);
+                }
+            }
+            TagCmd::Rename { old, new } => {
+                let tag = db::find_tag_by_name(&pool, &old)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("no tag named {old:?}"))?;
+                let renamed = db::rename_tag(&pool, &tag.id, &new)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("no tag named {old:?}"))?;
+                println!("renamed tag {} to {}", old, renamed.name);
+            }
+            TagCmd::Rm { name } => {
+                let tag = db::find_tag_by_name(&pool, &name)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("no tag named {name:?}"))?;
+                db::delete_tag(&pool, &tag.id).await?;
+                println!("deleted tag {}", tag.name);
+            }
+            TagCmd::Show { name } => {
+                let papers = db::list_papers(&pool, None, None, None, None, Some(&name), None)
+                    .await?;
+                println!("{name} — {} paper(s)", papers.len());
+                for p in papers {
+                    println!(
+                        "  {}  {}",
+                        p.id,
+                        p.meta.title.as_deref().unwrap_or("(untitled)")
+                    );
+                }
+            }
+        },
+        Command::Star { paper } => {
+            let paper = db::find_one(&pool, &paper).await?;
+            let label = paper.cite_key.as_deref().unwrap_or(&paper.id);
+            if db::set_paper_starred(&pool, &paper.id, true).await? {
+                println!("starred {label}");
+            } else {
+                println!("{label} not found");
+            }
+        }
+        Command::Unstar { paper } => {
+            let paper = db::find_one(&pool, &paper).await?;
+            let label = paper.cite_key.as_deref().unwrap_or(&paper.id);
+            if db::set_paper_starred(&pool, &paper.id, false).await? {
+                println!("unstarred {label}");
+            } else {
+                println!("{label} not found");
+            }
+        }
         Command::Export {
             id,
             all,
             project,
+            tag,
+            starred,
             query,
             status,
             format,
@@ -662,8 +764,10 @@ async fn main() -> Result<()> {
                 let paper = db::find_one(&pool, &id).await?;
                 xuewen::export::format_entry(&paper, fmt)
             } else {
-                if !all && project.is_none() {
-                    anyhow::bail!("specify a paper id, --all, or --project <name>");
+                if !all && project.is_none() && tag.is_none() && !starred {
+                    anyhow::bail!(
+                        "specify a paper id, --all, --project <name>, --tag <name>, or --starred"
+                    );
                 }
                 let project_id = match &project {
                     Some(sel) => Some(db::find_one_project(&pool, sel).await?.id),
@@ -675,6 +779,8 @@ async fn main() -> Result<()> {
                     status.as_deref(),
                     None,
                     project_id.as_deref(),
+                    tag.as_deref(),
+                    starred.then_some(true),
                 )
                 .await?;
                 xuewen::export::format_entries(&papers, fmt)
