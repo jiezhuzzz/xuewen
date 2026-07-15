@@ -1,20 +1,9 @@
 <script lang="ts">
-  import {
-    ChevronDown,
-    ChevronLeft,
-    ChevronRight,
-    Info,
-    Maximize2,
-    Minimize2,
-    PanelLeft,
-    Search,
-    ZoomIn,
-    ZoomOut,
-  } from 'lucide-svelte';
+  import { ChevronDown, ChevronLeft, ChevronRight, PanelLeft, Search, ZoomIn, ZoomOut } from 'lucide-svelte';
   import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { DUR, dur, EASE } from '../lib/motion';
-  import { toggleInfo, toggleZen, ui, viewer } from '../lib/state.svelte';
+  import { ui, viewer } from '../lib/state.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
   import { clampPage } from '../lib/pageNav';
   import { formatScale, isActivePreset, ZOOM_PRESETS } from '../lib/zoomPresets';
@@ -209,27 +198,5 @@
     onclick={() => setFind(documentId)}
   >
     <Search size={16} />
-  </button>
-
-  <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
-
-  <button
-    type="button"
-    class={btn}
-    aria-label={ui.zen ? 'Exit zen mode' : 'Zen mode'}
-    title="Zen mode (z)"
-    onclick={toggleZen}
-  >
-    {#if ui.zen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
-  </button>
-  <button
-    type="button"
-    class={viewer.infoOpen ? activeBtn : btn}
-    aria-label="Toggle info"
-    aria-expanded={viewer.infoOpen}
-    title="Info (i)"
-    onclick={toggleInfo}
-  >
-    <Info size={16} />
   </button>
 </div>
