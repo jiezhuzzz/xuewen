@@ -13,6 +13,7 @@ import type {
   Settings,
   Stats,
   StructuredReference,
+  TagSummary,
 } from './types';
 
 /** `{error: "..."}` from the response body when present, else
@@ -35,6 +36,8 @@ function filterParams(f: Filters): URLSearchParams {
   if (f.status !== 'all') params.set('status', f.status);
   params.set('sort', f.sort);
   if (f.project && f.project !== 'all') params.set('project', f.project);
+  if (f.tag) params.set('tag', f.tag);
+  if (f.starred) params.set('starred', 'true');
   return params;
 }
 
@@ -125,20 +128,17 @@ export async function listProjects(): Promise<Project[]> {
   return res.json();
 }
 
-export async function createProject(name: string, note: string | null): Promise<Project> {
+export async function createProject(name: string): Promise<Project> {
   const res = await fetch('/api/projects', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, note }),
+    body: JSON.stringify({ name }),
   });
   if (!res.ok) return errorFromResponse(res, 'create project failed');
   return res.json();
 }
 
-export async function updateProject(
-  id: string,
-  patch: { name?: string; note?: string | null },
-): Promise<Project> {
+export async function updateProject(id: string, patch: { name?: string }): Promise<Project> {
   const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
@@ -167,6 +167,54 @@ export async function removePaperFromProject(paperId: string, projectId: string)
     { method: 'DELETE' },
   );
   if (!res.ok) throw new Error(`remove from project failed: ${res.status}`);
+}
+
+export async function listTags(): Promise<TagSummary[]> {
+  const res = await fetch('/api/tags');
+  if (!res.ok) throw new Error(`tags failed: ${res.status}`);
+  return res.json();
+}
+
+export async function addTag(
+  paperId: string,
+  name: string,
+): Promise<{ id: string; name: string }> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/tags`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) return errorFromResponse(res, 'add tag failed');
+  return res.json();
+}
+
+export async function removeTag(paperId: string, tagId: string): Promise<void> {
+  const res = await fetch(
+    `/api/papers/${encodeURIComponent(paperId)}/tags/${encodeURIComponent(tagId)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) throw new Error(`remove tag failed: ${res.status}`);
+}
+
+export async function renameTag(id: string, name: string): Promise<void> {
+  const res = await fetch(`/api/tags/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`rename tag failed: ${res.status}`);
+}
+
+export async function deleteTag(id: string): Promise<void> {
+  const res = await fetch(`/api/tags/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`delete tag failed: ${res.status}`);
+}
+
+export async function setStar(paperId: string, on: boolean): Promise<void> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/star`, {
+    method: on ? 'PUT' : 'DELETE',
+  });
+  if (!res.ok) throw new Error(`star failed: ${res.status}`);
 }
 
 export async function exportPaper(id: string, fmt: BibFormat): Promise<string> {
@@ -201,6 +249,8 @@ export function searchParams(
   if (engines.length > 0 && engines.length < 2) params.set('engines', engines.join(','));
   if (f.status !== 'all') params.set('status', f.status);
   if (f.project && f.project !== 'all') params.set('project', f.project);
+  if (f.tag) params.set('tag', f.tag);
+  if (f.starred) params.set('starred', 'true');
   return params;
 }
 

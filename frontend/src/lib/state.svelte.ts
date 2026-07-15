@@ -1,5 +1,6 @@
 import {
   addPaperToProject,
+  addTag,
   createProject,
   deletePaper,
   deleteProject,
@@ -14,8 +15,11 @@ import {
   importUrl,
   listPapers,
   listProjects,
+  listTags,
   removePaperFromProject,
+  removeTag,
   searchPapers,
+  setStar,
   updateProject,
 } from './api';
 import { invalidateLibraryTitleIndex } from './citationMatch';
@@ -32,9 +36,17 @@ import type {
   SearchMatch,
   SearchOpts,
   Stats,
+  TagSummary,
 } from './types';
 
-export const filters = $state<Filters>({ q: '', status: 'all', sort: 'year_desc', project: 'all' });
+export const filters = $state<Filters>({
+  q: '',
+  status: 'all',
+  sort: 'year_desc',
+  project: 'all',
+  tag: undefined,
+  starred: undefined,
+});
 
 export const searchOpts = $state<SearchOpts>({
   title: true,
@@ -89,6 +101,8 @@ export async function loadSearchStatus(): Promise<void> {
 }
 
 export const projects = $state<{ items: Project[] }>({ items: [] });
+
+export const tags = $state<{ items: TagSummary[] }>({ items: [] });
 
 export const bibFormat = $state<{ value: BibFormat }>({ value: 'bibtex' });
 
@@ -224,9 +238,6 @@ export function closeImport(): void {
   importState.cancelled = true;
   ui.importOpen = false;
 }
-export function openProjects(): void {
-  ui.projectsOpen = true;
-}
 export function closeProjects(): void {
   ui.projectsOpen = false;
 }
@@ -276,21 +287,44 @@ export async function loadProjects(): Promise<void> {
   }
 }
 
+export async function loadTags(): Promise<void> {
+  try {
+    tags.items = await listTags();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+/// The three list filters (project/tag/starred) are mutually exclusive in the
+/// UI: setting one clears the other two so exactly one is ever active.
 export async function setProjectFilter(id: string): Promise<void> {
   filters.project = id;
+  filters.tag = undefined;
+  filters.starred = undefined;
   await loadPapers();
 }
 
-export async function createNewProject(name: string, note: string | null): Promise<Project> {
-  const p = await createProject(name, note);
+export async function setTagFilter(tag: string | undefined): Promise<void> {
+  filters.tag = tag;
+  filters.project = 'all';
+  filters.starred = undefined;
+  await loadPapers();
+}
+
+export async function setStarFilter(on: boolean): Promise<void> {
+  filters.starred = on || undefined;
+  filters.project = 'all';
+  filters.tag = undefined;
+  await loadPapers();
+}
+
+export async function createNewProject(name: string): Promise<Project> {
+  const p = await createProject(name);
   await loadProjects();
   return p;
 }
 
-export async function renameProject(
-  id: string,
-  patch: { name?: string; note?: string | null },
-): Promise<void> {
+export async function renameProject(id: string, patch: { name?: string }): Promise<void> {
   await updateProject(id, patch);
   await loadProjects();
 }
@@ -316,6 +350,45 @@ export async function removeFromProject(paperId: string, projectId: string): Pro
   detailRefresh.n += 1;
   await loadProjects();
   if (filters.project === projectId) await loadPapers();
+}
+
+/// Flip a paper's starred flag: call the API, then patch the row/cached
+/// detail in place so the UI reflects it immediately (no full reload) unless
+/// the starred filter is active, in which case the list itself may need to
+/// drop/gain the paper.
+export async function toggleStar(paperId: string): Promise<void> {
+  const row = library.papers.find((p) => p.id === paperId);
+  const cached = detailCache.get(paperId);
+  const next = !(row?.starred ?? cached?.starred ?? false);
+  await setStar(paperId, next);
+  if (row) row.starred = next;
+  if (cached) cached.starred = next;
+  detailRefresh.n += 1;
+  if (filters.starred !== undefined) await loadPapers();
+}
+
+/// Add a tag (by name; creating it if new) to a paper, patch the row/cached
+/// detail, and refresh the tags store (name list + counts).
+export async function addTagToPaper(paperId: string, name: string): Promise<void> {
+  const tag = await addTag(paperId, name);
+  const row = library.papers.find((p) => p.id === paperId);
+  if (row && !row.tags.some((t) => t.id === tag.id)) row.tags = [...row.tags, tag];
+  const cached = detailCache.get(paperId);
+  if (cached && !cached.tags.some((t) => t.id === tag.id)) cached.tags = [...cached.tags, tag];
+  detailRefresh.n += 1;
+  await loadTags();
+  if (filters.tag) await loadPapers();
+}
+
+export async function removeTagFromPaper(paperId: string, tagId: string): Promise<void> {
+  await removeTag(paperId, tagId);
+  const row = library.papers.find((p) => p.id === paperId);
+  if (row) row.tags = row.tags.filter((t) => t.id !== tagId);
+  const cached = detailCache.get(paperId);
+  if (cached) cached.tags = cached.tags.filter((t) => t.id !== tagId);
+  detailRefresh.n += 1;
+  await loadTags();
+  if (filters.tag) await loadPapers();
 }
 
 let kwDebounce: ReturnType<typeof setTimeout> | undefined;
