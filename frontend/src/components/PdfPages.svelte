@@ -49,9 +49,9 @@
   const PANEL_W = 176; // = w-44
   // svelte-ignore state_referenced_locally -- initial value only; the
   // $effect below drives every subsequent update via panelW.target.
-  const panelW = new Spring(reader.panel[documentId] ? PANEL_W : 0, SPRINGS.pane);
+  const panelW = new Spring(reader.panel ? PANEL_W : 0, SPRINGS.pane);
   $effect(() => {
-    const target = reader.panel[documentId] ? PANEL_W : 0;
+    const target = reader.panel ? PANEL_W : 0;
     if (import.meta.env.MODE === 'test' || prefersReducedMotion()) {
       panelW.set(target, { instant: true });
     } else {
@@ -166,7 +166,7 @@
   {#snippet children(doc)}
     {#if doc.isLoaded}
       <div class="flex h-full">
-        {#if reader.panel[documentId] || panelW.current > 1}
+        {#if reader.panel || panelW.current > 1}
           <!-- Kept mounted while the spring settles so closing slides the
                panel away instead of blanking it; inert once logically closed.
                A rapid close→reopen within the settle window intentionally
@@ -176,7 +176,7 @@
           <div
             class="relative min-h-0 shrink-0 overflow-hidden"
             style={`width:${panelW.current}px`}
-            inert={!reader.panel[documentId]}
+            inert={!reader.panel}
           >
             <div class="absolute inset-y-0 left-0 flex w-44">
               <PdfSidePanel {documentId} />

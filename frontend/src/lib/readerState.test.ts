@@ -4,8 +4,8 @@ import { dropReaderState, openFind, reader, setFind, setPanelView, toggleSidebar
 
 beforeEach(() => {
   for (const k of Object.keys(reader.find)) delete reader.find[k];
-  for (const k of Object.keys(reader.panel)) delete reader.panel[k];
-  for (const k of Object.keys(reader.lastPanel)) delete reader.lastPanel[k];
+  reader.panel = null;
+  reader.lastPanel = 'thumbs';
 });
 
 describe('setFind', () => {
@@ -25,29 +25,28 @@ describe('setFind', () => {
   });
 });
 
-describe('toggleSidebar / setPanelView', () => {
+describe('toggleSidebar / setPanelView (global)', () => {
   it('opens at thumbnails first, closes on re-toggle', () => {
-    toggleSidebar('a');
-    expect(reader.panel['a']).toBe('thumbs');
-    toggleSidebar('a');
-    expect(reader.panel['a']).toBe(null);
+    toggleSidebar();
+    expect(reader.panel).toBe('thumbs');
+    toggleSidebar();
+    expect(reader.panel).toBe(null);
   });
 
   it('reopens at the last-used view', () => {
-    toggleSidebar('a');
-    setPanelView('a', 'outline');
-    toggleSidebar('a'); // close
-    expect(reader.panel['a']).toBe(null);
-    toggleSidebar('a'); // reopen
-    expect(reader.panel['a']).toBe('outline');
+    toggleSidebar();
+    setPanelView('outline');
+    toggleSidebar(); // close
+    expect(reader.panel).toBe(null);
+    toggleSidebar(); // reopen
+    expect(reader.panel).toBe('outline');
   });
 
-  it('keeps state independent per document', () => {
-    toggleSidebar('a');
-    toggleSidebar('b');
-    setPanelView('b', 'outline');
-    expect(reader.panel['a']).toBe('thumbs');
-    expect(reader.panel['b']).toBe('outline');
+  it('is a single global setting, not keyed per document', () => {
+    toggleSidebar();
+    setPanelView('outline');
+    // One shared value applies to every open paper.
+    expect(reader.panel).toBe('outline');
   });
 });
 
@@ -66,13 +65,12 @@ describe('openFind', () => {
 });
 
 describe('dropReaderState', () => {
-  it('forgets a closed document', () => {
+  it('forgets a closed document’s find state but leaves the global panel', () => {
     setFind('a', true);
-    toggleSidebar('a');
-    setPanelView('a', 'outline');
+    toggleSidebar();
+    setPanelView('outline');
     dropReaderState('a');
     expect(reader.find['a']).toBeUndefined();
-    expect(reader.panel['a']).toBeUndefined();
-    expect(reader.lastPanel['a']).toBeUndefined();
+    expect(reader.panel).toBe('outline'); // global — unaffected by closing a tab
   });
 });

@@ -23,7 +23,7 @@
   // While the close animation runs, reader.panel is already null but the
   // panel is still visible — keep showing the last-used view as it slides
   // away instead of blanking.
-  const tab = $derived(reader.panel[documentId] ?? reader.lastPanel[documentId] ?? 'thumbs');
+  const tab = $derived(reader.panel ?? reader.lastPanel);
 
   function jump(pageIndex: number): void {
     scroll.provides?.scrollToPage({ pageNumber: pageIndex + 1 });
@@ -82,7 +82,7 @@
         aria-label="Thumbnails"
         aria-pressed={tab === 'thumbs'}
         class={seg(tab === 'thumbs')}
-        onclick={() => setPanelView(documentId, 'thumbs')}
+        onclick={() => setPanelView('thumbs')}
       >
         <LayoutGrid size={14} />
       </button>
@@ -91,7 +91,7 @@
         aria-label="Outline"
         aria-pressed={tab === 'outline'}
         class={seg(tab === 'outline')}
-        onclick={() => setPanelView(documentId, 'outline')}
+        onclick={() => setPanelView('outline')}
       >
         <List size={14} />
       </button>

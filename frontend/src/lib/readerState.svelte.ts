@@ -1,31 +1,33 @@
 import { tick } from 'svelte';
 
-/// Per-open-paper reader UI state, keyed by documentId (= paper id). Lives
-/// at module level (not inside PdfPages) so the global keymap can reach the
-/// active tab's find bar, while each hidden tab still keeps its own state.
+/// Reader UI state. The find bar is per-open-paper (keyed by documentId) so the
+/// global keymap reaches the active tab's bar while hidden tabs keep their own.
+/// The side panel, by contrast, is a single GLOBAL setting shared across every
+/// open paper: opening/closing it or switching thumbnails↔outline in one paper
+/// applies to all open tabs and to every paper opened afterwards.
 export type PanelTab = 'thumbs' | 'outline';
 
 export const reader = $state<{
   find: Record<string, boolean>;
-  panel: Record<string, PanelTab | null>;
-  lastPanel: Record<string, PanelTab>;
-}>({ find: {}, panel: {}, lastPanel: {} });
+  panel: PanelTab | null;
+  lastPanel: PanelTab;
+}>({ find: {}, panel: null, lastPanel: 'thumbs' });
 
 /// Open/close one document's find bar. Omit `open` to toggle.
 export function setFind(id: string, open?: boolean): void {
   reader.find[id] = open ?? !reader.find[id];
 }
 
-/// The toolbar's single sidebar button: closed → reopen at the last-used
-/// view (thumbnails on first open); open → close.
-export function toggleSidebar(id: string): void {
-  reader.panel[id] = reader.panel[id] ? null : (reader.lastPanel[id] ?? 'thumbs');
+/// The toolbar's single sidebar button (global): closed → reopen at the
+/// last-used view (thumbnails on first open); open → close.
+export function toggleSidebar(): void {
+  reader.panel = reader.panel ? null : reader.lastPanel;
 }
 
-/// The panel's segmented control: switch the open view and remember it.
-export function setPanelView(id: string, tab: PanelTab): void {
-  reader.panel[id] = tab;
-  reader.lastPanel[id] = tab;
+/// The panel's segmented control: switch the (global) open view and remember it.
+export function setPanelView(tab: PanelTab): void {
+  reader.panel = tab;
+  reader.lastPanel = tab;
 }
 
 /// ⌘F: open (or refocus) a document's find bar. Focus waits a tick so a
@@ -41,9 +43,8 @@ export function openFind(id: string): void {
   });
 }
 
-/// Forget a closed tab's state (called from closeTab).
+/// Forget a closed tab's find state (called from closeTab). The side panel is
+/// global, so there is nothing panel-related to drop per tab.
 export function dropReaderState(id: string): void {
   delete reader.find[id];
-  delete reader.panel[id];
-  delete reader.lastPanel[id];
 }

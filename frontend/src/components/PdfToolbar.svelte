@@ -45,7 +45,7 @@
   });
 
   const title = $derived(viewer.tabs.find((t) => t.id === documentId)?.title ?? '');
-  const panel = $derived(reader.panel[documentId] ?? null);
+  const panel = $derived(reader.panel);
 
   const btn =
     'rounded-lg p-1.5 text-stone-600 hover:bg-parchment hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent dark:text-stone-300 dark:hover:bg-stone-800';
@@ -82,7 +82,7 @@
     aria-label="Toggle sidebar"
     aria-expanded={panel !== null}
     title="Sidebar"
-    onclick={() => toggleSidebar(documentId)}
+    onclick={() => toggleSidebar()}
   >
     <PanelLeft size={16} />
   </button>
