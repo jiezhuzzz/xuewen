@@ -184,7 +184,21 @@
   <button type="button" class={btn} aria-label="Zoom out" onclick={() => zoom.provides?.zoomOut()}>
     <ZoomOut size={16} />
   </button>
-  <div class="relative" bind:this={zoomMenuWrap}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -- the keydown only
+       contains Escape while the zoom menu is open (same pattern as the find
+       bar). It lives on the wrapper — not the menu — because the trigger
+       button keeps focus after opening; a handler on the sibling menu would
+       never see that Escape. Every interactive child is a real button. -->
+  <div
+    class="relative"
+    bind:this={zoomMenuWrap}
+    onkeydown={(e) => {
+      if (zoomMenuOpen && e.key === 'Escape') {
+        e.stopPropagation(); // the global cascade must not see this
+        zoomMenuOpen = false;
+      }
+    }}
+  >
     <button
       type="button"
       class={`${zoomMenuOpen ? activeBtn : btn} flex items-center gap-0.5 text-sm tabular-nums`}
@@ -196,19 +210,10 @@
       <ChevronDown size={12} />
     </button>
     {#if zoomMenuOpen}
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -- the
-           keydown only contains Escape inside the menu (same pattern as the
-           find bar); every item is a real button. -->
       <div
         role="menu"
         aria-label="Zoom presets"
         class="absolute left-1/2 top-full z-30 mt-1.5 w-28 -translate-x-1/2 rounded-xl border border-stone-200 bg-paper/95 p-1 shadow-lg backdrop-blur dark:border-stone-800 dark:bg-soot/95"
-        onkeydown={(e) => {
-          if (e.key === 'Escape') {
-            e.stopPropagation(); // the global cascade must not see this
-            zoomMenuOpen = false;
-          }
-        }}
       >
         {#each ZOOM_PRESETS as p (p.label)}
           <button
