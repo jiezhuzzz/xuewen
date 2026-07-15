@@ -188,6 +188,19 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{paper_id}/projects/{project_id}",
             axum::routing::put(api::add_paper_to_project).delete(api::remove_paper_from_project),
         )
+        .route("/api/tags", get(api::list_tags))
+        .route(
+            "/api/tags/{id}",
+            axum::routing::patch(api::rename_tag).delete(api::delete_tag),
+        )
+        .route(
+            "/api/papers/{paper_id}/tags",
+            axum::routing::put(api::add_paper_tag),
+        )
+        .route(
+            "/api/papers/{paper_id}/tags/{tag_id}",
+            axum::routing::delete(api::remove_paper_tag),
+        )
         .route("/api/search", get(api::search_papers))
         .route("/api/search/status", get(api::search_status))
         .route("/api/daily", get(api::daily_papers))
