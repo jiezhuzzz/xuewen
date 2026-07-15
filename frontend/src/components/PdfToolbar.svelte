@@ -1,9 +1,9 @@
 <script lang="ts">
   import {
+    ChevronDown,
     ChevronLeft,
     ChevronRight,
     Info,
-    Maximize,
     Maximize2,
     Minimize2,
     PanelLeft,
@@ -11,22 +11,19 @@
     ZoomIn,
     ZoomOut,
   } from 'lucide-svelte';
-  import { useZoomCapability } from '@embedpdf/plugin-zoom/svelte';
-  import { ZoomMode } from '@embedpdf/plugin-zoom';
+  import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { DUR, dur, EASE } from '../lib/motion';
   import { toggleInfo, toggleZen, ui, viewer } from '../lib/state.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
   import { HIDE_DELAY_MS, HOT_ZONE_PX, holdVisible, toolbarVisible, type ToolbarHold } from '../lib/zenToolbar';
   import { clampPage } from '../lib/pageNav';
+  import { formatScale, isActivePreset, ZOOM_PRESETS } from '../lib/zoomPresets';
 
   let { documentId }: { documentId: string } = $props();
 
-  const zoom = useZoomCapability();
+  const zoom = useZoom(() => documentId);
   const scroll = useScroll(() => documentId);
-  function zoomScope() {
-    return zoom.provides?.forDocument(documentId);
-  }
 
   // --- page-number input: mirrors currentPage except while being edited ---
   let pageText = $state('1');
@@ -38,6 +35,15 @@
     const n = clampPage(pageText, scroll.state.totalPages);
     if (n !== null) scroll.provides?.scrollToPage({ pageNumber: n });
     target.blur();
+  }
+
+  // --- zoom preset menu ---
+  let zoomMenuOpen = $state(false);
+  let zoomMenuWrap: HTMLDivElement | undefined = $state();
+  function onWindowPointerDown(e: PointerEvent): void {
+    if (zoomMenuOpen && !(e.target instanceof Node && zoomMenuWrap?.contains(e.target))) {
+      zoomMenuOpen = false;
+    }
   }
 
   // --- zen auto-hide. Decision logic lives in lib/zenToolbar.ts; this owns
@@ -62,7 +68,9 @@
     pointerOver,
     focusWithin,
     findOpen: !!reader.find[documentId],
-    pageEditing,
+    // Any toolbar-local interaction (editing the page number, an open zoom
+    // menu) holds the pill visible; zenToolbar.ts doesn't care which.
+    pageEditing: pageEditing || zoomMenuOpen,
   });
   const visible = $derived(toolbarVisible(hold, idleExpired));
 
@@ -95,7 +103,7 @@
   const activeBtn = 'rounded-lg p-1.5 bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500';
 </script>
 
-<svelte:window onpointermove={onWindowMove} />
+<svelte:window onpointermove={onWindowMove} onpointerdown={onWindowPointerDown} />
 
 <!-- svelte-ignore a11y_interactive_supports_focus -- every control inside
      the pill is individually tabbable via normal document tab order; the
@@ -173,13 +181,56 @@
 
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
 
-  <button type="button" class={btn} aria-label="Zoom out" onclick={() => zoomScope()?.zoomOut()}>
+  <button type="button" class={btn} aria-label="Zoom out" onclick={() => zoom.provides?.zoomOut()}>
     <ZoomOut size={16} />
   </button>
-  <button type="button" class={btn} aria-label="Fit width" onclick={() => zoomScope()?.requestZoom(ZoomMode.FitWidth)}>
-    <Maximize size={16} />
-  </button>
-  <button type="button" class={btn} aria-label="Zoom in" onclick={() => zoomScope()?.zoomIn()}>
+  <div class="relative" bind:this={zoomMenuWrap}>
+    <button
+      type="button"
+      class={`${zoomMenuOpen ? activeBtn : btn} flex items-center gap-0.5 text-sm tabular-nums`}
+      aria-label="Zoom level"
+      aria-expanded={zoomMenuOpen}
+      onclick={() => (zoomMenuOpen = !zoomMenuOpen)}
+    >
+      {formatScale(zoom.state.currentZoomLevel)}
+      <ChevronDown size={12} />
+    </button>
+    {#if zoomMenuOpen}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -- the
+           keydown only contains Escape inside the menu (same pattern as the
+           find bar); every item is a real button. -->
+      <div
+        role="menu"
+        aria-label="Zoom presets"
+        class="absolute left-1/2 top-full z-30 mt-1.5 w-28 -translate-x-1/2 rounded-xl border border-stone-200 bg-paper/95 p-1 shadow-lg backdrop-blur dark:border-stone-800 dark:bg-soot/95"
+        onkeydown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation(); // the global cascade must not see this
+            zoomMenuOpen = false;
+          }
+        }}
+      >
+        {#each ZOOM_PRESETS as p (p.label)}
+          <button
+            type="button"
+            role="menuitem"
+            class={`block w-full rounded-lg px-2 py-1 text-left text-xs ${
+              isActivePreset(p, zoom.state.currentZoomLevel)
+                ? 'bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500'
+                : 'text-stone-600 hover:bg-parchment hover:text-ink dark:text-stone-300 dark:hover:bg-stone-800'
+            }`}
+            onclick={() => {
+              zoom.provides?.requestZoom(p.level);
+              zoomMenuOpen = false;
+            }}
+          >
+            {p.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+  <button type="button" class={btn} aria-label="Zoom in" onclick={() => zoom.provides?.zoomIn()}>
     <ZoomIn size={16} />
   </button>
 
