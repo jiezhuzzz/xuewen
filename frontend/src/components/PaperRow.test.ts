@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PaperRow from './PaperRow.svelte';
 import { selection, viewer } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
@@ -8,7 +8,7 @@ import type { PaperSummary } from '../lib/types';
 const paper: PaperSummary = {
   id: 'p1', title: 'Attention Is All You Need', authors: ['Vaswani'], venue: 'NeurIPS',
   year: 2017, doi: null, arxiv_id: null, dblp_key: null, cite_key: null, url: null,
-  source: null, status: 'resolved', added_at: '',
+  source: null, status: 'resolved', added_at: '', starred: false, tags: [], projects: [],
 };
 
 beforeEach(() => {
@@ -59,5 +59,54 @@ describe('PaperRow', () => {
     expect(el).toBeInTheDocument();
     expect(el).toHaveAttribute('title', venue);
     expect(screen.queryByText(/Symposium/)).not.toBeInTheDocument();
+  });
+
+  it('clicking the star toggles it via the API without opening the paper', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(PaperRow, { props: { paper: { ...paper, starred: false } } });
+    const star = screen.getByRole('button', { name: 'Star paper' });
+    expect(star).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(star);
+    expect(fetchMock).toHaveBeenCalled();
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]).toMatchObject({
+      method: 'PUT',
+    });
+    // The row's own open() must not have fired from the star click.
+    expect(viewer.tabs).toHaveLength(0);
+    expect(selection.id).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('activating the star by keyboard toggles it without opening the paper', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(PaperRow, { props: { paper: { ...paper, starred: false } } });
+    const star = screen.getByRole('button', { name: 'Star paper' });
+    star.focus();
+    await userEvent.keyboard('{Enter}');
+    // The star's own action must run: the row's keydown handler must NOT
+    // swallow the synthetic click on the focused nested button.
+    expect(fetchMock).toHaveBeenCalled();
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]).toMatchObject({
+      method: 'PUT',
+    });
+    // ...and the row itself must not have opened the paper.
+    expect(viewer.tabs).toHaveLength(0);
+    expect(selection.id).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('Enter on the row itself still opens the paper', async () => {
+    render(PaperRow, { props: { paper } });
+    const row = screen.getByRole('button', { name: /Attention/ });
+    row.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(viewer.tabs.map((t) => t.id)).toEqual(['p1']);
+    expect(selection.id).toBe('p1');
   });
 });
