@@ -16,11 +16,11 @@
   import { DUR, dur, EASE } from '../lib/motion';
   import { toggleInfo, toggleZen, ui, viewer } from '../lib/state.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
-  import { HIDE_DELAY_MS, HOT_ZONE_PX, holdVisible, toolbarVisible, type ToolbarHold } from '../lib/zenToolbar';
   import { clampPage } from '../lib/pageNav';
   import { formatScale, isActivePreset, ZOOM_PRESETS } from '../lib/zoomPresets';
+  import type { PillHide } from '../lib/pillHide.svelte';
 
-  let { documentId }: { documentId: string } = $props();
+  let { documentId, pill }: { documentId: string; pill: PillHide } = $props();
 
   const zoom = useZoom(() => documentId);
   const scroll = useScroll(() => documentId);
@@ -46,54 +46,14 @@
     }
   }
 
-  // --- zen auto-hide. Decision logic lives in lib/zenToolbar.ts; this owns
-  // the timer and the DOM signals feeding it. The pill hides via opacity
-  // (not {#if}) so its box survives for offsetParent math and transitions.
-  let hotZone = $state(false);
-  let pointerOver = $state(false);
-  let focusWithin = $state(false);
-  let idleExpired = $state(false);
-  let pillEl: HTMLDivElement | undefined = $state();
-
-  // A stale hot-zone from a previous zen session must not hold the pill
-  // visible on re-entry — onWindowMove only updates hotZone while zen is
-  // active, so without this it freezes at its last value across exit/re-entry.
+  // Local interaction holds (page editing, zoom menu) feed the shared
+  // auto-hide controller. Wrapped in $effect (not a bare top-level call)
+  // because `pill` is a reactive prop — reading it outside a reactive
+  // context only captures its initial value (svelte-check flags this as
+  // `state_referenced_locally`).
   $effect(() => {
-    if (!ui.zen) hotZone = false;
+    pill.setExtraHold(() => pageEditing || zoomMenuOpen);
   });
-
-  const hold = $derived<ToolbarHold>({
-    zen: ui.zen,
-    hotZone,
-    pointerOver,
-    focusWithin,
-    findOpen: !!reader.find[documentId],
-    // Any toolbar-local interaction (editing the page number, an open zoom
-    // menu) holds the pill visible; zenToolbar.ts doesn't care which.
-    pageEditing: pageEditing || zoomMenuOpen,
-  });
-  const visible = $derived(toolbarVisible(hold, idleExpired));
-
-  // Any hold cancels the countdown and re-arms visibility; once every hold
-  // drops in zen, the countdown starts.
-  $effect(() => {
-    if (holdVisible(hold)) {
-      idleExpired = false;
-      return;
-    }
-    const t = setTimeout(() => (idleExpired = true), HIDE_DELAY_MS);
-    return () => clearTimeout(t);
-  });
-
-  // Hot-zone tracking is window-level so it works while the pill is faded
-  // out. Only the active tab's toolbar reacts (hidden tabs stay mounted).
-  function onWindowMove(e: PointerEvent): void {
-    if (!ui.zen || viewer.activeId !== documentId) return;
-    const host = pillEl?.offsetParent;
-    if (!host) return;
-    const top = host.getBoundingClientRect().top;
-    hotZone = e.clientY >= top && e.clientY - top < HOT_ZONE_PX;
-  }
 
   const title = $derived(viewer.tabs.find((t) => t.id === documentId)?.title ?? '');
   const panel = $derived(reader.panel[documentId] ?? null);
@@ -103,7 +63,7 @@
   const activeBtn = 'rounded-lg p-1.5 bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500';
 </script>
 
-<svelte:window onpointermove={onWindowMove} onpointerdown={onWindowPointerDown} />
+<svelte:window onpointerdown={onWindowPointerDown} />
 
 <!-- svelte-ignore a11y_interactive_supports_focus -- every control inside
      the pill is individually tabbable via normal document tab order; the
@@ -111,16 +71,15 @@
      arrow-key navigation between controls is a filed follow-up, not done
      here. -->
 <div
-  bind:this={pillEl}
   role="toolbar"
   aria-label="PDF controls"
-  onpointerenter={() => (pointerOver = true)}
-  onpointerleave={() => (pointerOver = false)}
-  onfocusin={() => (focusWithin = true)}
-  onfocusout={() => (focusWithin = false)}
+  onpointerenter={() => pill.pillEnter()}
+  onpointerleave={() => pill.pillLeave()}
+  onfocusin={() => pill.focusIn()}
+  onfocusout={() => pill.focusOut()}
   style:transition="opacity {dur(DUR.base)}ms {EASE}"
   class={`absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-stone-200 bg-paper/90 px-1.5 py-1 shadow backdrop-blur dark:border-stone-800 dark:bg-soot/90 ${
-    visible ? 'opacity-100' : 'pointer-events-none opacity-0'
+    pill.visible ? 'opacity-100' : 'pointer-events-none opacity-0'
   }`}
 >
   {#if ui.zen}

@@ -21,6 +21,7 @@
   import { mergeStructured } from '../lib/refMerge';
   import { resolveAuthorYearMarkers } from '../lib/textCitations';
   import { reader } from '../lib/readerState.svelte';
+  import { createPillHide } from '../lib/pillHide.svelte';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
 
@@ -31,6 +32,13 @@
 
   const ctx = useRegistry();
   const docState = useDocumentState(() => documentId);
+
+  // Shared zen auto-hide for the floating pills (see lib/pillHide.svelte.ts).
+  const pill = createPillHide(() => documentId);
+  let pillHost = $state<HTMLDivElement | undefined>();
+  $effect(() => {
+    pill.setHost(pillHost ?? null);
+  });
 
   let citations = $state<CitationData>({ references: [], markers: [] });
   let matches = $state<Map<number, PaperSummary>>(new Map());
@@ -133,6 +141,8 @@
   </div>
 {/snippet}
 
+<svelte:window onpointermove={(e) => pill.onWindowMove(e)} />
+
 <DocumentContent {documentId}>
   {#snippet children(doc)}
     {#if doc.isLoaded}
@@ -140,8 +150,8 @@
         {#if reader.panel[documentId]}
           <PdfSidePanel {documentId} />
         {/if}
-        <div class="relative min-w-0 flex-1">
-          <PdfToolbar {documentId} />
+        <div class="relative min-w-0 flex-1" bind:this={pillHost}>
+          <PdfToolbar {documentId} {pill} />
           {#if reader.find[documentId]}
             <PdfFindBar {documentId} />
           {/if}
