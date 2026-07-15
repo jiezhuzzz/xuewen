@@ -114,11 +114,7 @@ async fn paper_detail_includes_summary_when_present() {
     .unwrap();
     db::insert_paper(
         &pool,
-        &paper(
-            "bbbb2222",
-            "Attention Is All You Need",
-            PaperStatus::Resolved,
-        ),
+        &paper("bbbb2222", "Attention Is All You Need", PaperStatus::Resolved),
     )
     .await
     .unwrap();
@@ -944,22 +940,12 @@ async fn import_url_rejects_unsupported_input() {
 #[tokio::test]
 async fn projects_crud_membership_and_filter() {
     let (dir, pool) = temp_pool().await;
-    db::insert_paper(
-        &pool,
-        &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved),
-    )
-    .await
-    .unwrap();
-    db::insert_paper(
-        &pool,
-        &paper(
-            "bbbb2222",
-            "Attention Is All You Need",
-            PaperStatus::Resolved,
-        ),
-    )
-    .await
-    .unwrap();
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    db::insert_paper(&pool, &paper("bbbb2222", "Attention Is All You Need", PaperStatus::Resolved))
+        .await
+        .unwrap();
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
 
     // Create.
@@ -1008,10 +994,8 @@ async fn projects_crud_membership_and_filter() {
     );
 
     // Filter list by project.
-    let filtered: Vec<serde_json::Value> = server
-        .get(&format!("/api/papers?project={pid}"))
-        .await
-        .json();
+    let filtered: Vec<serde_json::Value> =
+        server.get(&format!("/api/papers?project={pid}")).await.json();
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0]["id"], "aaaa1111");
 
@@ -1088,26 +1072,14 @@ async fn import_url_needs_ingest_context() {
 #[tokio::test]
 async fn exports_bibtex_and_biblatex() {
     let (dir, pool) = temp_pool().await;
-    db::insert_paper(
-        &pool,
-        &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved),
-    )
-    .await
-    .unwrap();
-    db::insert_paper(
-        &pool,
-        &paper(
-            "bbbb2222",
-            "Attention Is All You Need",
-            PaperStatus::Resolved,
-        ),
-    )
-    .await
-    .unwrap();
-    let proj = db::create_project(&pool, "Survey", None).await.unwrap();
-    db::add_paper_to_project(&pool, "aaaa1111", &proj.id)
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
         .await
         .unwrap();
+    db::insert_paper(&pool, &paper("bbbb2222", "Attention Is All You Need", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    let proj = db::create_project(&pool, "Survey", None).await.unwrap();
+    db::add_paper_to_project(&pool, "aaaa1111", &proj.id).await.unwrap();
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
 
     // Individual (default bibtex). The `paper` helper sets venue=KDD, no dblp_key -> @article.
@@ -1123,10 +1095,7 @@ async fn exports_bibtex_and_biblatex() {
     assert!(text.contains("journal = {KDD},"));
 
     // BibLaTeX switches the field names.
-    let bl = server
-        .get("/api/papers/aaaa1111/export?format=biblatex")
-        .await
-        .text();
+    let bl = server.get("/api/papers/aaaa1111/export?format=biblatex").await.text();
     assert!(bl.contains("journaltitle = {KDD},"), "got: {bl}");
     assert!(bl.contains("date = {2020},"));
 
@@ -1149,10 +1118,7 @@ async fn exports_bibtex_and_biblatex() {
     assert!(all_text.contains("@article{bbbb2222,"));
 
     // Batch filtered by project -> only that project's paper.
-    let scoped = server
-        .get(&format!("/api/papers/export?project={}", proj.id))
-        .await
-        .text();
+    let scoped = server.get(&format!("/api/papers/export?project={}", proj.id)).await.text();
     assert!(scoped.contains("aaaa1111"));
     assert!(!scoped.contains("bbbb2222"));
 }
@@ -1160,22 +1126,13 @@ async fn exports_bibtex_and_biblatex() {
 #[tokio::test]
 async fn paper_rows_carry_starred_tags_and_projects() {
     let (dir, pool) = temp_pool().await;
-    db::insert_paper(
-        &pool,
-        &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved),
-    )
-    .await
-    .unwrap();
-    db::set_paper_starred(&pool, "aaaa1111", true)
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
         .await
         .unwrap();
-    let tag = db::add_paper_tag(&pool, "aaaa1111", "vision")
-        .await
-        .unwrap();
+    db::set_paper_starred(&pool, "aaaa1111", true).await.unwrap();
+    let tag = db::add_paper_tag(&pool, "aaaa1111", "vision").await.unwrap();
     let proj = db::create_project(&pool, "Survey", None).await.unwrap();
-    db::add_paper_to_project(&pool, "aaaa1111", &proj.id)
-        .await
-        .unwrap();
+    db::add_paper_to_project(&pool, "aaaa1111", &proj.id).await.unwrap();
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
 
     // List row.
@@ -1253,19 +1210,13 @@ mod search_api {
         insert_sample_paper(&pool, "p1", "Fuzzing Firmware").await; // existing helper or add one
         let server = server_with_search(pool).await;
 
-        let resp = server
-            .get("/api/search")
-            .add_query_param("q", "fuzzing")
-            .await;
+        let resp = server.get("/api/search").add_query_param("q", "fuzzing").await;
         resp.assert_status_ok();
         let body: serde_json::Value = resp.json();
         assert_eq!(body["semantic"]["available"], false);
         assert_eq!(body["results"][0]["paper"]["id"], "p1");
         assert_eq!(body["results"][0]["match"]["engine"], "keyword");
-        assert!(body["results"][0]["match"]["snippet"]
-            .as_str()
-            .unwrap()
-            .contains("<mark>"));
+        assert!(body["results"][0]["match"]["snippet"].as_str().unwrap().contains("<mark>"));
     }
 
     #[tokio::test]
