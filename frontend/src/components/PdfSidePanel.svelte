@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { ThumbImg, ThumbnailsPane, useThumbnailCapability } from '@embedpdf/plugin-thumbnail/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { LayoutGrid, List } from 'lucide-svelte';
@@ -31,23 +32,22 @@
   // mount — so repeat the (idempotent, instant) call across a few frames,
   // then stop. If the metadata never appears (broken doc), the pane simply
   // stays at the top.
-  //
-  // Every scrollToThumb call MUST run inside a rAF callback — Svelte tracks
-  // all reads made during the effect body's synchronous execution, so a
-  // synchronous first call would register `scroll.state.currentPage` as an
-  // effect dependency and re-trigger the effect on every page change
-  // (continuous auto-follow again, the exact bug this fixes).
   $effect(() => {
     if (tab !== 'thumbs') return;
-    const scope = thumbs.provides?.forDocument(documentId);
-    if (!scope) return;
-    let tries = 0;
-    const attempt = () => {
-      scope.scrollToThumb(scroll.state.currentPage - 1);
-      if (++tries < 30) raf = requestAnimationFrame(attempt);
-    };
-    let raf = requestAnimationFrame(attempt);
-    return () => cancelAnimationFrame(raf);
+    // untrack: everything below must NOT register effect dependencies —
+    // the capability proxy chain re-notifies on the pane's own scroll
+    // dispatches, which would re-run this effect (and yank the pane) on
+    // every manual pane scroll. Tracked dep = `tab` alone; provides and
+    // currentPage are read inside rAF callbacks / untrack only.
+    return untrack(() => {
+      let tries = 0;
+      let raf = requestAnimationFrame(function attempt() {
+        const scope = thumbs.provides?.forDocument(documentId);
+        if (scope) scope.scrollToThumb(scroll.state.currentPage - 1);
+        if (++tries < 30) raf = requestAnimationFrame(attempt);
+      });
+      return () => cancelAnimationFrame(raf);
+    });
   });
 </script>
 
