@@ -27,7 +27,7 @@ export function isEditable(t: EventTarget | null): boolean {
 }
 
 function anyModalOpen(): boolean {
-  return ui.importOpen || ui.projectsOpen || identifyState.open;
+  return ui.importOpen || identifyState.open;
 }
 
 function moveSelection(delta: number): void {

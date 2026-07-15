@@ -1,12 +1,20 @@
 <script lang="ts">
-  import { Wand2, X } from 'lucide-svelte';
+  import { Star, Wand2, X } from 'lucide-svelte';
   import { fly } from 'svelte/transition';
   import { DUR, dur } from '../lib/motion';
-  import { appSettings, detailRefresh, loadDetail, openIdentify, setInfoOpen } from '../lib/state.svelte';
+  import {
+    appSettings,
+    detailRefresh,
+    loadDetail,
+    openIdentify,
+    setInfoOpen,
+    toggleStar,
+  } from '../lib/state.svelte';
   import CiteActions from './CiteActions.svelte';
   import DeletePaperButton from './DeletePaperButton.svelte';
   import PaperMeta from './PaperMeta.svelte';
-  import ProjectTags from './ProjectTags.svelte';
+  import PaperProjectEditor from './PaperProjectEditor.svelte';
+  import PaperTagEditor from './PaperTagEditor.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -100,7 +108,26 @@
         </section>
 
         <section class={divider}>
-          <ProjectTags {d} />
+          <h3 class={label}>Organize</h3>
+          <button
+            type="button"
+            aria-pressed={d.starred}
+            onclick={() => void toggleStar(d.id)}
+            class={`mt-2 inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-medium ${
+              d.starred
+                ? 'border-orange-600/50 bg-orange-600/15 text-orange-700 dark:border-orange-400/50 dark:bg-orange-400/15 dark:text-orange-400'
+                : 'border-stone-200 text-stone-500 hover:border-orange-600/35 hover:text-orange-700 dark:border-stone-700 dark:text-stone-400'
+            }`}
+          >
+            <Star size={13} fill={d.starred ? 'currentColor' : 'none'} />
+            {d.starred ? 'Starred' : 'Star'}
+          </button>
+          <div class="mt-3">
+            <PaperTagEditor {d} />
+          </div>
+          <div class="mt-4">
+            <PaperProjectEditor {d} />
+          </div>
         </section>
 
         <div class={`flex flex-wrap items-center gap-2 ${divider}`}>
