@@ -168,7 +168,11 @@
       <div class="flex h-full">
         {#if reader.panel[documentId] || panelW.current > 1}
           <!-- Kept mounted while the spring settles so closing slides the
-               panel away instead of blanking it; inert once logically closed. -->
+               panel away instead of blanking it; inert once logically closed.
+               A rapid close→reopen within the settle window intentionally
+               skips re-positioning/reveal: the panel never unmounts and `tab`
+               never changes, so the user keeps their browse position — this
+               is deliberate, not a missed one-shot. -->
           <div
             class="relative min-h-0 shrink-0 overflow-hidden"
             style={`width:${panelW.current}px`}
