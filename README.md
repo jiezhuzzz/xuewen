@@ -31,6 +31,9 @@ the assistant that answers questions about a paper.
   scored against your library's interests (optional).
 - **Citation export** — BibTeX / BibLaTeX for a single paper, a project, or the
   whole library.
+- **Organization** — projects (named groups of papers), free-form tags
+  (`/`-nested, e.g. `nlp/eval`), and a star flag; filter, rename, and delete
+  from the UI's pill bar or the CLI.
 - **Paywall helper** — optional institutional (EZproxy) support for fetching
   PDFs you have access to.
 
@@ -114,6 +117,8 @@ The same binary drives everything from the terminal:
 | `search <query>` | Search from the terminal (`--keyword-only` / `--semantic-only`) |
 | `export` | Emit BibTeX / BibLaTeX (single, project, or whole library) |
 | `project` | Manage projects (named groups of papers) |
+| `tag` | Manage tags on papers (add/remove/rename/list) |
+| `star` / `unstar` | Star or un-star a paper |
 | `index` | Inspect or rebuild the search indexes |
 | `delete` / `restore` / `purge` | Trash lifecycle |
 | `proxy-cookie` | Manage the stored EZproxy session cookie |
