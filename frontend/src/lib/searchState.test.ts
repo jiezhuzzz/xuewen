@@ -11,7 +11,7 @@ vi.mock('./api', async (importOriginal) => {
         {
           paper: { id: 'p1', title: 'T', authors: [], venue: null, year: null, doi: null,
                    arxiv_id: null, dblp_key: null, cite_key: null, url: null, source: null,
-                   status: 'resolved', added_at: '' },
+                   status: 'resolved', added_at: '', starred: false, tags: [], projects: [] },
           match: { engine: 'keyword', field: 'body', snippet: 'a <mark>hit</mark>', page: 7 },
         },
       ],

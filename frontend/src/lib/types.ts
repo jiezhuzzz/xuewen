@@ -1,3 +1,13 @@
+export interface Tag {
+  id: string;
+  name: string;
+}
+
+export interface TagSummary extends Tag {
+  paper_count: number;
+  created_at: string;
+}
+
 export interface PaperSummary {
   id: string;
   title: string | null;
@@ -12,11 +22,13 @@ export interface PaperSummary {
   source: string | null;
   status: string;
   added_at: string;
+  starred: boolean;
+  tags: { id: string; name: string }[];
+  projects: { id: string; name: string }[];
 }
 
 export interface PaperDetail extends PaperSummary {
   abstract: string | null;
-  project_ids: string[];
   summary: Summary | null;
 }
 
@@ -31,7 +43,6 @@ export interface Summary {
 export interface Project {
   id: string;
   name: string;
-  note: string | null;
   paper_count: number;
 }
 
@@ -50,6 +61,8 @@ export interface Filters {
   status: StatusFilter;
   sort: Sort;
   project: string;
+  tag?: string;
+  starred?: boolean;
 }
 
 export type ImportResult =
