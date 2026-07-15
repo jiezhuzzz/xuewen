@@ -1,7 +1,7 @@
 <script lang="ts">
   import { X } from 'lucide-svelte';
   import type { PaperDetail } from '../lib/types';
-  import { addToProject, openProjects, projects, removeFromProject } from '../lib/state.svelte';
+  import { addToProject, projects, removeFromProject } from '../lib/state.svelte';
 
   let { d }: { d: PaperDetail } = $props();
 
@@ -12,9 +12,11 @@
     const projectId = sel.value;
     sel.value = '';
     if (!projectId) return;
-    // The sentinel option opens the Projects modal instead of adding.
+    // The "New project…" sentinel is handled by the pill-bar's own inline
+    // creation affordance now (see FilterRow.svelte); this dropdown no
+    // longer opens a modal for it. (Task 13 removes the sentinel entirely
+    // along with the rest of this component's project_ids migration.)
     if (projectId === '__new__') {
-      openProjects();
       return;
     }
     membershipError = null;
