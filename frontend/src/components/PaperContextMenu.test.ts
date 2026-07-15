@@ -1,0 +1,101 @@
+import { render, screen, waitFor } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import PaperContextMenu from './PaperContextMenu.svelte';
+import { closeContextMenu, contextMenu } from '../lib/contextMenu.svelte';
+import { identifyState, library, selection, viewer } from '../lib/state.svelte';
+import { toasts } from '../lib/toasts.svelte';
+import type { PaperSummary } from '../lib/types';
+
+const paper: PaperSummary = {
+  id: 'p1', title: 'Attention Is All You Need', authors: ['Vaswani'], venue: 'NeurIPS',
+  year: 2017, doi: '10.1/x', arxiv_id: '1706.03762', dblp_key: null, cite_key: 'v2017', url: null,
+  source: null, status: 'resolved', added_at: '', starred: false, tags: [], projects: [],
+};
+
+// Branch the fetch mock by URL/method so copyCitation (export text), delete
+// (DELETE ok), and the loadStats() that removePaper triggers each get a sane
+// response.
+function stubFetch() {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, opts?: { method?: string }) => {
+      const u = String(url);
+      if (u.includes('/export')) return new Response('@article{v2017}', { status: 200 });
+      void opts;
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }),
+  );
+}
+
+beforeEach(() => {
+  toasts.items.length = 0;
+  selection.id = null;
+  viewer.tabs = [];
+  identifyState.open = false;
+  identifyState.paperId = null;
+  library.papers = [paper];
+  contextMenu.open = true;
+  contextMenu.x = 10;
+  contextMenu.y = 10;
+  contextMenu.paper = paper;
+  vi.unstubAllGlobals();
+  stubFetch();
+  vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => {}) } });
+});
+
+describe('PaperContextMenu', () => {
+  it('renders the three actions for the target paper', () => {
+    render(PaperContextMenu);
+    expect(screen.getByRole('menuitem', { name: /copy citation/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /identify/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /delete/i })).toBeInTheDocument();
+  });
+
+  it('Copy citation copies to the clipboard, toasts, and closes the menu', async () => {
+    render(PaperContextMenu);
+    await userEvent.click(screen.getByRole('menuitem', { name: /copy citation/i }));
+    await waitFor(() => {
+      expect((navigator.clipboard.writeText as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+        '@article{v2017}',
+      );
+    });
+    expect(toasts.items.some((t) => t.kind === 'success')).toBe(true);
+    expect(contextMenu.open).toBe(false);
+  });
+
+  it('Identify opens the identify modal for the paper and closes the menu', async () => {
+    render(PaperContextMenu);
+    await userEvent.click(screen.getByRole('menuitem', { name: /identify/i }));
+    expect(identifyState.open).toBe(true);
+    expect(identifyState.paperId).toBe('p1');
+    expect(contextMenu.open).toBe(false);
+  });
+
+  it('Delete requires a confirm before hitting the API, then closes', async () => {
+    render(PaperContextMenu);
+    await userEvent.click(screen.getByRole('menuitem', { name: /delete/i }));
+    // First click only reveals the confirm — no DELETE yet.
+    expect(globalThis.fetch as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.some(([u, o]) => String(u).includes('/api/papers/p1') && o?.method === 'DELETE')).toBe(
+        true,
+      );
+    });
+    expect(contextMenu.open).toBe(false);
+  });
+
+  it('Escape closes the menu', async () => {
+    render(PaperContextMenu);
+    await userEvent.keyboard('{Escape}');
+    expect(contextMenu.open).toBe(false);
+  });
+
+  it('renders nothing when closed', () => {
+    closeContextMenu();
+    render(PaperContextMenu);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+});

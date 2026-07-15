@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { PaperSummary } from '../lib/types';
-  import { openTab, searchMeta, selection, toggleStar, viewer } from '../lib/state.svelte';
+  import { openContextMenu } from '../lib/contextMenu.svelte';
+  import { openTab, searchMeta, selectPaper, selection, toggleStar, viewer } from '../lib/state.svelte';
   import { abbreviateVenue } from '../lib/venue';
   import PaperRowTags from './PaperRowTags.svelte';
   import StatusPill from './StatusPill.svelte';
@@ -43,12 +44,19 @@
     e.stopPropagation();
     void toggleStar(paper.id);
   }
+  // Right-click highlights the row (so it's clear which paper the menu targets)
+  // and opens the shared context menu — without opening the PDF (left-click's job).
+  function onContextMenu(e: MouseEvent) {
+    selectPaper(paper.id);
+    openContextMenu(e, paper);
+  }
 </script>
 
 <div
   role="button"
   tabindex="0"
   onclick={open}
+  oncontextmenu={onContextMenu}
   onkeydown={onKeydown}
   class={`group relative w-full cursor-pointer border-l-2 px-4 py-3 text-left transition-colors hover:bg-parchment dark:hover:bg-stone-800/50 ${
     selected ? 'border-amber-700 bg-parchment dark:border-amber-500 dark:bg-stone-800/50' : 'border-transparent'
