@@ -106,6 +106,23 @@ pub struct ProjectSummary {
     pub paper_count: i64,
 }
 
+/// A topical label. Column names match the `tags` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+}
+
+/// A tag plus how many papers carry it (or any of its `name/*` children).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct TagSummary {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub tag: Tag,
+    pub paper_count: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
