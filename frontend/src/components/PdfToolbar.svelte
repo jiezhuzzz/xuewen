@@ -3,11 +3,10 @@
     ChevronLeft,
     ChevronRight,
     Info,
-    LayoutGrid,
-    List,
     Maximize,
     Maximize2,
     Minimize2,
+    PanelLeft,
     Search,
     ZoomIn,
     ZoomOut,
@@ -17,7 +16,7 @@
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { DUR, dur, EASE } from '../lib/motion';
   import { toggleInfo, toggleZen, ui, viewer } from '../lib/state.svelte';
-  import { reader, setFind, togglePanel } from '../lib/readerState.svelte';
+  import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
   import { HIDE_DELAY_MS, HOT_ZONE_PX, holdVisible, toolbarVisible, type ToolbarHold } from '../lib/zenToolbar';
   import { clampPage } from '../lib/pageNav';
 
@@ -123,21 +122,13 @@
 
   <button
     type="button"
-    class={panel === 'thumbs' ? activeBtn : btn}
-    aria-label="Toggle thumbnails"
-    aria-expanded={panel === 'thumbs'}
-    onclick={() => togglePanel(documentId, 'thumbs')}
+    class={panel ? activeBtn : btn}
+    aria-label="Toggle sidebar"
+    aria-expanded={panel !== null}
+    title="Sidebar"
+    onclick={() => toggleSidebar(documentId)}
   >
-    <LayoutGrid size={16} />
-  </button>
-  <button
-    type="button"
-    class={panel === 'outline' ? activeBtn : btn}
-    aria-label="Toggle outline"
-    aria-expanded={panel === 'outline'}
-    onclick={() => togglePanel(documentId, 'outline')}
-  >
-    <List size={16} />
+    <PanelLeft size={16} />
   </button>
 
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>

@@ -1,10 +1,11 @@
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { dropReaderState, openFind, reader, setFind, togglePanel } from './readerState.svelte';
+import { dropReaderState, openFind, reader, setFind, setPanelView, toggleSidebar } from './readerState.svelte';
 
 beforeEach(() => {
   for (const k of Object.keys(reader.find)) delete reader.find[k];
   for (const k of Object.keys(reader.panel)) delete reader.panel[k];
+  for (const k of Object.keys(reader.lastPanel)) delete reader.lastPanel[k];
 });
 
 describe('setFind', () => {
@@ -24,19 +25,27 @@ describe('setFind', () => {
   });
 });
 
-describe('togglePanel', () => {
-  it('opens a tab, switches tabs, and closes on re-select', () => {
-    togglePanel('a', 'thumbs');
+describe('toggleSidebar / setPanelView', () => {
+  it('opens at thumbnails first, closes on re-toggle', () => {
+    toggleSidebar('a');
     expect(reader.panel['a']).toBe('thumbs');
-    togglePanel('a', 'outline');
-    expect(reader.panel['a']).toBe('outline');
-    togglePanel('a', 'outline');
+    toggleSidebar('a');
     expect(reader.panel['a']).toBe(null);
   });
 
+  it('reopens at the last-used view', () => {
+    toggleSidebar('a');
+    setPanelView('a', 'outline');
+    toggleSidebar('a'); // close
+    expect(reader.panel['a']).toBe(null);
+    toggleSidebar('a'); // reopen
+    expect(reader.panel['a']).toBe('outline');
+  });
+
   it('keeps state independent per document', () => {
-    togglePanel('a', 'thumbs');
-    togglePanel('b', 'outline');
+    toggleSidebar('a');
+    toggleSidebar('b');
+    setPanelView('b', 'outline');
     expect(reader.panel['a']).toBe('thumbs');
     expect(reader.panel['b']).toBe('outline');
   });
@@ -59,9 +68,11 @@ describe('openFind', () => {
 describe('dropReaderState', () => {
   it('forgets a closed document', () => {
     setFind('a', true);
-    togglePanel('a', 'thumbs');
+    toggleSidebar('a');
+    setPanelView('a', 'outline');
     dropReaderState('a');
     expect(reader.find['a']).toBeUndefined();
     expect(reader.panel['a']).toBeUndefined();
+    expect(reader.lastPanel['a']).toBeUndefined();
   });
 });

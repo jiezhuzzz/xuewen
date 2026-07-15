@@ -8,16 +8,24 @@ export type PanelTab = 'thumbs' | 'outline';
 export const reader = $state<{
   find: Record<string, boolean>;
   panel: Record<string, PanelTab | null>;
-}>({ find: {}, panel: {} });
+  lastPanel: Record<string, PanelTab>;
+}>({ find: {}, panel: {}, lastPanel: {} });
 
 /// Open/close one document's find bar. Omit `open` to toggle.
 export function setFind(id: string, open?: boolean): void {
   reader.find[id] = open ?? !reader.find[id];
 }
 
-/// Select a side-panel tab; selecting the open tab again closes the panel.
-export function togglePanel(id: string, tab: PanelTab): void {
-  reader.panel[id] = reader.panel[id] === tab ? null : tab;
+/// The toolbar's single sidebar button: closed → reopen at the last-used
+/// view (thumbnails on first open); open → close.
+export function toggleSidebar(id: string): void {
+  reader.panel[id] = reader.panel[id] ? null : (reader.lastPanel[id] ?? 'thumbs');
+}
+
+/// The panel's segmented control: switch the open view and remember it.
+export function setPanelView(id: string, tab: PanelTab): void {
+  reader.panel[id] = tab;
+  reader.lastPanel[id] = tab;
 }
 
 /// ⌘F: open (or refocus) a document's find bar. Focus waits a tick so a
@@ -37,4 +45,5 @@ export function openFind(id: string): void {
 export function dropReaderState(id: string): void {
   delete reader.find[id];
   delete reader.panel[id];
+  delete reader.lastPanel[id];
 }
