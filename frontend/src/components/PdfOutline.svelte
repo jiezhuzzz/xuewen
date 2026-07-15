@@ -1,12 +1,13 @@
 <script lang="ts">
   import { ChevronRight } from 'lucide-svelte';
+  import { tick } from 'svelte';
   import { useBookmarkCapability } from '@embedpdf/plugin-bookmark/svelte';
-  import { useScrollCapability } from '@embedpdf/plugin-scroll/svelte';
-  import { toOutline, type OutlineNode } from '../lib/outline';
+  import { useScroll } from '@embedpdf/plugin-scroll/svelte';
+  import { currentOutlinePath, toOutline, type OutlineNode } from '../lib/outline';
 
   let { documentId }: { documentId: string } = $props();
   const bookmarks = useBookmarkCapability();
-  const scroll = useScrollCapability();
+  const scroll = useScroll(() => documentId);
 
   // null = loading; [] = none (or the fetch failed — same quiet empty state).
   let nodes = $state<OutlineNode[] | null>(null);
@@ -32,8 +33,33 @@
 
   function jump(n: OutlineNode): void {
     if (n.pageIndex === null) return;
-    scroll.provides?.forDocument(documentId).scrollToPage({ pageNumber: n.pageIndex + 1 });
+    scroll.provides?.scrollToPage({ pageNumber: n.pageIndex + 1 });
   }
+
+  const currentPath = $derived(nodes ? currentOutlinePath(nodes, scroll.state.currentPage - 1) : null);
+
+  // Reveal the current section ONCE when the outline view opens (the view
+  // is {#if}-gated, so mount = activation): expand its ancestors, then
+  // scroll its row into view. Never afterwards — auto-scrolling while the
+  // user browses would fight them, the same failure the thumbnail pane had.
+  let listEl = $state<HTMLDivElement>();
+  let revealed = false;
+  $effect(() => {
+    if (revealed || nodes === null) return;
+    revealed = true;
+    const path = currentPath;
+    if (!path) return;
+    const parts = path.split('.');
+    const ancestors = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('.'));
+    if (ancestors.some((a) => collapsed.has(a))) {
+      const next = new Set(collapsed);
+      for (const a of ancestors) next.delete(a);
+      collapsed = next;
+    }
+    void tick().then(() => {
+      listEl?.querySelector(`[data-outline-path="${path}"]`)?.scrollIntoView({ block: 'nearest' });
+    });
+  });
 </script>
 
 {#snippet row(n: OutlineNode, path: string)}
@@ -59,7 +85,12 @@
         disabled={n.pageIndex === null}
         onclick={() => jump(n)}
         title={n.title}
-        class="min-w-0 flex-1 truncate rounded px-1 py-0.5 text-left text-xs text-stone-600 hover:bg-parchment hover:text-ink disabled:cursor-default disabled:hover:bg-transparent dark:text-stone-300 dark:hover:bg-stone-800"
+        data-outline-path={path}
+        class={`min-w-0 flex-1 truncate rounded px-1 py-0.5 text-left text-xs disabled:cursor-default ${
+          path === currentPath
+            ? 'bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500'
+            : 'text-stone-600 hover:bg-parchment hover:text-ink disabled:hover:bg-transparent dark:text-stone-300 dark:hover:bg-stone-800'
+        }`}
       >
         {n.title}
       </button>
@@ -74,7 +105,7 @@
   </li>
 {/snippet}
 
-<div class="min-h-0 flex-1 overflow-y-auto p-1.5">
+<div bind:this={listEl} class="min-h-0 flex-1 overflow-y-auto p-1.5">
   {#if nodes === null}
     <p class="p-2 text-xs text-stone-500 dark:text-stone-400">Loading…</p>
   {:else if nodes.length === 0}
