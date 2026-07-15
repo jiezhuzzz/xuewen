@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  deleteTag,
+  detailRefresh,
   filters,
   library,
+  loadDetail,
   loadProjects,
   projects,
+  removeProject,
+  renameProject,
+  renameTag,
   setProjectFilter,
   setStarFilter,
   setTagFilter,
+  tags,
 } from './state.svelte';
 
 function stubFetch(handler: (url: string, init?: RequestInit) => unknown) {
@@ -88,5 +95,70 @@ describe('projects state', () => {
     expect(lastUrl).toContain('tag=ml');
     await setStarFilter(true);
     expect(lastUrl).toContain('starred=true');
+  });
+});
+
+describe('global rename/delete clears the per-paper detail cache', () => {
+  beforeEach(() => {
+    projects.items = [];
+    tags.items = [];
+    filters.project = 'all';
+    filters.tag = undefined;
+    filters.starred = undefined;
+    library.papers = [];
+    vi.unstubAllGlobals();
+  });
+
+  function stubDetailAnd(handler: (url: string, init?: RequestInit) => unknown) {
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/papers/') && !url.includes('/projects/') && !url.includes('/tags')) {
+        return { id: 'x', title: 'X', authors: [], venue: null, year: null, doi: null,
+          arxiv_id: null, dblp_key: null, cite_key: null, url: null, source: null,
+          status: 'resolved', added_at: '', starred: false, tags: [], projects: [], summary: null };
+      }
+      return handler(url, init);
+    });
+  }
+
+  it('renameProject and removeProject evict the cached detail and bump detailRefresh', async () => {
+    stubDetailAnd(() => ({ id: 'p1', name: 'Survey', paper_count: 1 }));
+    await loadDetail('x');
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const callsBefore = fetchMock.mock.calls.length;
+    const refreshBefore = detailRefresh.n;
+
+    await renameProject('p1', { name: 'Renamed' });
+    expect(detailRefresh.n).toBeGreaterThan(refreshBefore);
+
+    await loadDetail('x'); // must hit the network again: cache was cleared
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
+
+    const refreshBefore2 = detailRefresh.n;
+    await removeProject('p1');
+    expect(detailRefresh.n).toBeGreaterThan(refreshBefore2);
+    const callsBefore2 = fetchMock.mock.calls.length;
+    await loadDetail('x');
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore2);
+  });
+
+  it('renameTag and deleteTag evict the cached detail and bump detailRefresh', async () => {
+    stubDetailAnd(() => []);
+    await loadDetail('x');
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const callsBefore = fetchMock.mock.calls.length;
+    const refreshBefore = detailRefresh.n;
+
+    await renameTag('t1', 'renamed');
+    expect(detailRefresh.n).toBeGreaterThan(refreshBefore);
+
+    await loadDetail('x'); // must hit the network again: cache was cleared
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
+
+    const refreshBefore2 = detailRefresh.n;
+    await deleteTag('t1');
+    expect(detailRefresh.n).toBeGreaterThan(refreshBefore2);
+    const callsBefore2 = fetchMock.mock.calls.length;
+    await loadDetail('x');
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore2);
   });
 });
