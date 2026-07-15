@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PaperRow from './PaperRow.svelte';
+import { closeContextMenu, contextMenu } from '../lib/contextMenu.svelte';
 import { selection, viewer } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
 
@@ -15,6 +16,7 @@ beforeEach(() => {
   selection.id = null;
   viewer.tabs = [];
   viewer.activeId = null;
+  closeContextMenu();
 });
 
 describe('PaperRow', () => {
@@ -99,6 +101,16 @@ describe('PaperRow', () => {
     expect(viewer.tabs).toHaveLength(0);
     expect(selection.id).toBeNull();
     vi.unstubAllGlobals();
+  });
+
+  it('right-click opens the context menu and highlights the row without opening the PDF', async () => {
+    render(PaperRow, { props: { paper } });
+    await fireEvent.contextMenu(screen.getByRole('button', { name: /Attention/ }));
+    expect(contextMenu.open).toBe(true);
+    expect(contextMenu.paper?.id).toBe('p1');
+    // Highlighted (selected) but the PDF tab must not have opened.
+    expect(selection.id).toBe('p1');
+    expect(viewer.tabs).toHaveLength(0);
   });
 
   it('Enter on the row itself still opens the paper', async () => {

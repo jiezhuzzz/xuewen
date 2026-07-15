@@ -8,6 +8,7 @@
   import ImportModal from './components/ImportModal.svelte';
   import InfoPanel from './components/InfoPanel.svelte';
   import LibraryPane from './components/LibraryPane.svelte';
+  import PaperContextMenu from './components/PaperContextMenu.svelte';
   import PdfViewer from './components/PdfViewer.svelte';
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
@@ -118,4 +119,5 @@
 {#if ui.importOpen}<ImportModal />{/if}
 {#if identifyState.open}<IdentifyModal />{/if}
 {#if ui.paletteOpen}<CommandPalette />{/if}
+<PaperContextMenu />
 <Toaster />
