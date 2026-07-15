@@ -83,6 +83,8 @@ pub struct Paper {
     pub cite_key: Option<String>,
     pub added_at: String,
     pub deleted_at: Option<String>,
+    #[sqlx(default)]
+    pub starred: bool,
     #[sqlx(flatten)]
     #[serde(flatten)]
     pub meta: PaperMeta,
@@ -93,7 +95,6 @@ pub struct Paper {
 pub struct Project {
     pub id: String,
     pub name: String,
-    pub note: Option<String>,
     pub created_at: String,
 }
 

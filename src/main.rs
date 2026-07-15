@@ -598,12 +598,9 @@ async fn main() -> Result<()> {
                     println!("no projects");
                 }
                 for s in projects {
-                    match s.project.note {
-                        Some(note) => {
-                            println!("{}  ({} papers)  — {}", s.project.name, s.paper_count, note)
-                        }
-                        None => println!("{}  ({} papers)", s.project.name, s.paper_count),
-                    }
+                    // `note` no longer exists on `Project` (Task 4 dropped the
+                    // column); Task 9 removes the now-dead `note` CLI flag.
+                    println!("{}  ({} papers)", s.project.name, s.paper_count);
                 }
             }
             ProjectCmd::New { name, note } => {

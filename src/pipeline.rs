@@ -371,6 +371,7 @@ impl PaperMeta {
             cite_key,
             added_at: chrono::Utc::now().to_rfc3339(),
             deleted_at: None,
+            starred: false,
             meta: self,
         }
     }
@@ -450,6 +451,7 @@ mod tests {
             cite_key: None,
             added_at: "2026-07-08T00:00:00Z".into(),
             deleted_at: None,
+            starred: false,
             meta: PaperMeta {
                 title: Some("T".into()),
                 abstract_text: None,

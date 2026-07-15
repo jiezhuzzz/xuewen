@@ -163,6 +163,7 @@ mod tests {
             cite_key: None,
             added_at: "2026-07-12T00:00:00Z".into(),
             deleted_at: None,
+            starred: false,
             meta: PaperMeta {
                 title: Some("Title".into()),
                 abstract_text: Some("Abstract.".into()),
@@ -217,6 +218,7 @@ mod tests {
             cite_key: None,
             added_at: "2026-07-12T00:00:00Z".into(),
             deleted_at: None,
+            starred: false,
             meta: PaperMeta {
                 title: Some("Title".into()),
                 abstract_text: Some("Abstract.".into()),
@@ -263,6 +265,7 @@ mod tests {
             cite_key: None,
             added_at: "2026-07-12T00:00:00Z".into(),
             deleted_at: None,
+            starred: false,
             meta: PaperMeta {
                 title: Some("Title".into()),
                 abstract_text: Some("Abstract.".into()),
@@ -312,6 +315,7 @@ mod tests {
             cite_key: None,
             added_at: "2026-07-12T00:00:00Z".into(),
             deleted_at: None,
+            starred: false,
             meta: PaperMeta {
                 title: Some("Title".into()),
                 abstract_text: Some("Abstract.".into()),
