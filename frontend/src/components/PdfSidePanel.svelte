@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ThumbImg, ThumbnailsPane } from '@embedpdf/plugin-thumbnail/svelte';
+  import { ThumbImg, ThumbnailsPane, useThumbnailCapability } from '@embedpdf/plugin-thumbnail/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { LayoutGrid, List } from 'lucide-svelte';
   import { reader, setPanelView } from '../lib/readerState.svelte';
@@ -7,6 +7,7 @@
 
   let { documentId }: { documentId: string } = $props();
   const scroll = useScroll(() => documentId);
+  const thumbs = useThumbnailCapability();
   const tab = $derived(reader.panel[documentId] ?? null);
 
   function jump(pageIndex: number): void {
@@ -19,6 +20,27 @@
         ? 'bg-parchment text-ink dark:bg-stone-800 dark:text-stone-100'
         : 'text-stone-500 hover:text-ink dark:text-stone-400 dark:hover:text-stone-100'
     }`;
+
+  // Position the pane at the current page ONCE per thumbs-view activation
+  // (continuous auto-follow is off — see pdfEngine.ts). scrollToThumb
+  // silently no-ops until the plugin's thumb metadata and the pane's window
+  // exist, and the pane's own scroll subscription attaches a beat after
+  // mount — so repeat the (idempotent, instant) call across a few frames,
+  // then stop. If the metadata never appears (broken doc), the pane simply
+  // stays at the top.
+  $effect(() => {
+    if (tab !== 'thumbs') return;
+    const scope = thumbs.provides?.forDocument(documentId);
+    if (!scope) return;
+    let tries = 0;
+    let raf = 0;
+    const attempt = () => {
+      scope.scrollToThumb(scroll.state.currentPage - 1);
+      if (++tries < 30) raf = requestAnimationFrame(attempt);
+    };
+    attempt();
+    return () => cancelAnimationFrame(raf);
+  });
 </script>
 
 <div class="flex w-44 shrink-0 flex-col border-r border-stone-200 bg-paper dark:border-stone-800 dark:bg-night">
