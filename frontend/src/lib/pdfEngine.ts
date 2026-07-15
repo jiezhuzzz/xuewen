@@ -55,7 +55,11 @@ export function viewerPlugins(): PluginBatchRegistrations {
     createPluginRegistration(TilingPluginPackage),
     // Toolbar features: find-in-document, page thumbnails, document outline.
     createPluginRegistration(SearchPluginPackage),
-    createPluginRegistration(ThumbnailPluginPackage),
+    // autoScroll would snap the pane to the current page on EVERY page
+    // change, fighting manual thumbnail browsing (trackpad momentum keeps
+    // firing page changes for a second after a flick). The side panel
+    // positions the pane once on open instead; 'auto' makes that instant.
+    createPluginRegistration(ThumbnailPluginPackage, { autoScroll: false, scrollBehavior: 'auto' }),
     createPluginRegistration(BookmarkPluginPackage),
   ];
 }

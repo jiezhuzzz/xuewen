@@ -30,5 +30,11 @@ describe('viewerPlugins', () => {
     expect(docReg?.config?.initialDocuments).toBeUndefined();
     // A cap high enough for many open tabs.
     expect(docReg?.config?.maxDocuments).toBeGreaterThanOrEqual(16);
+    const thumbReg = regs.find((r) => r.package.manifest.id === 'thumbnail');
+    // Continuous auto-follow snaps the pane to the current page on every
+    // page change, fighting manual thumbnail browsing (trackpad momentum
+    // keeps firing page changes). The side panel positions the pane once
+    // when it opens instead.
+    expect(thumbReg?.config?.autoScroll).toBe(false);
   });
 });
