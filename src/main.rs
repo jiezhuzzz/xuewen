@@ -709,6 +709,8 @@ async fn main() -> Result<()> {
                 semantic: !keyword_only,
                 status: None,
                 project: None,
+                tag: None,
+                starred: None,
             };
             let out = svc.search(&req).await?;
             if let Some(reason) = &out.semantic.reason {

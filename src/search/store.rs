@@ -187,12 +187,15 @@ pub async fn clear_stamps(pool: &SqlitePool, fts: bool, vectors: bool) -> Result
 }
 
 /// Fetch non-trashed papers by id, preserving the order of `ids` (fusion
-/// order), applying the status/project filters the search endpoint supports.
+/// order), applying the status/project/tag/starred filters the search
+/// endpoint supports.
 pub async fn papers_by_ids_ordered(
     pool: &SqlitePool,
     ids: &[String],
     status: Option<&str>,
     project: Option<&str>,
+    tag: Option<&str>,
+    starred: Option<bool>,
 ) -> Result<Vec<Paper>> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -211,6 +214,20 @@ pub async fn papers_by_ids_ordered(
         qb.push(" AND id IN (SELECT paper_id FROM paper_projects WHERE project_id = ")
             .push_bind(pid.to_string())
             .push(")");
+    }
+    if let Some(tag) = tag.map(str::trim).filter(|s| !s.is_empty()) {
+        // NOTE: a tag name containing a literal `%`/`_` would over-match under
+        // LIKE (no escaping applied). Tags rarely contain these characters;
+        // revisit with `ESCAPE '\\'` + escaped bind if it ever matters.
+        qb.push(" AND id IN (SELECT pt.paper_id FROM paper_tags pt \
+                 JOIN tags t ON t.id = pt.tag_id WHERE t.name = ")
+            .push_bind(tag.to_string())
+            .push(" OR t.name LIKE ")
+            .push_bind(format!("{tag}/%"))
+            .push(")");
+    }
+    if starred == Some(true) {
+        qb.push(" AND starred = 1");
     }
     let papers = qb.build_query_as::<Paper>().fetch_all(pool).await?;
     // Reorder to match `ids` (SQL IN gives no ordering guarantee).
@@ -375,8 +392,34 @@ mod tests {
         crate::db::soft_delete(&pool, "c").await.unwrap();
 
         let ids = vec!["c".to_string(), "b".to_string(), "a".to_string(), "zz".to_string()];
-        let got = papers_by_ids_ordered(&pool, &ids, None, None).await.unwrap();
+        let got = papers_by_ids_ordered(&pool, &ids, None, None, None, None).await.unwrap();
         let got_ids: Vec<&str> = got.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(got_ids, vec!["b", "a"]); // trashed + unknown dropped, order kept
+    }
+
+    #[tokio::test]
+    async fn papers_by_ids_ordered_filters_by_tag_prefix_and_starred() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("a", "h1", "A")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("b", "h2", "B")).await.unwrap();
+        crate::db::add_paper_tag(&pool, "a", "security/fuzzing").await.unwrap();
+        crate::db::set_paper_starred(&pool, "b", true).await.unwrap();
+
+        let ids = vec!["a".to_string(), "b".to_string()];
+
+        let got = papers_by_ids_ordered(&pool, &ids, None, None, Some("security"), None)
+            .await
+            .unwrap();
+        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["a"]);
+
+        let got = papers_by_ids_ordered(&pool, &ids, None, None, Some("ml"), None)
+            .await
+            .unwrap();
+        assert!(got.is_empty());
+
+        let got = papers_by_ids_ordered(&pool, &ids, None, None, None, Some(true))
+            .await
+            .unwrap();
+        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["b"]);
     }
 }

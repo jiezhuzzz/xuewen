@@ -757,6 +757,9 @@ pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchPa
         semantic,
         status: p.status,
         project: p.project,
+        // TODO(task 6): thread tag/starred query params through `SearchParams`.
+        tag: None,
+        starred: None,
     };
     match svc.search(&req).await {
         Ok(out) => {
