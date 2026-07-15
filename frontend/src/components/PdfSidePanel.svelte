@@ -8,7 +8,10 @@
   let { documentId }: { documentId: string } = $props();
   const scroll = useScroll(() => documentId);
   const thumbs = useThumbnailCapability();
-  const tab = $derived(reader.panel[documentId] ?? null);
+  // While the close animation runs, reader.panel is already null but the
+  // panel is still visible — keep showing the last-used view as it slides
+  // away instead of blanking.
+  const tab = $derived(reader.panel[documentId] ?? reader.lastPanel[documentId] ?? 'thumbs');
 
   function jump(pageIndex: number): void {
     scroll.provides?.scrollToPage({ pageNumber: pageIndex + 1 });
