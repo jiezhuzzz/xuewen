@@ -7,7 +7,7 @@
   import { DocumentContent } from '@embedpdf/plugin-document-manager/svelte';
   import { RenderLayer } from '@embedpdf/plugin-render/svelte';
   import { SelectionLayer } from '@embedpdf/plugin-selection/svelte';
-  import { PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
+  import { GlobalPointerProvider, PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
   import { TilingLayer } from '@embedpdf/plugin-tiling/svelte';
   import PdfToolbar from './PdfToolbar.svelte';
   import PdfQuickActions from './PdfQuickActions.svelte';
@@ -189,11 +189,22 @@
           {#if reader.find[documentId]}
             <PdfFindBar {documentId} />
           {/if}
-          <Viewport {documentId} class="h-full w-full">
-            <ZoomGestureWrapper {documentId} class="h-full w-full">
-              <Scroller {documentId} {renderPage} />
-            </ZoomGestureWrapper>
-          </Viewport>
+          <!-- Zoom/scroll/pinch wiring mirrors EmbedPDF's own ready-made viewer
+               (viewers/snippet app.tsx): GlobalPointerProvider > Viewport >
+               ZoomGestureWrapper > Scroller, all stock. -->
+          <GlobalPointerProvider {documentId}>
+            <Viewport {documentId} class="h-full w-full">
+              <!-- No class on ZoomGestureWrapper: it must size to its content,
+                   not the viewport. Its pinch-anchor math reads the wrapped
+                   element's own width/height, so forcing h-full/w-full (element
+                   = viewport size, while the content is many pages tall) breaks
+                   the anchor — pinching a corner scaled toward the opposite one.
+                   EmbedPDF's own viewer passes no class here. -->
+              <ZoomGestureWrapper {documentId}>
+                <Scroller {documentId} {renderPage} />
+              </ZoomGestureWrapper>
+            </Viewport>
+          </GlobalPointerProvider>
         </div>
       </div>
     {:else if doc.isError}
