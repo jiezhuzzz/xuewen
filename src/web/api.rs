@@ -796,6 +796,25 @@ pub async fn delete_tag(State(app): State<AppState>, Path(id): Path<String>) -> 
     }
 }
 
+pub async fn star_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    set_star(&app, &id, true).await
+}
+
+pub async fn unstar_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    set_star(&app, &id, false).await
+}
+
+async fn set_star(app: &AppState, id: &str, on: bool) -> Response {
+    match db::set_paper_starred(&app.pool, id, on).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("set_star: {e}");
+            internal_error()
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct FormatParam {
     pub format: Option<String>,

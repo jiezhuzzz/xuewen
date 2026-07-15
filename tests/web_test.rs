@@ -1148,6 +1148,37 @@ async fn tags_rename_and_delete() {
 }
 
 #[tokio::test]
+async fn star_and_unstar_paper() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // Star -> 204, detail reflects starred:true.
+    server
+        .put("/api/papers/aaaa1111/star")
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    let detail: serde_json::Value = server.get("/api/papers/aaaa1111").await.json();
+    assert_eq!(detail["starred"], true);
+
+    // Unstar -> 204, detail reflects starred:false.
+    server
+        .delete("/api/papers/aaaa1111/star")
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    let detail: serde_json::Value = server.get("/api/papers/aaaa1111").await.json();
+    assert_eq!(detail["starred"], false);
+
+    // Starring a missing paper -> 404.
+    server
+        .put("/api/papers/nope/star")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn import_url_needs_ingest_context() {
     let (dir, pool) = temp_pool().await;
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
