@@ -699,6 +699,103 @@ pub async fn remove_paper_from_project(
     }
 }
 
+pub async fn list_tags(State(app): State<AppState>) -> Response {
+    match db::list_tags_with_counts(&app.pool).await {
+        Ok(tags) => Json(tags).into_response(),
+        Err(e) => {
+            tracing::error!("list_tags: {e}");
+            internal_error()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TagNameBody {
+    pub name: String,
+}
+
+pub async fn add_paper_tag(
+    State(app): State<AppState>,
+    Path(paper_id): Path<String>,
+    Json(body): Json<TagNameBody>,
+) -> Response {
+    if body.name.trim().is_empty() {
+        return bad_request("empty name");
+    }
+    // Pre-check the paper so a bad id is a clean 404, not an FK-violation 500.
+    match db::get_by_id(&app.pool, &paper_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::error!("add_paper_tag paper lookup: {e}");
+            return internal_error();
+        }
+    }
+    match db::add_paper_tag(&app.pool, &paper_id, &body.name).await {
+        Ok(t) => Json(TagRef {
+            id: t.id,
+            name: t.name,
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!("add_paper_tag: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn remove_paper_tag(
+    State(app): State<AppState>,
+    Path((paper_id, tag_id)): Path<(String, String)>,
+) -> Response {
+    match db::remove_paper_tag(&app.pool, &paper_id, &tag_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("remove_paper_tag: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn rename_tag(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<TagNameBody>,
+) -> Response {
+    if body.name.trim().is_empty() {
+        return bad_request("empty name");
+    }
+    match db::rename_tag(&app.pool, &id, &body.name).await {
+        Ok(Some(t)) => Json(TagRef {
+            id: t.id,
+            name: t.name,
+        })
+        .into_response(),
+        Ok(None) => not_found(),
+        Err(e) if db::is_unique_violation(&e) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "a tag with that name already exists"})),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("rename_tag: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn delete_tag(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    match db::delete_tag(&app.pool, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("delete_tag: {e}");
+            internal_error()
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct FormatParam {
     pub format: Option<String>,

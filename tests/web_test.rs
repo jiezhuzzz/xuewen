@@ -1059,6 +1059,95 @@ async fn patch_project_merge_rules() {
 }
 
 #[tokio::test]
+async fn tags_crud_membership_and_gc() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // Add (create-if-missing) -> 200 with {id,name}.
+    let resp = server
+        .put("/api/papers/aaaa1111/tags")
+        .json(&serde_json::json!({"name": "nlp"}))
+        .await;
+    resp.assert_status_ok();
+    let tag: serde_json::Value = resp.json();
+    let tag_id = tag["id"].as_str().unwrap().to_string();
+    assert_eq!(tag["name"], "nlp");
+
+    // Empty/blank name -> 400.
+    server
+        .put("/api/papers/aaaa1111/tags")
+        .json(&serde_json::json!({"name": "   "}))
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+
+    // Tagging a missing paper -> 404 (clean, not an FK-violation 500).
+    server
+        .put("/api/papers/nope/tags")
+        .json(&serde_json::json!({"name": "nlp"}))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // List shows it with count 1.
+    let list: Vec<serde_json::Value> = server.get("/api/tags").await.json();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"], tag_id);
+    assert_eq!(list[0]["paper_count"], 1);
+
+    // Remove membership -> 204, and the now-orphaned tag is GC'd.
+    server
+        .delete(&format!("/api/papers/aaaa1111/tags/{tag_id}"))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    let list: Vec<serde_json::Value> = server.get("/api/tags").await.json();
+    assert!(list.is_empty());
+}
+
+#[tokio::test]
+async fn tags_rename_and_delete() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    let tag: serde_json::Value = server
+        .put("/api/papers/aaaa1111/tags")
+        .json(&serde_json::json!({"name": "nlp"}))
+        .await
+        .json();
+    let tag_id = tag["id"].as_str().unwrap().to_string();
+
+    // Rename -> 200, name changed.
+    let resp = server
+        .patch(&format!("/api/tags/{tag_id}"))
+        .json(&serde_json::json!({"name": "natural-language-processing"}))
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["name"], "natural-language-processing");
+
+    // Rename an unknown id -> 404.
+    server
+        .patch("/api/tags/does-not-exist")
+        .json(&serde_json::json!({"name": "whatever"}))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // Delete -> 204, then 404 when already gone.
+    server
+        .delete(&format!("/api/tags/{tag_id}"))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    server
+        .delete(&format!("/api/tags/{tag_id}"))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn import_url_needs_ingest_context() {
     let (dir, pool) = temp_pool().await;
     let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
