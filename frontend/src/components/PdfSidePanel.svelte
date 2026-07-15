@@ -51,10 +51,19 @@
       let tries = 0;
       let raf = requestAnimationFrame(function attempt() {
         const pane = thumbsWrap?.firstElementChild;
-        const item = (thumbs.plugin as ThumbnailPluginState | null)
-          ?.getDocumentState(documentId)
-          ?.thumbs[scroll.state.currentPage - 1];
+        // typeof-guarded: getDocumentState is a private-in-.d.ts runtime
+        // method (see ThumbnailPluginState above). If a future plugin
+        // version renames/removes it, this degrades into the retry/give-up
+        // path below instead of throwing.
+        const plugin = thumbs.plugin as ThumbnailPluginState | null;
+        const item =
+          typeof plugin?.getDocumentState === 'function'
+            ? plugin.getDocumentState(documentId)?.thumbs[scroll.state.currentPage - 1]
+            : undefined;
         if (pane instanceof HTMLElement && item) {
+          // 8 = upstream scrollToThumb's own `margin` constant
+          // (@embedpdf/plugin-thumbnail 2.14.4 dist/index.js:352),
+          // replicated so direct positioning matches the plugin's semantics.
           pane.scrollTop = Math.max(0, item.top - 8);
           return; // positioned — stop retrying
         }
@@ -93,37 +102,37 @@
          thumbsWrap.firstElementChild (ThumbnailsPane's root scroll container,
          whose inline height:100% resolves against this wrapper). -->
     <div bind:this={thumbsWrap} class="min-h-0 flex-1">
-    <ThumbnailsPane {documentId}>
-      {#snippet children(m)}
-        <button
-          type="button"
-          aria-label={`Page ${m.pageIndex + 1}`}
-          onclick={() => jump(m.pageIndex)}
-          style:position="absolute"
-          style:top="{m.top}px"
-          style:left="50%"
-          style:transform="translateX(-50%)"
-          style:width="{m.width}px"
-          style:height="{m.wrapperHeight}px"
-        >
-          <ThumbImg
-            {documentId}
-            meta={m}
-            class={`rounded border ${
-              scroll.state.currentPage === m.pageIndex + 1
-                ? 'border-amber-700 ring-2 ring-amber-700/40 dark:border-amber-500 dark:ring-amber-500/40'
-                : 'border-stone-200 dark:border-stone-700'
-            }`}
-          />
-          <span
-            class="block pt-0.5 text-center text-[10px] text-stone-500 dark:text-stone-400"
-            style:height="{m.labelHeight}px"
+      <ThumbnailsPane {documentId}>
+        {#snippet children(m)}
+          <button
+            type="button"
+            aria-label={`Page ${m.pageIndex + 1}`}
+            onclick={() => jump(m.pageIndex)}
+            style:position="absolute"
+            style:top="{m.top}px"
+            style:left="50%"
+            style:transform="translateX(-50%)"
+            style:width="{m.width}px"
+            style:height="{m.wrapperHeight}px"
           >
-            {m.pageIndex + 1}
-          </span>
-        </button>
-      {/snippet}
-    </ThumbnailsPane>
+            <ThumbImg
+              {documentId}
+              meta={m}
+              class={`rounded border ${
+                scroll.state.currentPage === m.pageIndex + 1
+                  ? 'border-amber-700 ring-2 ring-amber-700/40 dark:border-amber-500 dark:ring-amber-500/40'
+                  : 'border-stone-200 dark:border-stone-700'
+              }`}
+            />
+            <span
+              class="block pt-0.5 text-center text-[10px] text-stone-500 dark:text-stone-400"
+              style:height="{m.labelHeight}px"
+            >
+              {m.pageIndex + 1}
+            </span>
+          </button>
+        {/snippet}
+      </ThumbnailsPane>
     </div>
   {:else if tab === 'outline'}
     <PdfOutline {documentId} />

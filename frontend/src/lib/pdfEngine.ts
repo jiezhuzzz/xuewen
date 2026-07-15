@@ -58,7 +58,11 @@ export function viewerPlugins(): PluginBatchRegistrations {
     // autoScroll would snap the pane to the current page on EVERY page
     // change, fighting manual thumbnail browsing (trackpad momentum keeps
     // firing page changes for a second after a flick). The side panel
-    // positions the pane once on open instead; 'auto' makes that instant.
+    // positions the pane once on open instead, via a direct scrollTop write
+    // (see PdfSidePanel.svelte) — scrollToThumb/scrollTo$ is never called,
+    // so scrollBehavior never gets consulted. `scrollBehavior: 'auto'` is
+    // kept anyway as spec-mandated defense-in-depth: nothing in this app
+    // emits through that scroll channel anymore.
     createPluginRegistration(ThumbnailPluginPackage, { autoScroll: false, scrollBehavior: 'auto' }),
     createPluginRegistration(BookmarkPluginPackage),
   ];
