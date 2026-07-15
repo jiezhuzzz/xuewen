@@ -47,7 +47,7 @@ export function viewerPlugins(): PluginBatchRegistrations {
     createPluginRegistration(RenderPluginPackage),
     createPluginRegistration(InteractionManagerPluginPackage),
     createPluginRegistration(SelectionPluginPackage),
-    createPluginRegistration(ZoomPluginPackage, { defaultZoomLevel: ZoomMode.FitWidth }),
+    createPluginRegistration(ZoomPluginPackage, { defaultZoomLevel: ZoomMode.FitPage }),
     // Visible-area high-res tiles; the full-page RenderLayer base stays at
     // scale 1 so zooming never re-renders whole pages (see PdfPages.svelte).
     // Defaults (tileSize 768) match the ready-made viewer; only pass config
