@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use crate::models::{Paper, Project, ProjectSummary};
+use crate::models::{Paper, Project, ProjectSummary, Tag, TagSummary};
 
 /// Open (creating if needed) the SQLite database and run migrations.
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
@@ -369,6 +369,138 @@ pub async fn find_one_project(pool: &SqlitePool, sel: &str) -> Result<Project> {
         1 => Ok(matches.pop().unwrap()),
         n => bail!("ambiguous project selector {sel:?} matches {n} projects"),
     }
+}
+
+/// Split on `/`, trim each segment, drop empties, rejoin. `None` if empty.
+pub fn normalize_tag_name(raw: &str) -> Option<String> {
+    let joined = raw
+        .split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+    (!joined.is_empty()).then_some(joined)
+}
+
+pub async fn find_tag_by_name(pool: &SqlitePool, name: &str) -> Result<Option<Tag>> {
+    let t = sqlx::query_as::<_, Tag>("SELECT * FROM tags WHERE name = ? COLLATE NOCASE")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+    Ok(t)
+}
+
+pub async fn create_tag(pool: &SqlitePool, name: &str) -> Result<Tag> {
+    let tag = Tag {
+        id: uuid::Uuid::now_v7().to_string(),
+        name: name.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    sqlx::query("INSERT INTO tags (id, name, created_at) VALUES (?,?,?)")
+        .bind(&tag.id)
+        .bind(&tag.name)
+        .bind(&tag.created_at)
+        .execute(pool)
+        .await?;
+    Ok(tag)
+}
+
+/// Create the tag if it doesn't exist (case-insensitively), then link it to
+/// the paper. Idempotent: re-adding an already-linked tag is a no-op.
+pub async fn add_paper_tag(pool: &SqlitePool, paper_id: &str, raw_name: &str) -> Result<Tag> {
+    let name = normalize_tag_name(raw_name).ok_or_else(|| anyhow::anyhow!("empty tag name"))?;
+    let tag = match find_tag_by_name(pool, &name).await? {
+        Some(t) => t,
+        None => create_tag(pool, &name).await?,
+    };
+    let ts = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO paper_tags (paper_id, tag_id, added_at) VALUES (?,?,?) \
+         ON CONFLICT (paper_id, tag_id) DO NOTHING",
+    )
+    .bind(paper_id)
+    .bind(&tag.id)
+    .bind(&ts)
+    .execute(pool)
+    .await?;
+    Ok(tag)
+}
+
+/// Unlink a tag from a paper; if that was the tag's last membership, delete
+/// the now-orphaned tag row too.
+pub async fn remove_paper_tag(pool: &SqlitePool, paper_id: &str, tag_id: &str) -> Result<bool> {
+    let removed = sqlx::query("DELETE FROM paper_tags WHERE paper_id = ? AND tag_id = ?")
+        .bind(paper_id)
+        .bind(tag_id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        > 0;
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM paper_tags WHERE tag_id = ?")
+        .bind(tag_id)
+        .fetch_one(pool)
+        .await?;
+    if remaining == 0 {
+        sqlx::query("DELETE FROM tags WHERE id = ?")
+            .bind(tag_id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(removed)
+}
+
+pub async fn tags_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec<Tag>> {
+    let tags = sqlx::query_as::<_, Tag>(
+        "SELECT t.* FROM tags t JOIN paper_tags pt ON pt.tag_id = t.id \
+         WHERE pt.paper_id = ? ORDER BY t.name COLLATE NOCASE",
+    )
+    .bind(paper_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(tags)
+}
+
+pub async fn list_tags_with_counts(pool: &SqlitePool) -> Result<Vec<TagSummary>> {
+    // `paper_count` is a prefix rollup, not a flat count: it counts distinct
+    // papers carrying this tag OR any `name/*` child, matching what clicking the
+    // tag's filter returns (parent + every descendant).
+    // NOTE: a tag name literally containing `%`/`_` would over-match under LIKE;
+    // this mirrors the search filter's known caveat — we don't escape here.
+    let rows = sqlx::query_as::<_, TagSummary>(
+        "SELECT t.id, t.name, t.created_at, \
+                (SELECT COUNT(DISTINCT pt.paper_id) \
+                   FROM paper_tags pt JOIN tags c ON c.id = pt.tag_id \
+                   WHERE c.name = t.name OR c.name LIKE t.name || '/%') AS paper_count \
+         FROM tags t ORDER BY t.name COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn rename_tag(pool: &SqlitePool, id: &str, raw_name: &str) -> Result<Option<Tag>> {
+    let name = normalize_tag_name(raw_name).ok_or_else(|| anyhow::anyhow!("empty tag name"))?;
+    let res = sqlx::query("UPDATE tags SET name = ? WHERE id = ?")
+        .bind(&name)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    if res.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let tag = sqlx::query_as::<_, Tag>("SELECT * FROM tags WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(tag)
+}
+
+pub async fn delete_tag(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let res = sqlx::query("DELETE FROM tags WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 /// Escape `\`, `%`, `_` in a user search term for `LIKE … ESCAPE '\'`.
@@ -1091,5 +1223,66 @@ mod tests {
             setting_updated_at(&pool, "proxy_cookie").await.unwrap(),
             None
         );
+    }
+
+    /// Insert a minimal paper (mirroring `sample_paper`) and return its id.
+    async fn insert_test_paper(pool: &SqlitePool) -> String {
+        let id = uuid::Uuid::now_v7().to_string();
+        let p = sample_paper(&id, &id);
+        insert_paper(pool, &p).await.unwrap();
+        id
+    }
+
+    #[test]
+    fn normalize_trims_and_drops_empty_segments() {
+        assert_eq!(
+            normalize_tag_name(" security / fuzzing "),
+            Some("security/fuzzing".into())
+        );
+        assert_eq!(normalize_tag_name("ml//llm/"), Some("ml/llm".into()));
+        assert_eq!(normalize_tag_name("  "), None);
+        assert_eq!(normalize_tag_name("//"), None);
+    }
+
+    #[tokio::test]
+    async fn add_tag_creates_then_reuses_case_insensitively() {
+        let (_dir, pool) = temp_pool().await;
+        let pid = insert_test_paper(&pool).await;
+        let a = add_paper_tag(&pool, &pid, "Security/Fuzzing").await.unwrap();
+        let b = add_paper_tag(&pool, &pid, "security/fuzzing").await.unwrap();
+        assert_eq!(a.id, b.id, "same tag reused case-insensitively");
+        assert_eq!(list_tags_with_counts(&pool).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn remove_last_membership_gcs_the_tag() {
+        let (_dir, pool) = temp_pool().await;
+        let pid = insert_test_paper(&pool).await;
+        let t = add_paper_tag(&pool, &pid, "ml").await.unwrap();
+        assert!(remove_paper_tag(&pool, &pid, &t.id).await.unwrap());
+        assert!(
+            find_tag_by_name(&pool, "ml").await.unwrap().is_none(),
+            "orphan tag GC'd"
+        );
+    }
+
+    #[tokio::test]
+    async fn tag_counts_roll_up_children() {
+        let (_dir, pool) = temp_pool().await;
+        // One paper carries a child tag `security/fuzzing`; another carries the
+        // bare parent `security`.
+        let child_paper = insert_test_paper(&pool).await;
+        let parent_paper = insert_test_paper(&pool).await;
+        add_paper_tag(&pool, &child_paper, "security/fuzzing")
+            .await
+            .unwrap();
+        add_paper_tag(&pool, &parent_paper, "security").await.unwrap();
+
+        let counts = list_tags_with_counts(&pool).await.unwrap();
+        let by_name = |n: &str| counts.iter().find(|s| s.tag.name == n).unwrap().paper_count;
+        // `security` rolls up itself + every `security/*` child paper.
+        assert_eq!(by_name("security"), 2);
+        // The leaf child is unaffected: its rollup equals its direct count.
+        assert_eq!(by_name("security/fuzzing"), 1);
     }
 }
