@@ -226,13 +226,15 @@ pub async fn delete_row(pool: &SqlitePool, id: &str) -> Result<()> {
 
 /// Set (or clear) a paper's starred flag. Returns true if a row was updated.
 pub async fn set_paper_starred(pool: &SqlitePool, paper_id: &str, starred: bool) -> Result<bool> {
-    Ok(sqlx::query("UPDATE papers SET starred = ? WHERE id = ?")
-        .bind(starred as i64)
-        .bind(paper_id)
-        .execute(pool)
-        .await?
-        .rows_affected()
-        > 0)
+    Ok(
+        sqlx::query("UPDATE papers SET starred = ? WHERE id = ?")
+            .bind(starred as i64)
+            .bind(paper_id)
+            .execute(pool)
+            .await?
+            .rows_affected()
+            > 0,
+    )
 }
 
 /// Find a paper by exact id, else by unique id prefix (active or trashed).
@@ -248,7 +250,11 @@ pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
     }
 }
 
-pub async fn create_project(pool: &SqlitePool, name: &str, _note: Option<&str>) -> Result<Project> {
+pub async fn create_project(
+    pool: &SqlitePool,
+    name: &str,
+    _note: Option<&str>,
+) -> Result<Project> {
     let project = Project {
         id: uuid::Uuid::now_v7().to_string(),
         name: name.to_string(),
@@ -354,12 +360,11 @@ pub async fn projects_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec
 }
 
 pub async fn project_ids_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec<String>> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT project_id FROM paper_projects WHERE paper_id = ? ORDER BY added_at",
-    )
-    .bind(paper_id)
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT project_id FROM paper_projects WHERE paper_id = ? ORDER BY added_at")
+            .bind(paper_id)
+            .fetch_all(pool)
+            .await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
@@ -911,9 +916,7 @@ mod tests {
         insert_paper(&pool, &b).await.unwrap();
 
         // "%" must match only the literal percent title, not act as a wildcard.
-        let hits = list_papers(&pool, Some("100%"), None, None, None)
-            .await
-            .unwrap();
+        let hits = list_papers(&pool, Some("100%"), None, None, None).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, a.id);
     }
@@ -1076,13 +1079,7 @@ mod tests {
             .unwrap()
             .deleted_at
             .is_none());
-        assert_eq!(
-            list_papers(&pool, None, None, None, None)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(list_papers(&pool, None, None, None, None).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1100,9 +1097,7 @@ mod tests {
     async fn project_crud_and_unique_name() {
         let (_dir, pool) = temp_pool().await;
 
-        let p = create_project(&pool, "Survey", Some("draft"))
-            .await
-            .unwrap();
+        let p = create_project(&pool, "Survey", Some("draft")).await.unwrap();
         assert_eq!(p.name, "Survey");
 
         // Case-insensitive unique name.
@@ -1117,9 +1112,7 @@ mod tests {
         assert_eq!(list[0].paper_count, 0);
 
         // Update name + note.
-        assert!(update_project(&pool, &p.id, "Survey v2", Some("final"))
-            .await
-            .unwrap());
+        assert!(update_project(&pool, &p.id, "Survey v2", Some("final")).await.unwrap());
         let got = get_project(&pool, &p.id).await.unwrap().unwrap();
         assert_eq!(got.name, "Survey v2");
 
@@ -1132,18 +1125,12 @@ mod tests {
     #[tokio::test]
     async fn membership_add_remove_and_filter_and_cascade() {
         let (_dir, pool) = temp_pool().await;
-        insert_paper(
-            &pool,
-            &sample_paper("01890000-0000-7000-8000-0000000000a1", "ha"),
-        )
-        .await
-        .unwrap();
-        insert_paper(
-            &pool,
-            &sample_paper("01890000-0000-7000-8000-0000000000a2", "hb"),
-        )
-        .await
-        .unwrap();
+        insert_paper(&pool, &sample_paper("01890000-0000-7000-8000-0000000000a1", "ha"))
+            .await
+            .unwrap();
+        insert_paper(&pool, &sample_paper("01890000-0000-7000-8000-0000000000a2", "hb"))
+            .await
+            .unwrap();
         let proj = create_project(&pool, "P", None).await.unwrap();
 
         // Add is idempotent.
@@ -1189,26 +1176,18 @@ mod tests {
         assert_eq!(filtered[0].id, "01890000-0000-7000-8000-0000000000a1");
 
         // Remove.
-        assert!(
-            remove_paper_from_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
-                .await
-                .unwrap()
-        );
-        assert!(!remove_paper_from_project(
-            &pool,
-            "01890000-0000-7000-8000-0000000000a1",
-            &proj.id
-        )
-        .await
-        .unwrap());
+        assert!(remove_paper_from_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
+            .await
+            .unwrap());
+        assert!(!remove_paper_from_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
+            .await
+            .unwrap());
 
         // FK cascade: hard-purging a paper drops its memberships.
         add_paper_to_project(&pool, "01890000-0000-7000-8000-0000000000a2", &proj.id)
             .await
             .unwrap();
-        delete_row(&pool, "01890000-0000-7000-8000-0000000000a2")
-            .await
-            .unwrap();
+        delete_row(&pool, "01890000-0000-7000-8000-0000000000a2").await.unwrap();
         assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 0);
 
         // FK cascade: deleting a project drops memberships (no orphan rows).
@@ -1216,12 +1195,10 @@ mod tests {
             .await
             .unwrap();
         delete_project(&pool, &proj.id).await.unwrap();
-        assert!(
-            project_ids_for_paper(&pool, "01890000-0000-7000-8000-0000000000a1")
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(project_ids_for_paper(&pool, "01890000-0000-7000-8000-0000000000a1")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1316,12 +1293,8 @@ mod tests {
     async fn add_tag_creates_then_reuses_case_insensitively() {
         let (_dir, pool) = temp_pool().await;
         let pid = insert_test_paper(&pool).await;
-        let a = add_paper_tag(&pool, &pid, "Security/Fuzzing")
-            .await
-            .unwrap();
-        let b = add_paper_tag(&pool, &pid, "security/fuzzing")
-            .await
-            .unwrap();
+        let a = add_paper_tag(&pool, &pid, "Security/Fuzzing").await.unwrap();
+        let b = add_paper_tag(&pool, &pid, "security/fuzzing").await.unwrap();
         assert_eq!(a.id, b.id, "same tag reused case-insensitively");
         assert_eq!(list_tags_with_counts(&pool).await.unwrap().len(), 1);
     }
@@ -1348,9 +1321,7 @@ mod tests {
         add_paper_tag(&pool, &child_paper, "security/fuzzing")
             .await
             .unwrap();
-        add_paper_tag(&pool, &parent_paper, "security")
-            .await
-            .unwrap();
+        add_paper_tag(&pool, &parent_paper, "security").await.unwrap();
 
         let counts = list_tags_with_counts(&pool).await.unwrap();
         let by_name = |n: &str| counts.iter().find(|s| s.tag.name == n).unwrap().paper_count;
