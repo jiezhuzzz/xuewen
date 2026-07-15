@@ -3,6 +3,20 @@ use serde::Serialize;
 use crate::models::{Paper, PaperStatus};
 use crate::resolve::ResolvedMetadata;
 
+/// A tag reference as embedded in a paper row/detail.
+#[derive(Serialize, Clone)]
+pub struct TagRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// A project reference as embedded in a paper row/detail.
+#[derive(Serialize, Clone)]
+pub struct ProjectRef {
+    pub id: String,
+    pub name: String,
+}
+
 /// A paper for the list view (no abstract, to keep the payload light).
 #[derive(Serialize)]
 pub struct PaperSummary {
@@ -19,6 +33,9 @@ pub struct PaperSummary {
     pub source: Option<String>,
     pub status: PaperStatus,
     pub added_at: String,
+    pub starred: bool,
+    pub tags: Vec<TagRef>,
+    pub projects: Vec<ProjectRef>,
 }
 
 impl From<&Paper> for PaperSummary {
@@ -37,19 +54,22 @@ impl From<&Paper> for PaperSummary {
             source: p.meta.source.clone(),
             status: p.meta.status,
             added_at: p.added_at.clone(),
+            starred: p.starred,
+            tags: Vec::new(),
+            projects: Vec::new(),
         }
     }
 }
 
-/// A paper for the detail view: the summary fields, the abstract, and the ids of
-/// the projects it belongs to.
+/// A paper for the detail view: the summary fields plus the abstract. The
+/// summary's `tags`/`projects` carry the paper's tag and project memberships
+/// (see `attach`).
 #[derive(Serialize)]
 pub struct PaperDetail {
     #[serde(flatten)]
     pub summary: PaperSummary,
     #[serde(rename = "abstract")]
     pub abstract_text: Option<String>,
-    pub project_ids: Vec<String>,
     /// LLM-generated structured summary (JSON key "summary"); absent until generated.
     #[serde(rename = "summary", skip_serializing_if = "Option::is_none")]
     pub ai_summary: Option<crate::summary::Summary>,
@@ -60,19 +80,17 @@ impl From<&Paper> for PaperDetail {
         Self {
             summary: PaperSummary::from(p),
             abstract_text: p.meta.abstract_text.clone(),
-            project_ids: Vec::new(),
             ai_summary: None,
         }
     }
 }
 
 impl PaperDetail {
-    /// Same as `from`, but with the paper's project memberships attached.
-    pub fn with_project_ids(p: &Paper, project_ids: Vec<String>) -> Self {
-        Self {
-            project_ids,
-            ..Self::from(p)
-        }
+    /// Attach the paper's tag and project memberships to the embedded summary.
+    pub fn attach(mut self, tags: Vec<TagRef>, projects: Vec<ProjectRef>) -> Self {
+        self.summary.tags = tags;
+        self.summary.projects = projects;
+        self
     }
 }
 
