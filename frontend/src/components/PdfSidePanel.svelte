@@ -28,17 +28,22 @@
   // mount — so repeat the (idempotent, instant) call across a few frames,
   // then stop. If the metadata never appears (broken doc), the pane simply
   // stays at the top.
+  //
+  // Every scrollToThumb call MUST run inside a rAF callback — Svelte tracks
+  // all reads made during the effect body's synchronous execution, so a
+  // synchronous first call would register `scroll.state.currentPage` as an
+  // effect dependency and re-trigger the effect on every page change
+  // (continuous auto-follow again, the exact bug this fixes).
   $effect(() => {
     if (tab !== 'thumbs') return;
     const scope = thumbs.provides?.forDocument(documentId);
     if (!scope) return;
     let tries = 0;
-    let raf = 0;
     const attempt = () => {
       scope.scrollToThumb(scroll.state.currentPage - 1);
       if (++tries < 30) raf = requestAnimationFrame(attempt);
     };
-    attempt();
+    let raf = requestAnimationFrame(attempt);
     return () => cancelAnimationFrame(raf);
   });
 </script>
