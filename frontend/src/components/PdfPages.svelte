@@ -23,6 +23,8 @@
   import { resolveAuthorYearMarkers } from '../lib/textCitations';
   import { reader } from '../lib/readerState.svelte';
   import { createPillHide } from '../lib/pillHide.svelte';
+  import { Spring } from 'svelte/motion';
+  import { prefersReducedMotion, SPRINGS } from '../lib/motion';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
 
@@ -39,6 +41,22 @@
   let pillHost = $state<HTMLDivElement | undefined>();
   $effect(() => {
     pill.setHost(pillHost ?? null);
+  });
+
+  // Animated panel push (the library-pane idiom — see App.svelte): the
+  // wrapper's width springs 0↔PANEL_W so the PDF eases sideways instead of
+  // jumping when the sidebar toggles.
+  const PANEL_W = 176; // = w-44
+  // svelte-ignore state_referenced_locally -- initial value only; the
+  // $effect below drives every subsequent update via panelW.target.
+  const panelW = new Spring(reader.panel[documentId] ? PANEL_W : 0, SPRINGS.pane);
+  $effect(() => {
+    const target = reader.panel[documentId] ? PANEL_W : 0;
+    if (import.meta.env.MODE === 'test' || prefersReducedMotion()) {
+      panelW.set(target, { instant: true });
+    } else {
+      panelW.target = target;
+    }
   });
 
   let citations = $state<CitationData>({ references: [], markers: [] });
@@ -148,8 +166,18 @@
   {#snippet children(doc)}
     {#if doc.isLoaded}
       <div class="flex h-full">
-        {#if reader.panel[documentId]}
-          <PdfSidePanel {documentId} />
+        {#if reader.panel[documentId] || panelW.current > 1}
+          <!-- Kept mounted while the spring settles so closing slides the
+               panel away instead of blanking it; inert once logically closed. -->
+          <div
+            class="relative min-h-0 shrink-0 overflow-hidden"
+            style={`width:${panelW.current}px`}
+            inert={!reader.panel[documentId]}
+          >
+            <div class="absolute inset-y-0 left-0 flex w-44">
+              <PdfSidePanel {documentId} />
+            </div>
+          </div>
         {/if}
         <div class="relative min-w-0 flex-1" bind:this={pillHost}>
           <PdfToolbar {documentId} {pill} />
