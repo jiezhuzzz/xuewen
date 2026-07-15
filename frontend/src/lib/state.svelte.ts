@@ -214,13 +214,11 @@ export const theme = $state<{ mode: ThemeMode }>({ mode: 'system' });
 export const ui = $state<{
   sidebarOpen: boolean;
   importOpen: boolean;
-  projectsOpen: boolean;
   zen: boolean;
   paletteOpen: boolean;
 }>({
   sidebarOpen: true,
   importOpen: false,
-  projectsOpen: false,
   zen: false,
   paletteOpen: false,
 });
@@ -237,9 +235,6 @@ export function openImport(): void {
 export function closeImport(): void {
   importState.cancelled = true;
   ui.importOpen = false;
-}
-export function closeProjects(): void {
-  ui.projectsOpen = false;
 }
 
 const detailCache = new Map<string, PaperDetail>();

@@ -30,7 +30,6 @@ beforeEach(() => {
   ui.paletteOpen = false;
   ui.sidebarOpen = true;
   ui.importOpen = false;
-  ui.projectsOpen = false;
   identifyState.open = false;
   chat.open = false;
   chat.available = false;

@@ -11,7 +11,7 @@ afterEach(() => {
 const paper: PaperSummary = {
   id: 'paper-1', title: 'Adam', authors: [], venue: null, year: null, doi: null,
   arxiv_id: null, dblp_key: null, cite_key: 'k2015adam', url: null, source: null,
-  status: 'resolved', added_at: '2020-01-01',
+  status: 'resolved', added_at: '2020-01-01', starred: false, tags: [], projects: [],
 };
 
 function show(ref: Partial<import('../lib/citations').Reference>, matchedPaper: PaperSummary | null) {

@@ -10,7 +10,7 @@ function paper(id: string): PaperSummary {
   return {
     id, title: id, authors: [], venue: null, year: null, doi: null, arxiv_id: null,
     dblp_key: null, cite_key: null, url: null, source: null, status: 'resolved',
-    added_at: '',
+    added_at: '', starred: false, tags: [], projects: [],
   };
 }
 
@@ -51,7 +51,8 @@ function detail(id: string) {
     id, title: 'Attention', authors: ['Vaswani'], venue: 'NeurIPS', year: 2017,
     doi: '10.1/x', arxiv_id: '1706.03762', dblp_key: null, cite_key: 'vaswani2017',
     url: null, source: 'crossref', status: 'resolved', added_at: '2026-07-08T00:00:00Z',
-    abstract: 'The dominant sequence transduction models…', project_ids: [],
+    abstract: 'The dominant sequence transduction models…',
+    starred: false, tags: [], projects: [], summary: null,
   };
 }
 

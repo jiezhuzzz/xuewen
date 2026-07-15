@@ -8,7 +8,7 @@ function paper(id: string, title: string): PaperSummary {
   return {
     id, title, authors: [], venue: null, year: null, doi: null, arxiv_id: null,
     dblp_key: null, cite_key: null, url: null, source: null, status: 'resolved',
-    added_at: '',
+    added_at: '', starred: false, tags: [], projects: [],
   };
 }
 

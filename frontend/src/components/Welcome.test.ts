@@ -7,6 +7,7 @@ import type { PaperSummary } from '../lib/types';
 const paper: PaperSummary = {
   id: 'p1', title: 't', authors: [], venue: null, year: null, doi: null, arxiv_id: null,
   dblp_key: null, cite_key: null, url: null, source: null, status: 'resolved', added_at: '',
+  starred: false, tags: [], projects: [],
 };
 
 beforeEach(() => {
