@@ -325,6 +325,8 @@ export async function renameProject(id: string, patch: { name?: string }): Promi
   await updateProject(id, patch);
   await loadProjects();
   await loadPapers();
+  detailCache.clear();
+  detailRefresh.n += 1;
 }
 
 export async function removeProject(id: string): Promise<void> {
@@ -332,6 +334,8 @@ export async function removeProject(id: string): Promise<void> {
   if (filters.project === id) filters.project = 'all';
   await loadProjects();
   await loadPapers();
+  detailCache.clear();
+  detailRefresh.n += 1;
 }
 
 export async function addToProject(paperId: string, projectId: string): Promise<void> {
@@ -399,6 +403,8 @@ export async function renameTag(id: string, name: string): Promise<void> {
   if (tag && filters.tag === tag.name) filters.tag = undefined;
   await loadTags();
   await loadPapers();
+  detailCache.clear();
+  detailRefresh.n += 1;
 }
 
 /// Delete a tag from every paper carrying it (GC'd tag row included), then
@@ -410,6 +416,8 @@ export async function deleteTag(id: string): Promise<void> {
   if (tag && filters.tag === tag.name) filters.tag = undefined;
   await loadTags();
   await loadPapers();
+  detailCache.clear();
+  detailRefresh.n += 1;
 }
 
 let kwDebounce: ReturnType<typeof setTimeout> | undefined;
