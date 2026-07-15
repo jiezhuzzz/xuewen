@@ -1,7 +1,8 @@
 <script lang="ts">
   import { ThumbImg, ThumbnailsPane } from '@embedpdf/plugin-thumbnail/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
-  import { reader } from '../lib/readerState.svelte';
+  import { LayoutGrid, List } from 'lucide-svelte';
+  import { reader, setPanelView } from '../lib/readerState.svelte';
   import PdfOutline from './PdfOutline.svelte';
 
   let { documentId }: { documentId: string } = $props();
@@ -11,34 +12,37 @@
   function jump(pageIndex: number): void {
     scroll.provides?.scrollToPage({ pageNumber: pageIndex + 1 });
   }
+
+  const seg = (active: boolean) =>
+    `flex flex-1 items-center justify-center rounded-md px-2 py-1 ${
+      active
+        ? 'bg-parchment text-ink dark:bg-stone-800 dark:text-stone-100'
+        : 'text-stone-500 hover:text-ink dark:text-stone-400 dark:hover:text-stone-100'
+    }`;
 </script>
 
 <div class="flex w-44 shrink-0 flex-col border-r border-stone-200 bg-paper dark:border-stone-800 dark:bg-night">
-  <div class="flex gap-1 border-b border-stone-200 p-1.5 dark:border-stone-800">
-    <button
-      type="button"
-      aria-pressed={tab === 'thumbs'}
-      onclick={() => (reader.panel[documentId] = 'thumbs')}
-      class={`flex-1 rounded-md px-2 py-1 text-xs ${
-        tab === 'thumbs'
-          ? 'bg-parchment text-ink dark:bg-stone-800 dark:text-stone-100'
-          : 'text-stone-500 hover:text-ink dark:text-stone-400 dark:hover:text-stone-100'
-      }`}
-    >
-      Pages
-    </button>
-    <button
-      type="button"
-      aria-pressed={tab === 'outline'}
-      onclick={() => (reader.panel[documentId] = 'outline')}
-      class={`flex-1 rounded-md px-2 py-1 text-xs ${
-        tab === 'outline'
-          ? 'bg-parchment text-ink dark:bg-stone-800 dark:text-stone-100'
-          : 'text-stone-500 hover:text-ink dark:text-stone-400 dark:hover:text-stone-100'
-      }`}
-    >
-      Outline
-    </button>
+  <div class="border-b border-stone-200 p-1.5 dark:border-stone-800">
+    <div class="flex gap-0.5 rounded-lg bg-stone-100 p-0.5 dark:bg-stone-900">
+      <button
+        type="button"
+        aria-label="Thumbnails"
+        aria-pressed={tab === 'thumbs'}
+        class={seg(tab === 'thumbs')}
+        onclick={() => setPanelView(documentId, 'thumbs')}
+      >
+        <LayoutGrid size={14} />
+      </button>
+      <button
+        type="button"
+        aria-label="Outline"
+        aria-pressed={tab === 'outline'}
+        class={seg(tab === 'outline')}
+        onclick={() => setPanelView(documentId, 'outline')}
+      >
+        <List size={14} />
+      </button>
+    </div>
   </div>
   {#if tab === 'thumbs'}
     <ThumbnailsPane {documentId} class="min-h-0 flex-1">
