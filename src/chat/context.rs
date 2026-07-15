@@ -55,6 +55,7 @@ mod tests {
             cite_key: Some("smith2024".into()),
             added_at: "2026-01-01".into(),
             deleted_at: None,
+            starred: false,
             meta: PaperMeta {
                 title: Some("A Great Paper".into()),
                 abstract_text: Some("We do things.".into()),

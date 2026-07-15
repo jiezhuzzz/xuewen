@@ -112,6 +112,7 @@ mod tests {
             cite_key: None,
             added_at: added_at.into(),
             deleted_at: None,
+            starred: false,
             meta: crate::models::PaperMeta {
                 title: Some("T".into()),
                 abstract_text: None,

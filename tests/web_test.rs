@@ -30,6 +30,7 @@ fn paper(id: &str, title: &str, status: PaperStatus) -> Paper {
         cite_key: Some(id.into()),
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
+        starred: false,
         meta: PaperMeta {
             title: Some(title.into()),
             abstract_text: Some("An abstract.".into()),
@@ -1020,7 +1021,7 @@ async fn patch_project_merge_rules() {
     // Seed two projects: one to edit, one to collide names with.
     let a: serde_json::Value = server
         .post("/api/projects")
-        .json(&serde_json::json!({"name": "Survey", "note": "draft"}))
+        .json(&serde_json::json!({"name": "Survey"}))
         .await
         .json();
     let a_id = a["id"].as_str().unwrap().to_string();
@@ -1030,26 +1031,13 @@ async fn patch_project_merge_rules() {
         .await
         .assert_status(axum::http::StatusCode::CREATED);
 
-    // (a) Rename → 200, name changed, note preserved (note omitted).
+    // (a) Rename → 200, name changed.
     let resp = server
         .patch(&format!("/api/projects/{a_id}"))
         .json(&serde_json::json!({"name": "Survey v2"}))
         .await;
     resp.assert_status_ok();
     let body: serde_json::Value = resp.json();
-    assert_eq!(body["name"], "Survey v2");
-    // (c) Omitting note preserves the existing note.
-    assert_eq!(body["note"], "draft");
-
-    // (b) {"note":""} clears the note to null.
-    let resp = server
-        .patch(&format!("/api/projects/{a_id}"))
-        .json(&serde_json::json!({"note": ""}))
-        .await;
-    resp.assert_status_ok();
-    let body: serde_json::Value = resp.json();
-    assert_eq!(body["note"], serde_json::Value::Null);
-    // Name unchanged when name omitted.
     assert_eq!(body["name"], "Survey v2");
 
     // (d) Rename onto another project's name → 409.

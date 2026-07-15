@@ -571,7 +571,11 @@ pub async fn update_project(
                 Some(t)
             }
         }
-        None => existing.note.as_deref(),
+        // `note` no longer exists on `Project` (Task 4 dropped the column); this
+        // whole merge-fallback becomes dead once Task 9 removes the `_note`
+        // param and its callers. `None` here is inert either way since
+        // `db::update_project` ignores its `_note` argument.
+        None => None,
     };
     match db::update_project(&app.pool, &id, name, note).await {
         Ok(_) => match db::get_project(&app.pool, &id).await {

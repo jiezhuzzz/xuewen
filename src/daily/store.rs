@@ -334,6 +334,7 @@ mod tests {
             cite_key: None,
             added_at: "2026-07-01T00:00:00Z".into(),
             deleted_at: None,
+            starred: false,
             meta: crate::models::PaperMeta {
                 title: Some("T".into()),
                 abstract_text: None,
@@ -372,6 +373,7 @@ mod tests {
             cite_key: None,
             added_at: "2026-07-01T00:00:00Z".into(),
             deleted_at: None,
+            starred: false,
             meta: crate::models::PaperMeta {
                 title: Some("T".into()),
                 abstract_text: None,

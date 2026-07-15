@@ -430,6 +430,7 @@ async fn colliding_cite_key_gets_letter_suffix() {
         cite_key: Some("wang2019kgat".to_string()),
         added_at: "2026-07-07T00:00:00Z".to_string(),
         deleted_at: None,
+        starred: false,
         meta: PaperMeta {
             title: Some("Seed".to_string()),
             abstract_text: None,

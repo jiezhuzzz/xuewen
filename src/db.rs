@@ -224,6 +224,19 @@ pub async fn delete_row(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Set (or clear) a paper's starred flag. Returns true if a row was updated.
+pub async fn set_paper_starred(pool: &SqlitePool, paper_id: &str, starred: bool) -> Result<bool> {
+    Ok(
+        sqlx::query("UPDATE papers SET starred = ? WHERE id = ?")
+            .bind(starred as i64)
+            .bind(paper_id)
+            .execute(pool)
+            .await?
+            .rows_affected()
+            > 0,
+    )
+}
+
 /// Find a paper by exact id, else by unique id prefix (active or trashed).
 pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
     if let Some(p) = get_by_id(pool, id).await? {
@@ -237,17 +250,19 @@ pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
     }
 }
 
-pub async fn create_project(pool: &SqlitePool, name: &str, note: Option<&str>) -> Result<Project> {
+pub async fn create_project(
+    pool: &SqlitePool,
+    name: &str,
+    _note: Option<&str>,
+) -> Result<Project> {
     let project = Project {
         id: uuid::Uuid::now_v7().to_string(),
         name: name.to_string(),
-        note: note.map(str::to_string),
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    sqlx::query("INSERT INTO projects (id, name, note, created_at) VALUES (?,?,?,?)")
+    sqlx::query("INSERT INTO projects (id, name, created_at) VALUES (?,?,?)")
         .bind(&project.id)
         .bind(&project.name)
-        .bind(&project.note)
         .bind(&project.created_at)
         .execute(pool)
         .await?;
@@ -259,7 +274,7 @@ pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<ProjectSummary>> {
     // FK cascade on purge), but the `?project=` filter runs under
     // `deleted_at IS NULL`, so the count must match what filtering shows.
     let rows = sqlx::query_as::<_, ProjectSummary>(
-        "SELECT p.id, p.name, p.note, p.created_at, \
+        "SELECT p.id, p.name, p.created_at, \
          COUNT(pa.id) AS paper_count \
          FROM projects p \
          LEFT JOIN paper_projects pp ON pp.project_id = p.id \
@@ -283,11 +298,10 @@ pub async fn update_project(
     pool: &SqlitePool,
     id: &str,
     name: &str,
-    note: Option<&str>,
+    _note: Option<&str>,
 ) -> Result<bool> {
-    let res = sqlx::query("UPDATE projects SET name = ?, note = ? WHERE id = ?")
+    let res = sqlx::query("UPDATE projects SET name = ? WHERE id = ?")
         .bind(name)
-        .bind(note)
         .bind(id)
         .execute(pool)
         .await?;
@@ -619,6 +633,7 @@ mod tests {
             cite_key: None,
             added_at: "2026-07-06T00:00:00Z".to_string(),
             deleted_at: None,
+            starred: false,
             meta: PaperMeta {
                 title: Some("A Title".into()),
                 abstract_text: None,
@@ -1072,7 +1087,6 @@ mod tests {
 
         let p = create_project(&pool, "Survey", Some("draft")).await.unwrap();
         assert_eq!(p.name, "Survey");
-        assert_eq!(p.note.as_deref(), Some("draft"));
 
         // Case-insensitive unique name.
         let dup = create_project(&pool, "survey", None).await;
@@ -1089,7 +1103,6 @@ mod tests {
         assert!(update_project(&pool, &p.id, "Survey v2", Some("final")).await.unwrap());
         let got = get_project(&pool, &p.id).await.unwrap().unwrap();
         assert_eq!(got.name, "Survey v2");
-        assert_eq!(got.note.as_deref(), Some("final"));
 
         // Delete.
         assert!(delete_project(&pool, &p.id).await.unwrap());
@@ -1187,6 +1200,26 @@ mod tests {
         assert_eq!(find_one_project(&pool, &p.id[..8]).await.unwrap().id, p.id);
         // Miss.
         assert!(find_one_project(&pool, "nope").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn star_toggles() {
+        let (_dir, pool) = temp_pool().await;
+        let pid = insert_test_paper(&pool).await;
+        assert!(set_paper_starred(&pool, &pid, true).await.unwrap());
+        let n: i64 = sqlx::query_scalar("SELECT starred FROM papers WHERE id = ?")
+            .bind(&pid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        set_paper_starred(&pool, &pid, false).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT starred FROM papers WHERE id = ?")
+            .bind(&pid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[tokio::test]
