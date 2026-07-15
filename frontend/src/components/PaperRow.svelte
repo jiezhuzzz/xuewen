@@ -50,31 +50,33 @@
   tabindex="0"
   onclick={open}
   onkeydown={onKeydown}
-  class={`w-full cursor-pointer border-l-2 px-4 py-3 text-left transition-colors hover:bg-parchment dark:hover:bg-stone-800/50 ${
+  class={`group relative w-full cursor-pointer border-l-2 px-4 py-3 text-left transition-colors hover:bg-parchment dark:hover:bg-stone-800/50 ${
     selected ? 'border-amber-700 bg-parchment dark:border-amber-500 dark:bg-stone-800/50' : 'border-transparent'
   }`}
 >
-  <div class="flex items-start gap-1.5">
-    <button
-      type="button"
-      aria-label={paper.starred ? 'Unstar paper' : 'Star paper'}
-      aria-pressed={paper.starred}
-      onclick={onStarClick}
-      class={`mt-0.5 shrink-0 text-xs leading-none ${
-        paper.starred
-          ? 'text-orange-600 dark:text-orange-400'
-          : 'text-stone-300 hover:text-stone-400 dark:text-stone-600 dark:hover:text-stone-500'
-      }`}
-    >★</button>
-    <div class="line-clamp-2 font-serif text-sm font-medium text-ink dark:text-stone-100">
-      {paper.title ?? '(untitled)'}
-      {#if isOpen}
-        <span
-          title="Open in a tab"
-          class="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-700 align-middle dark:bg-amber-500"
-        ></span>
-      {/if}
-    </div>
+  <!-- Star pinned to the row's top-right corner so it never indents the title.
+       Starred papers show it filled; unstarred rows keep it in the DOM (the
+       star button is how you star from the list) but hidden until row-hover or
+       keyboard focus — no resting empty star cluttering every row. -->
+  <button
+    type="button"
+    aria-label={paper.starred ? 'Unstar paper' : 'Star paper'}
+    aria-pressed={paper.starred}
+    onclick={onStarClick}
+    class={`absolute right-3 top-3 shrink-0 text-xs leading-none transition-opacity ${
+      paper.starred
+        ? 'text-orange-600 dark:text-orange-400'
+        : 'text-stone-300 opacity-0 hover:text-stone-400 focus-visible:opacity-100 group-hover:opacity-100 dark:text-stone-600 dark:hover:text-stone-500'
+    }`}
+  >★</button>
+  <div class="line-clamp-2 pr-5 font-serif text-sm font-medium text-ink dark:text-stone-100">
+    {paper.title ?? '(untitled)'}
+    {#if isOpen}
+      <span
+        title="Open in a tab"
+        class="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-700 align-middle dark:bg-amber-500"
+      ></span>
+    {/if}
   </div>
   {#if authors}
     <div class="mt-0.5 line-clamp-1 text-xs text-stone-500 dark:text-stone-400">{authors}</div>
