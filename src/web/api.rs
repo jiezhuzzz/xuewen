@@ -9,8 +9,8 @@ use tower_http::services::ServeFile;
 use uuid::Uuid;
 
 use super::dto::{
-    Candidate, DailyPaperDto, DailyResponse, PaperDetail, PaperSummary, SearchMatch,
-    SearchResponse, SearchResult, SearchStatus, SemanticAvailability, Stats, TierCounts,
+    Candidate, DailyPaperDto, DailyResponse, PaperDetail, PaperSummary, ProjectRef, SearchMatch,
+    SearchResponse, SearchResult, SearchStatus, SemanticAvailability, Stats, TagRef, TierCounts,
 };
 use super::AppState;
 use crate::db;
@@ -28,6 +28,56 @@ pub struct ListParams {
     pub project: Option<String>,
 }
 
+/// Fill each row's `tags`/`projects` from its memberships. A per-paper loop is
+/// acceptable at library scale (no need for a batched IN query).
+async fn attach_row_extras(
+    pool: &sqlx::SqlitePool,
+    rows: &mut [PaperSummary],
+) -> anyhow::Result<()> {
+    for r in rows.iter_mut() {
+        r.tags = db::tags_for_paper(pool, &r.id)
+            .await?
+            .into_iter()
+            .map(|t| TagRef {
+                id: t.id,
+                name: t.name,
+            })
+            .collect();
+        r.projects = db::projects_for_paper(pool, &r.id)
+            .await?
+            .into_iter()
+            .map(|p| ProjectRef {
+                id: p.id,
+                name: p.name,
+            })
+            .collect();
+    }
+    Ok(())
+}
+
+/// A single paper's tag and project memberships, as wire refs.
+async fn paper_extras(pool: &sqlx::SqlitePool, paper_id: &str) -> (Vec<TagRef>, Vec<ProjectRef>) {
+    let tags = db::tags_for_paper(pool, paper_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| TagRef {
+            id: t.id,
+            name: t.name,
+        })
+        .collect();
+    let projects = db::projects_for_paper(pool, paper_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| ProjectRef {
+            id: p.id,
+            name: p.name,
+        })
+        .collect();
+    (tags, projects)
+}
+
 pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams>) -> Response {
     match db::list_papers(
         &app.pool,
@@ -39,7 +89,11 @@ pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams
     .await
     {
         Ok(papers) => {
-            let out: Vec<PaperSummary> = papers.iter().map(PaperSummary::from).collect();
+            let mut out: Vec<PaperSummary> = papers.iter().map(PaperSummary::from).collect();
+            if let Err(e) = attach_row_extras(&app.pool, &mut out).await {
+                tracing::error!("list_papers row extras: {e}");
+                return internal_error();
+            }
             Json(out).into_response()
         }
         Err(e) => {
@@ -52,10 +106,8 @@ pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams
 pub async fn get_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
     match db::get_by_id(&app.pool, &id).await {
         Ok(Some(p)) => {
-            let ids = db::project_ids_for_paper(&app.pool, &p.id)
-                .await
-                .unwrap_or_default();
-            let mut detail = PaperDetail::with_project_ids(&p, ids);
+            let (tags, projects) = paper_extras(&app.pool, &p.id).await;
+            let mut detail = PaperDetail::from(&p).attach(tags, projects);
             detail.ai_summary = match crate::summary::store::get(&app.pool, &p.id).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -337,10 +389,8 @@ pub async fn identify_paper(
     match ingest.ctx.apply_match(&mut paper, md).await {
         Ok(IdentifyOutcome::Applied) => {
             app.wake_search();
-            let ids = db::project_ids_for_paper(&ingest.ctx.pool, &paper.id)
-                .await
-                .unwrap_or_default();
-            Json(PaperDetail::with_project_ids(&paper, ids)).into_response()
+            let (tags, projects) = paper_extras(&ingest.ctx.pool, &paper.id).await;
+            Json(PaperDetail::from(&paper).attach(tags, projects)).into_response()
         }
         Ok(IdentifyOutcome::SameWork(other)) => (
             StatusCode::CONFLICT,
