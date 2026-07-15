@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, type Component } from 'svelte';
   import { Spring } from 'svelte/motion';
   import { fly, slide } from 'svelte/transition';
   import ChatPanel from './components/ChatPanel.svelte';
@@ -9,7 +9,6 @@
   import InfoPanel from './components/InfoPanel.svelte';
   import LibraryPane from './components/LibraryPane.svelte';
   import PaperContextMenu from './components/PaperContextMenu.svelte';
-  import PdfViewer from './components/PdfViewer.svelte';
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
@@ -60,6 +59,19 @@
   $effect(() => {
     if (chat.open && viewer.activeId) void loadThread(viewer.activeId);
   });
+
+  // The PDF reader pulls in the entire @embedpdf/PDFium subtree — by far the
+  // heaviest part of the bundle. Load it lazily (its own chunk) the first time
+  // a paper is opened, so the library/search view no longer pays for it up
+  // front. Once loaded it stays resolved for the session.
+  let PdfViewer = $state<Component | null>(null);
+  $effect(() => {
+    if (viewer.activeId !== null && !PdfViewer) {
+      void import('./components/PdfViewer.svelte').then((m) => {
+        PdfViewer = m.default;
+      });
+    }
+  });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -99,7 +111,13 @@
              active, so returning to an open paper doesn't rebuild the subtree.
              (The viewer itself remounts per paper, so scroll isn't preserved.) -->
         <div class={`relative min-h-0 min-w-0 flex-1 ${viewer.activeId === null ? 'hidden' : 'flex'}`}>
-          <PdfViewer />
+          {#if PdfViewer}
+            <PdfViewer />
+          {:else if viewer.activeId !== null}
+            <div class="flex flex-1 items-center justify-center text-sm text-stone-400 dark:text-stone-500">
+              Loading reader…
+            </div>
+          {/if}
           {#if viewer.infoOpen && viewer.activeId}
             <!-- Non-interactive recede veil: the PDF stays scrollable underneath. -->
             <div class="pointer-events-none absolute inset-0 z-10 bg-ink/5 dark:bg-black/25" aria-hidden="true"></div>
