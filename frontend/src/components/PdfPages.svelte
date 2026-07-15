@@ -3,6 +3,7 @@
   import { useRegistry, useDocumentState } from '@embedpdf/core/svelte';
   import { Viewport } from '@embedpdf/plugin-viewport/svelte';
   import { Scroller, type PageLayout } from '@embedpdf/plugin-scroll/svelte';
+  import { ZoomGestureWrapper } from '@embedpdf/plugin-zoom/svelte';
   import { DocumentContent } from '@embedpdf/plugin-document-manager/svelte';
   import { RenderLayer } from '@embedpdf/plugin-render/svelte';
   import { SelectionLayer } from '@embedpdf/plugin-selection/svelte';
@@ -145,7 +146,9 @@
             <PdfFindBar {documentId} />
           {/if}
           <Viewport {documentId} class="h-full w-full">
-            <Scroller {documentId} {renderPage} />
+            <ZoomGestureWrapper {documentId} class="h-full w-full">
+              <Scroller {documentId} {renderPage} />
+            </ZoomGestureWrapper>
           </Viewport>
         </div>
       </div>
