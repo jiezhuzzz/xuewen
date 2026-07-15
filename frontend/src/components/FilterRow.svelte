@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bookmark, Ellipsis, Star } from 'lucide-svelte';
+  import { Bookmark, ChevronRight, Ellipsis, Star } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import ConfirmButtons from './ConfirmButtons.svelte';
   import {
@@ -31,7 +31,18 @@
   const selectClasses =
     'min-w-0 flex-1 rounded-lg border border-stone-200 bg-parchment px-2 py-1.5 text-xs dark:border-stone-700 dark:bg-stone-800';
 
-  const zoneLabelClasses = 'mb-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400';
+  const zoneLabelClasses =
+    'flex w-full items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400 hover:text-stone-500 dark:hover:text-stone-300';
+
+  // Projects and Star & tags start folded — the pill bars can grow long, so
+  // the sidebar opens compact and the user expands what they need. A small
+  // count badge on the collapsed header keeps active filters from hiding.
+  let projectsOpen = $state(false);
+  let starTagsOpen = $state(false);
+  const projectFilterCount = $derived(filters.project !== 'all' ? 1 : 0);
+  const starTagsFilterCount = $derived(
+    (filters.starred === true ? 1 : 0) + (filters.tag ? 1 : 0),
+  );
 
   // Nothing else populates the tags store at startup (unlike `projects`,
   // which App.svelte loads on mount) — it's otherwise only refreshed as a
@@ -319,8 +330,22 @@
 </div>
 
 <div class="mt-2">
-  <p class={zoneLabelClasses}>Projects</p>
-  <div class="flex flex-wrap items-center gap-1.5">
+  <button
+    type="button"
+    aria-expanded={projectsOpen}
+    onclick={() => (projectsOpen = !projectsOpen)}
+    class={zoneLabelClasses}
+  >
+    <ChevronRight size={11} class={`transition-transform ${projectsOpen ? 'rotate-90' : ''}`} />
+    <span>Projects</span>
+    {#if !projectsOpen && projectFilterCount > 0}
+      <span class="rounded-full bg-indigo-600/15 px-1.5 text-[9px] tabular-nums text-indigo-700 dark:text-indigo-300">
+        {projectFilterCount}
+      </span>
+    {/if}
+  </button>
+  {#if projectsOpen}
+  <div class="mt-1 flex flex-wrap items-center gap-1.5">
     {#each projects.items as p (p.id)}
       <!-- svelte-ignore a11y_no_static_element_interactions -- the keydown
            only handles Escape (see onPillWrapKeydown); every interactive
@@ -376,11 +401,26 @@
       </button>
     {/if}
   </div>
+  {/if}
 </div>
 
 <div class="mt-2">
-  <p class={zoneLabelClasses}>Star &amp; tags</p>
-  <div class="flex flex-wrap items-center gap-1.5">
+  <button
+    type="button"
+    aria-expanded={starTagsOpen}
+    onclick={() => (starTagsOpen = !starTagsOpen)}
+    class={zoneLabelClasses}
+  >
+    <ChevronRight size={11} class={`transition-transform ${starTagsOpen ? 'rotate-90' : ''}`} />
+    <span>Star &amp; tags</span>
+    {#if !starTagsOpen && starTagsFilterCount > 0}
+      <span class="rounded-full bg-amber-700/15 px-1.5 text-[9px] tabular-nums text-amber-800 dark:text-amber-400">
+        {starTagsFilterCount}
+      </span>
+    {/if}
+  </button>
+  {#if starTagsOpen}
+  <div class="mt-1 flex flex-wrap items-center gap-1.5">
     <button
       type="button"
       aria-pressed={filters.starred === true}
@@ -424,4 +464,5 @@
       </div>
     {/each}
   </div>
+  {/if}
 </div>
