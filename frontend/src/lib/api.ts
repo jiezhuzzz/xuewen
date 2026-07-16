@@ -101,7 +101,7 @@ export async function translateText(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ text, provider: opts?.provider, target_lang: opts?.targetLang }),
   });
-  if (!res.ok) throw new Error(`translate failed: ${res.status}`);
+  if (!res.ok) throw await errorFromResponse(res, 'translate failed');
   return res.json();
 }
 

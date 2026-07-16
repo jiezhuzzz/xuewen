@@ -43,6 +43,23 @@ export function setTranslateMode(m: 'auto' | 'manual'): void {
   }
 }
 
+/// Reconciles `translateMode` against the server's `[translate].trigger`
+/// default once settings have loaded. `initialMode()` runs at module
+/// evaluation time — before the async `loadSettings()` populates
+/// `appSettings.translate.trigger` — so a first-time user (no stored
+/// localStorage pref) always got the hardcoded 'auto' fallback. Call this
+/// after `loadSettings()` resolves to apply the server default; a user who
+/// has ever explicitly chosen a mode (stored in localStorage) keeps it.
+export function syncTranslateModeFromSettings(): void {
+  try {
+    if (localStorage.getItem(STORAGE_KEY) !== null) return; // explicit stored pref — keep it
+  } catch {
+    /* no localStorage */
+  }
+  const t = appSettings.translate.trigger;
+  if (t === 'auto' || t === 'manual') translateMode.value = t;
+}
+
 // Guards against a slower, superseded request clobbering a newer one's
 // result once both resolve out of order.
 let seq = 0;
@@ -79,4 +96,7 @@ export function closeTranslate(): void {
   translateBox.source = '';
   translateBox.error = null;
   translateBox.loading = false;
+  translateBox.x = 0;
+  translateBox.y = 0;
+  translateBox.provider = null;
 }

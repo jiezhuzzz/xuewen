@@ -32,4 +32,51 @@ describe('requestTranslate', () => {
     expect(translateBox.error).not.toBeNull();
     expect(translateBox.loading).toBe(false);
   });
+
+  it('does not let a superseded (out-of-order) response clobber a newer request', async () => {
+    // deferred promises so we control exactly when each fetch resolves, and
+    // resolve them out of order: the SECOND request ('b') finishes first,
+    // then the first request ('a') resolves late and must be ignored.
+    function deferred<T>() {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    const calls: Array<{ promise: Promise<Response> }> = [first, second];
+    let callIndex = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => calls[callIndex++].promise),
+    );
+
+    const pA = requestTranslate('a', { x: 0, y: 0 });
+    const pB = requestTranslate('b', { x: 0, y: 0 });
+
+    // 'b' (the newer request) resolves first...
+    second.resolve(
+      new Response(
+        JSON.stringify({ translation: 'B translated', provider: 'llm', source_lang: 'EN', target_lang: 'zh' }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    await pB;
+
+    // ...then the stale 'a' request resolves late and must be ignored.
+    first.resolve(
+      new Response(
+        JSON.stringify({ translation: 'A translated', provider: 'llm', source_lang: 'EN', target_lang: 'zh' }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    await pA;
+
+    expect(translateBox.source).toBe('b');
+    expect(translateBox.translation).toBe('B translated');
+    expect(translateBox.loading).toBe(false);
+    expect(translateBox.error).toBeNull();
+  });
 });
