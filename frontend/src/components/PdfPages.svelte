@@ -147,19 +147,26 @@
   // event carries no text — getSelectedText() is fetched separately per the
   // plugin's PdfTask API (same .toPromise() pattern as loadCitations.ts).
   // Anchored at the last pointer-up (see onpointerup below), not page-space
-  // math, per the brief's simpler/more robust approach.
+  // math, per the brief's simpler/more robust approach. useSelectionCapability()
+  // is a registry-wide SINGLETON, not per-document — every open tab keeps its
+  // own (hidden) PdfPages mounted and running this effect, so every tab's
+  // listener fires on ANY tab's selection. Guard on documentId (both the
+  // event and the getSelectedText call) so only the tab that owns the
+  // selection reacts. The anchor coords are captured synchronously, before
+  // the await, so a pointer event during the await can't move them.
   $effect(() => {
     const cap = selectionCap.provides;
     if (!cap || !appSettings.translate.enabled) return;
-    const unsub = cap.onEndSelection(() => {
+    const unsub = cap.onEndSelection((ev) => {
+      if (ev.documentId !== documentId) return;
+      const at = lastPointer ?? { x: window.innerWidth / 2, y: 200 };
       void (async () => {
-        const parts = await cap.getSelectedText().toPromise();
+        const parts = await cap.getSelectedText(documentId).toPromise();
         const text = (parts ?? []).join(' ').trim();
         if (!text) {
           bubble = null;
           return;
         }
-        const at = lastPointer ?? { x: window.innerWidth / 2, y: 200 };
         if (translateMode.value === 'auto') {
           bubble = null;
           void requestTranslate(text, at);
@@ -168,7 +175,10 @@
         }
       })();
     });
-    return () => unsub?.();
+    return () => {
+      unsub?.();
+      bubble = null;
+    };
   });
 </script>
 
