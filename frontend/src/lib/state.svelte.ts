@@ -39,6 +39,7 @@ import type {
   SearchOpts,
   Stats,
   TagSummary,
+  TranslateSettings,
 } from './types';
 
 export const filters = $state<Filters>({
@@ -152,12 +153,16 @@ export const library = $state<{
 export const stats = $state<{ value: Stats | null }>({ value: null });
 
 /// UI preferences from the server (`/api/settings`). Loaded once at startup.
-export const appSettings = $state<{ foldAbstract: boolean }>({ foldAbstract: true });
+export const appSettings = $state<{ foldAbstract: boolean; translate: TranslateSettings }>({
+  foldAbstract: true,
+  translate: { enabled: false },
+});
 
 export async function loadSettings(): Promise<void> {
   try {
     const s = await getSettings();
     appSettings.foldAbstract = s.fold_abstract;
+    appSettings.translate = s.translate ?? { enabled: false };
   } catch (e) {
     console.error(e); // keep the default on failure
   }
