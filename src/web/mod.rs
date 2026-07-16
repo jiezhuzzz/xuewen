@@ -44,6 +44,9 @@ pub struct AppState {
     /// Always present: heuristic parsing needs no config; [ai.citations]
     /// adds the LLM fallback for entries heuristics can't parse.
     pub citations: Arc<crate::citations::CitationsService>,
+    /// Present when translate-on-selection is configured (`serve`). `None`
+    /// -> /api/translate answers 503, /api/settings reports disabled.
+    pub translate: Option<Arc<crate::translate::TranslateService>>,
     /// UI-facing preferences (e.g. abstract folding). Defaulted in
     /// read-only/test routers; set from config in `serve`.
     pub ui: crate::config::UiConfig,
@@ -64,6 +67,7 @@ impl AppState {
             daily: None,
             chat: None,
             citations,
+            translate: None,
             ui: crate::config::UiConfig::default(),
         }
     }
@@ -149,6 +153,17 @@ pub fn build_router_with_citations(
     router_with(state)
 }
 
+/// Read-only router plus a configured translate service. Used by tests.
+pub fn build_router_with_translate(
+    pool: SqlitePool,
+    library_root: PathBuf,
+    translate: Arc<crate::translate::TranslateService>,
+) -> Router {
+    let mut state = AppState::base(pool, library_root);
+    state.translate = Some(translate);
+    router_with(state)
+}
+
 fn router_with(state: AppState) -> Router {
     Router::new()
         .route(
@@ -218,6 +233,7 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{id}/citations",
             axum::routing::post(api::parse_citations),
         )
+        .route("/api/translate", axum::routing::post(api::translate))
         .fallback(assets::static_handler)
         .with_state(state)
 }
@@ -234,6 +250,7 @@ pub async fn serve(
     daily: Option<Arc<crate::daily::DailyService>>,
     chat: Option<Arc<crate::chat::ChatService>>,
     citations: Arc<crate::citations::CitationsService>,
+    translate: Option<Arc<crate::translate::TranslateService>>,
     ui: crate::config::UiConfig,
 ) -> Result<()> {
     let app = router_with(AppState {
@@ -245,6 +262,7 @@ pub async fn serve(
         daily,
         chat,
         citations,
+        translate,
         ui,
     });
     let addr = format!("{host}:{port}");

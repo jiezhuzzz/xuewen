@@ -509,12 +509,82 @@ pub async fn get_settings(State(app): State<AppState>) -> Response {
         .await
         .ok()
         .flatten();
+    let translate = match app.translate.as_ref() {
+        None => serde_json::json!({ "enabled": false }),
+        Some(svc) => serde_json::json!({
+            "enabled": true,
+            "providers": svc.providers().iter().map(|p| provider_name(*p)).collect::<Vec<_>>(),
+            "default_provider": provider_name(svc.default_provider()),
+            "target_lang": svc.target_lang(),
+            "trigger": match svc.trigger() {
+                crate::config::TranslateTrigger::Auto => "auto",
+                crate::config::TranslateTrigger::Manual => "manual",
+            },
+        }),
+    };
     Json(serde_json::json!({
         "proxy_cookie_set": set,
         "proxy_cookie_updated_at": updated,
         "fold_abstract": app.ui.fold_abstract,
+        "translate": translate,
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct TranslateBody {
+    pub text: String,
+    #[serde(default)]
+    pub target_lang: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
+/// Translate arbitrary text via the configured provider. 503 when
+/// translate-on-selection isn't configured; 400 on empty text or an unknown
+/// provider name; 502 when the upstream provider call fails.
+pub async fn translate(State(app): State<AppState>, Json(body): Json<TranslateBody>) -> Response {
+    let Some(svc) = app.translate.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "translate is not configured"})),
+        )
+            .into_response();
+    };
+    let text = body.text.trim();
+    if text.is_empty() {
+        return bad_request("empty text");
+    }
+    let provider = match body.provider.as_deref() {
+        None => None,
+        Some("llm") => Some(crate::config::TranslateProvider::Llm),
+        Some("deepl") => Some(crate::config::TranslateProvider::Deepl),
+        Some(other) => return bad_request(&format!("unknown provider `{other}`")),
+    };
+    match svc
+        .translate(text, body.target_lang.as_deref(), provider)
+        .await
+    {
+        Ok(t) => Json(serde_json::json!({
+            "translation": t.text,
+            "provider": provider_name(t.provider),
+            "source_lang": t.source_lang,
+            "target_lang": t.target_lang,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("translation failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+fn provider_name(p: crate::config::TranslateProvider) -> &'static str {
+    match p {
+        crate::config::TranslateProvider::Llm => "llm",
+        crate::config::TranslateProvider::Deepl => "deepl",
+    }
 }
 
 /// Store (overwrite) the EZproxy cookie.
