@@ -7,6 +7,8 @@
   const providers = $derived(appSettings.translate.providers ?? []);
   const showSwitch = $derived(providers.length > 1);
   const targetLabel = $derived(appSettings.translate.target_lang ?? 'zh');
+  const sourceLabel = $derived(translateBox.sourceLang ? translateBox.sourceLang.toUpperCase() : null);
+  const directionLabel = $derived(sourceLabel ? `${sourceLabel} → ${targetLabel}` : `→ ${targetLabel}`);
 
   // Clamp to the viewport (same idea as CitationPopover).
   const MARGIN = 8;
@@ -59,7 +61,7 @@
   >
     <div class="flex items-center gap-2 border-b border-stone-200 px-3 py-2 dark:border-stone-800">
       <span class="font-serif text-amber-700 dark:text-amber-500">譯</span>
-      <span class="text-xs text-stone-500 dark:text-stone-400">→ {targetLabel}</span>
+      <span class="text-xs text-stone-500 dark:text-stone-400">{directionLabel}</span>
       <span class="flex-1"></span>
       {#if showSwitch}
         <span class="inline-flex overflow-hidden rounded-lg border border-stone-300 text-[11px] dark:border-stone-600">

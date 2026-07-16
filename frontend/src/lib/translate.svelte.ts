@@ -13,10 +13,21 @@ export const translateBox = $state<{
   y: number;
   source: string;
   translation: string;
+  sourceLang: string | null;
   provider: Provider | null;
   loading: boolean;
   error: string | null;
-}>({ open: false, x: 0, y: 0, source: '', translation: '', provider: null, loading: false, error: null });
+}>({
+  open: false,
+  x: 0,
+  y: 0,
+  source: '',
+  translation: '',
+  sourceLang: null,
+  provider: null,
+  loading: false,
+  error: null,
+});
 
 const STORAGE_KEY = 'xuewen.translateMode';
 
@@ -71,6 +82,7 @@ export async function requestTranslate(text: string, at: { x: number; y: number 
   translateBox.y = at.y;
   translateBox.source = text;
   translateBox.translation = '';
+  translateBox.sourceLang = null;
   translateBox.provider = provider ?? appSettings.translate.default_provider ?? null;
   translateBox.loading = true;
   translateBox.error = null;
@@ -81,6 +93,7 @@ export async function requestTranslate(text: string, at: { x: number; y: number 
     });
     if (my !== seq) return; // superseded by a newer request
     translateBox.translation = r.translation;
+    translateBox.sourceLang = r.source_lang;
     translateBox.provider = (r.provider as Provider) ?? translateBox.provider;
   } catch (e) {
     if (my === seq) translateBox.error = (e as Error).message;
@@ -94,6 +107,7 @@ export function closeTranslate(): void {
   translateBox.open = false;
   translateBox.translation = '';
   translateBox.source = '';
+  translateBox.sourceLang = null;
   translateBox.error = null;
   translateBox.loading = false;
   translateBox.x = 0;

@@ -20,6 +20,7 @@ function openBox() {
   translateBox.open = true;
   translateBox.source = 'hello world';
   translateBox.translation = '你好世界';
+  translateBox.sourceLang = null;
   translateBox.provider = 'llm';
   translateBox.loading = false;
   translateBox.error = null;
@@ -54,5 +55,12 @@ describe('TranslatePopover', () => {
     closeTranslate();
     render(TranslatePopover);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('shows the detected source language in the direction chip', () => {
+    openBox();
+    translateBox.sourceLang = 'EN';
+    render(TranslatePopover);
+    expect(screen.getByText('EN → zh')).toBeInTheDocument();
   });
 });
