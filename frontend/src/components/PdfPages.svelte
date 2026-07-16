@@ -6,13 +6,14 @@
   import { ZoomGestureWrapper } from '@embedpdf/plugin-zoom/svelte';
   import { DocumentContent } from '@embedpdf/plugin-document-manager/svelte';
   import { RenderLayer } from '@embedpdf/plugin-render/svelte';
-  import { SelectionLayer } from '@embedpdf/plugin-selection/svelte';
+  import { SelectionLayer, useSelectionCapability } from '@embedpdf/plugin-selection/svelte';
   import { GlobalPointerProvider, PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
   import { TilingLayer } from '@embedpdf/plugin-tiling/svelte';
   import PdfToolbar from './PdfToolbar.svelte';
   import PdfQuickActions from './PdfQuickActions.svelte';
   import PdfFindBar from './PdfFindBar.svelte';
   import PdfSidePanel from './PdfSidePanel.svelte';
+  import TranslateBubble from './TranslateBubble.svelte';
   import { SearchLayer } from '@embedpdf/plugin-search/svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
@@ -25,6 +26,8 @@
   import { createPillHide } from '../lib/pillHide.svelte';
   import { Spring } from 'svelte/motion';
   import { prefersReducedMotion, SPRINGS } from '../lib/motion';
+  import { appSettings } from '../lib/state.svelte';
+  import { requestTranslate, translateMode } from '../lib/translate.svelte';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
 
@@ -35,6 +38,13 @@
 
   const ctx = useRegistry();
   const docState = useDocumentState(() => documentId);
+
+  // Selection → translate wiring (Task 7). `getSelectedText()` takes only an
+  // optional documentId — no doc/page object crosses into the engine call —
+  // so the $state.snapshot/DataCloneError gotcha above does not apply here.
+  const selectionCap = useSelectionCapability();
+  let lastPointer = $state<{ x: number; y: number } | null>(null);
+  let bubble = $state<{ x: number; y: number; text: string } | null>(null);
 
   // Shared zen auto-hide for the floating pills (see lib/pillHide.svelte.ts).
   const pill = createPillHide(() => documentId);
@@ -130,6 +140,36 @@
     extractionCancelled = true;
     cancelExtractionIdle?.();
   });
+
+  // Subscribe to selection-end while the translate feature is on. Auto mode
+  // fires requestTranslate immediately; Manual mode shows the bubble instead,
+  // which the user must click (see TranslateBubble.svelte). onEndSelection's
+  // event carries no text — getSelectedText() is fetched separately per the
+  // plugin's PdfTask API (same .toPromise() pattern as loadCitations.ts).
+  // Anchored at the last pointer-up (see onpointerup below), not page-space
+  // math, per the brief's simpler/more robust approach.
+  $effect(() => {
+    const cap = selectionCap.provides;
+    if (!cap || !appSettings.translate.enabled) return;
+    const unsub = cap.onEndSelection(() => {
+      void (async () => {
+        const parts = await cap.getSelectedText().toPromise();
+        const text = (parts ?? []).join(' ').trim();
+        if (!text) {
+          bubble = null;
+          return;
+        }
+        const at = lastPointer ?? { x: window.innerWidth / 2, y: 200 };
+        if (translateMode.value === 'auto') {
+          bubble = null;
+          void requestTranslate(text, at);
+        } else {
+          bubble = { x: at.x, y: at.y, text };
+        }
+      })();
+    });
+    return () => unsub?.();
+  });
 </script>
 
 {#snippet renderPage(page: PageLayout)}
@@ -165,7 +205,10 @@
 <DocumentContent {documentId}>
   {#snippet children(doc)}
     {#if doc.isLoaded}
-      <div class="flex h-full">
+      <!-- svelte-ignore a11y_no_static_element_interactions -- pointerup here only
+           records the last click position for anchoring the translate bubble;
+           it doesn't add interactive semantics to this layout div. -->
+      <div class="flex h-full" onpointerup={(e) => (lastPointer = { x: e.clientX, y: e.clientY })}>
         {#if reader.panel || panelW.current > 1}
           <!-- Kept mounted while the spring settles so closing slides the
                panel away instead of blanking it; inert once logically closed.
@@ -207,6 +250,17 @@
           </GlobalPointerProvider>
         </div>
       </div>
+      {#if bubble}
+        <TranslateBubble
+          x={bubble.x}
+          y={bubble.y}
+          onTranslate={() => {
+            const b = bubble;
+            bubble = null;
+            if (b) void requestTranslate(b.text, { x: b.x, y: b.y });
+          }}
+        />
+      {/if}
     {:else if doc.isError}
       <p class="p-4 text-sm text-red-600 dark:text-red-400">Failed to load document.</p>
     {:else}
