@@ -135,9 +135,11 @@ export async function copyText(text: string): Promise<void> {
   }
 }
 
-/// Fetch a paper's citation in the current format and copy it to the clipboard.
-export async function copyCitation(id: string): Promise<void> {
-  const text = await exportPaper(id, bibFormat.value);
+/// Fetch a paper's citation and copy it to the clipboard. Defaults to the
+/// current format setting; callers with a fixed-label button (e.g. the
+/// context menu's "Copy BibTeX") pass an explicit format instead.
+export async function copyCitation(id: string, format: BibFormat = bibFormat.value): Promise<void> {
+  const text = await exportPaper(id, format);
   await copyText(text);
 }
 

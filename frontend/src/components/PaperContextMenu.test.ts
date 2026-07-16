@@ -47,14 +47,14 @@ beforeEach(() => {
 describe('PaperContextMenu', () => {
   it('renders the three actions for the target paper', () => {
     render(PaperContextMenu);
-    expect(screen.getByRole('menuitem', { name: /copy citation/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /copy bibtex/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /identify/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /delete/i })).toBeInTheDocument();
   });
 
-  it('Copy citation copies to the clipboard, toasts, and closes the menu', async () => {
+  it('Copy BibTeX copies to the clipboard, toasts, and closes the menu', async () => {
     render(PaperContextMenu);
-    await userEvent.click(screen.getByRole('menuitem', { name: /copy citation/i }));
+    await userEvent.click(screen.getByRole('menuitem', { name: /copy bibtex/i }));
     await waitFor(() => {
       expect((navigator.clipboard.writeText as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
         '@article{v2017}',

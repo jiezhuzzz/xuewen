@@ -37,10 +37,10 @@
     closeContextMenu();
     if (!paper) return;
     try {
-      await copyCitation(paper.id);
-      toast('success', 'Citation copied');
+      await copyCitation(paper.id, 'bibtex');
+      toast('success', 'BibTeX copied');
     } catch {
-      toast('error', "Couldn't copy citation");
+      toast('error', "Couldn't copy BibTeX");
     }
   }
 
@@ -98,7 +98,7 @@
   >
     {#if mode === 'menu'}
       <button type="button" role="menuitem" onclick={() => void doCopy()} class={itemClasses}>
-        <Copy size={13} /> Copy citation
+        <Copy size={13} /> Copy BibTeX
       </button>
       <button type="button" role="menuitem" onclick={doIdentify} class={itemClasses}>
         <ScanSearch size={13} /> Identify…
