@@ -268,18 +268,6 @@ impl Default for TranslateConfig {
     }
 }
 
-impl TranslateConfig {
-    /// Whether an LLM translate provider is configured (`[ai.translate]` present).
-    pub fn llm_available(&self, ai: &AiConfig) -> bool {
-        ai.translate.is_some()
-    }
-
-    /// Whether a DeepL provider is configured (`[translate.deepl]` present).
-    pub fn deepl_available(&self) -> bool {
-        self.deepl.is_some()
-    }
-}
-
 fn default_target_lang() -> String {
     "zh".to_string()
 }
