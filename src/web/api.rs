@@ -572,11 +572,14 @@ pub async fn translate(State(app): State<AppState>, Json(body): Json<TranslateBo
             "target_lang": t.target_lang,
         }))
         .into_response(),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": format!("translation failed: {e}")})),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("translate: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "translation failed"})),
+            )
+                .into_response()
+        }
     }
 }
 
