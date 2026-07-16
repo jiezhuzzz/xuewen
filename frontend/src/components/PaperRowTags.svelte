@@ -17,10 +17,13 @@
   // A tag chip is visible when expanded, within the first CAP, or (even
   // beyond the cap) it matches the active tag filter — mirrors the approved
   // mock's layoutChips(): `show = expanded || i < CAP || isHit`.
-  const visibleTags = $derived(
-    expanded ? paper.tags : paper.tags.filter((t, i) => i < CAP || isHit(t.name)),
-  );
-  const hiddenCount = $derived(paper.tags.length - visibleTags.length);
+  const collapsedTags = $derived(paper.tags.filter((t, i) => i < CAP || isHit(t.name)));
+  const visibleTags = $derived(expanded ? paper.tags : collapsedTags);
+  // How many the collapsed view hides — computed from the collapsed set (not
+  // `visibleTags`) so the toggle persists once expanded, giving a way to fold
+  // back. Was `paper.tags.length - visibleTags.length`, which went to 0 on
+  // expand and made the control vanish with no collapse affordance.
+  const overflowCount = $derived(paper.tags.length - collapsedTags.length);
 
   const badgeClasses =
     'inline-flex items-center gap-1 rounded border border-indigo-600/30 bg-indigo-600/10 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-800 dark:border-indigo-400/30 dark:bg-indigo-400/10 dark:text-indigo-300';
@@ -53,9 +56,9 @@
     {#each visibleTags as tag (tag.id)}
       <span class={chipClasses(isHit(tag.name))}>{tag.name}</span>
     {/each}
-    {#if hiddenCount > 0}
-      <button type="button" onclick={onMoreClick} class={moreClasses}>
-        +{hiddenCount}
+    {#if overflowCount > 0}
+      <button type="button" onclick={onMoreClick} aria-expanded={expanded} class={moreClasses}>
+        {expanded ? 'Less' : `+${overflowCount}`}
       </button>
     {/if}
   </div>

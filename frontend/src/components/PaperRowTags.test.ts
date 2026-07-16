@@ -53,7 +53,19 @@ describe('PaperRowTags', () => {
     expect(screen.getByText('ml/llm')).toBeInTheDocument();
     expect(screen.getByText('benchmarks')).toBeInTheDocument();
     expect(screen.getByText('robotics')).toBeInTheDocument();
+    // The +N is gone, but a "Less" control replaces it so the tags can fold back.
     expect(screen.queryByRole('button', { name: /^\+\d/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Less' })).toBeInTheDocument();
+  });
+
+  it('folds the tags back when "Less" is clicked', async () => {
+    render(PaperRowTags, { props: { paper } });
+    await userEvent.click(screen.getByRole('button', { name: '+2' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Less' }));
+    // Back to the capped view: overflow tags hidden and the +2 control restored.
+    expect(screen.queryByText('benchmarks')).not.toBeInTheDocument();
+    expect(screen.queryByText('robotics')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '+2' })).toBeInTheDocument();
   });
 
   it('renders project badges that never count toward the tag cap', () => {
