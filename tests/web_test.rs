@@ -1520,6 +1520,98 @@ mod search_api {
         assert_eq!(body["semantic_available"], false);
     }
 
+    /// Two papers both matching "fuzzing" in FTS: "a" (tag nlp, starred, in
+    /// project "Thesis"), "b" (tag systems, no star, no project).
+    async fn server_with_qualifier_fixtures(pool: sqlx::SqlitePool) -> axum_test::TestServer {
+        insert_sample_paper(&pool, "a", "Fuzzing Firmware").await;
+        insert_sample_paper(&pool, "b", "Fuzzing Kernels").await;
+        db::add_paper_tag(&pool, "a", "nlp").await.unwrap();
+        db::add_paper_tag(&pool, "b", "systems").await.unwrap();
+        db::set_paper_starred(&pool, "a", true).await.unwrap();
+        let proj = db::create_project(&pool, "Thesis").await.unwrap();
+        db::add_paper_to_project(&pool, "a", &proj.id).await.unwrap();
+
+        let idx = tempfile::tempdir().unwrap();
+        let (fts_idx, _) = fts::FtsIndex::open(idx.path()).unwrap();
+        std::mem::forget(idx);
+        let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
+        let svc = SearchService::open_with(pool.clone(), fts_idx, vectors, None);
+        for (id, title) in [("a", "Fuzzing Firmware"), ("b", "Fuzzing Kernels")] {
+            svc.fts
+                .upsert(&fts::PaperDoc {
+                    id: id.into(),
+                    title: title.into(),
+                    authors: "Ada Lovelace".into(),
+                    venue: String::new(),
+                    abstract_text: String::new(),
+                    body: String::new(),
+                })
+                .unwrap();
+        }
+        let router = xuewen::web::build_router_with_search(
+            pool,
+            std::path::PathBuf::from("/nonexistent"),
+            svc,
+        );
+        axum_test::TestServer::new(router).unwrap()
+    }
+
+    #[tokio::test]
+    async fn search_query_syntax_filters_by_tag_and_star() {
+        let pool = test_pool().await;
+        let server = server_with_qualifier_fixtures(pool).await;
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing tag:nlp is:starred")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["paper"]["id"], "a");
+    }
+
+    #[tokio::test]
+    async fn search_project_qualifier_resolves_name_case_insensitively() {
+        let pool = test_pool().await;
+        let server = server_with_qualifier_fixtures(pool).await;
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing project:thesis")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["paper"]["id"], "a");
+
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing project:nosuch")
+            .await;
+        let body: serde_json::Value = resp.json();
+        assert!(
+            body["results"].as_array().unwrap().is_empty(),
+            "unknown project name → empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_qualifiers_override_explicit_params() {
+        let pool = test_pool().await;
+        let server = server_with_qualifier_fixtures(pool).await;
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing tag:nlp")
+            .add_query_param("tag", "systems")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["paper"]["id"], "a", "tag: qualifier must beat ?tag=");
+    }
+
     #[tokio::test]
     async fn search_without_service_is_503() {
         let pool = test_pool().await;

@@ -992,16 +992,32 @@ pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchPa
             .into_response();
     };
     let (keyword, semantic) = parse_engines(p.engines.as_deref());
+    let parsed = crate::search::query::parse(p.q.as_deref().unwrap_or(""));
+    // `project:` carries a NAME; resolve to an id. An unknown name filters to
+    // zero results (bind the name itself — it can never equal a project id).
+    let project = match parsed.project {
+        Some(name) => Some(
+            crate::db::find_project_by_name(&app.pool, &name)
+                .await
+                .ok()
+                .flatten()
+                .map(|pr| pr.id)
+                .unwrap_or(name),
+        ),
+        None => p.project,
+    };
     let req = crate::search::SearchRequest {
-        q: p.q.unwrap_or_default(),
-        author_terms: Vec::new(),
-        fields: FieldSel::parse(p.fields.as_deref()),
+        q: parsed.text,
+        author_terms: parsed.authors,
+        fields: parsed
+            .fields
+            .unwrap_or_else(|| FieldSel::parse(p.fields.as_deref())),
         keyword,
         semantic,
-        status: p.status,
-        project: p.project,
-        tag: p.tag,
-        starred: p.starred,
+        status: parsed.status.or(p.status),
+        project,
+        tag: parsed.tag.or(p.tag),
+        starred: if parsed.starred { Some(true) } else { p.starred },
     };
     match svc.search(&req).await {
         Ok(out) => {
