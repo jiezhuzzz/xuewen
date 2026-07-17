@@ -49,6 +49,14 @@ describe('TabBar', () => {
     expect(screen.getByRole('button', { name: 'Library' })).toHaveAttribute('aria-current', 'page');
   });
 
+  it('keeps the close button visible on keyboard focus and titles truncated tabs', () => {
+    openTab(paper('a', 'A very long paper title'));
+    render(TabBar);
+    expect(screen.getByTitle('A very long paper title')).toBeInTheDocument();
+    const close = screen.getByRole('button', { name: 'Close tab' });
+    expect(close.className).toContain('focus-visible:opacity-100');
+  });
+
   it('hosts no zen/info buttons (they live on the PDF toolbar)', async () => {
     openTab(paper('a', 'First Paper'));
     render(TabBar);

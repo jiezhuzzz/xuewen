@@ -47,6 +47,7 @@
       >
         <button
           type="button"
+          title={tab.title}
           onclick={() => (viewer.activeId = tab.id)}
           class="min-w-0 truncate font-serif text-sm text-stone-700 dark:text-stone-200"
         >
@@ -56,7 +57,7 @@
           type="button"
           aria-label="Close tab"
           onclick={() => closeTab(tab.id)}
-          class="rounded p-0.5 text-stone-500 opacity-0 hover:bg-stone-200 group-hover:opacity-100 dark:text-stone-400 dark:hover:bg-stone-700"
+          class="rounded p-0.5 text-stone-500 opacity-0 hover:bg-stone-200 focus-visible:opacity-100 group-hover:opacity-100 dark:text-stone-400 dark:hover:bg-stone-700"
         >
           <X size={14} />
         </button>

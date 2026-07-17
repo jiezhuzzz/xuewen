@@ -58,6 +58,14 @@ describe('ReaderDock', () => {
     expect(dock.tab).toBe('details');
   });
 
+  it('wires each tab to its panel for assistive tech', async () => {
+    render(ReaderDock, { props: { id: 'p1' } });
+    const panel = await screen.findByRole('tabpanel');
+    expect(panel.id).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Details' })).toHaveAttribute('aria-controls', panel.id);
+    expect(screen.getByRole('tab', { name: /Ask/ })).toHaveAttribute('aria-controls');
+  });
+
   it('the close button closes the dock', async () => {
     render(ReaderDock, { props: { id: 'p1' } });
     await userEvent.click(screen.getByRole('button', { name: 'Close panel' }));

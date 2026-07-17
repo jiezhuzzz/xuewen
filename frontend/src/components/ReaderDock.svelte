@@ -49,7 +49,9 @@
       <button
         type="button"
         role="tab"
+        id="dock-tab-details"
         aria-selected={tab === 'details'}
+        aria-controls="dock-panel"
         class={`${tabBase} ${tab === 'details' ? tabOn : tabOff}`}
         onclick={() => openDock('details')}
       >Details</button>
@@ -57,7 +59,9 @@
         <button
           type="button"
           role="tab"
+          id="dock-tab-ask"
           aria-selected={tab === 'ask'}
+          aria-controls="dock-panel"
           class={`${tabBase} ${tab === 'ask' ? tabOn : tabOff}`}
           onclick={() => openDock('ask')}
         >Ask 問</button>
@@ -85,11 +89,18 @@
     </div>
   </div>
 
-  {#if tab === 'details'}
-    {#key id}
-      <DockDetails {id} />
-    {/key}
-  {:else}
-    <DockAsk />
-  {/if}
+  <div
+    role="tabpanel"
+    id="dock-panel"
+    aria-labelledby={tab === 'details' ? 'dock-tab-details' : 'dock-tab-ask'}
+    class="flex min-h-0 flex-1 flex-col"
+  >
+    {#if tab === 'details'}
+      {#key id}
+        <DockDetails {id} />
+      {/key}
+    {:else}
+      <DockAsk />
+    {/if}
+  </div>
 </aside>

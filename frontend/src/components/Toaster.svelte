@@ -14,6 +14,7 @@
     <div
       in:fly={{ y: 16, duration: dur(DUR.base) }}
       out:fade={{ duration: dur(DUR.fast) }}
+      role={t.kind === 'error' ? 'alert' : undefined}
       class="pointer-events-auto flex items-center gap-2 rounded-lg border border-stone-200 bg-paper px-3 py-2 text-sm text-ink shadow-lg dark:border-stone-800 dark:bg-soot dark:text-stone-100"
     >
       {#if t.kind === 'success'}

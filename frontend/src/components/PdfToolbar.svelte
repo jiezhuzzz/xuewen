@@ -93,6 +93,7 @@
     type="button"
     class={btn}
     aria-label="Previous page"
+    title="Previous page"
     disabled={scroll.state.currentPage <= 1}
     onclick={() => scroll.provides?.scrollToPreviousPage()}
   >
@@ -121,6 +122,7 @@
     type="button"
     class={btn}
     aria-label="Next page"
+    title="Next page"
     disabled={scroll.state.currentPage >= scroll.state.totalPages}
     onclick={() => scroll.provides?.scrollToNextPage()}
   >
@@ -129,7 +131,7 @@
 
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
 
-  <button type="button" class={btn} aria-label="Zoom out" onclick={() => zoom.provides?.zoomOut()}>
+  <button type="button" class={btn} aria-label="Zoom out" title="Zoom out" onclick={() => zoom.provides?.zoomOut()}>
     <ZoomOut size={16} />
   </button>
   <!-- svelte-ignore a11y_no_static_element_interactions -- the keydown only
@@ -183,7 +185,7 @@
       </div>
     {/if}
   </div>
-  <button type="button" class={btn} aria-label="Zoom in" onclick={() => zoom.provides?.zoomIn()}>
+  <button type="button" class={btn} aria-label="Zoom in" title="Zoom in" onclick={() => zoom.provides?.zoomIn()}>
     <ZoomIn size={16} />
   </button>
 
