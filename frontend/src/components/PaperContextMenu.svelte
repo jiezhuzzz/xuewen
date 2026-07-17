@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { Copy, ScanSearch, Trash2 } from 'lucide-svelte';
   import ConfirmButtons from './ConfirmButtons.svelte';
   import { closeContextMenu, contextMenu } from '../lib/contextMenu.svelte';
@@ -14,11 +15,52 @@
   let top = $state(0);
 
   // Every fresh open starts on the action list, never mid-delete-confirm.
+  // Focus moves into the menu on open (WAI menu pattern) and back to
+  // whatever had it when the menu closes.
+  let prevFocus: HTMLElement | null = null;
   $effect(() => {
     if (contextMenu.open) {
       contextMenu.paper; // re-run when the target paper changes
       mode = 'menu';
       busy = false;
+      prevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      void tick().then(() => menuItems()[0]?.focus());
+    } else {
+      prevFocus?.focus();
+      prevFocus = null;
+    }
+  });
+
+  // Roving focus: ArrowUp/Down cycle with wrap-around, Home/End jump.
+  function menuItems(): HTMLElement[] {
+    return menuEl ? Array.from(menuEl.querySelectorAll<HTMLElement>('[role="menuitem"]')) : [];
+  }
+  function onMenuKeydown(e: KeyboardEvent) {
+    if (mode !== 'menu') return;
+    const list = menuItems();
+    if (list.length === 0) return;
+    const idx = list.indexOf(document.activeElement as HTMLElement);
+    const wrap = (n: number) => (n + list.length) % list.length;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      list[wrap(idx + 1)].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      list[idx === -1 ? list.length - 1 : wrap(idx - 1)].focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      list[0].focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      list[list.length - 1].focus();
+    }
+  }
+
+  // Switching to the delete confirm moves focus onto its first button, so
+  // Enter-ing "Delete…" flows straight into confirm-or-cancel by keyboard.
+  $effect(() => {
+    if (mode === 'delete') {
+      void tick().then(() => menuEl?.querySelector<HTMLElement>('button')?.focus());
     }
   });
 
@@ -93,6 +135,8 @@
     bind:this={menuEl}
     role="menu"
     aria-label="Paper actions"
+    tabindex="-1"
+    onkeydown={onMenuKeydown}
     class="fixed z-50 w-44 rounded-xl border border-stone-200 bg-paper/95 p-1.5 shadow-lg backdrop-blur dark:border-stone-800 dark:bg-soot/95"
     style={`left:${left}px;top:${top}px`}
   >

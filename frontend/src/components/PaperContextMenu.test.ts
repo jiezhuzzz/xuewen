@@ -99,3 +99,58 @@ describe('PaperContextMenu', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 });
+
+describe('PaperContextMenu keyboard', () => {
+  it('focuses the first menuitem on open', async () => {
+    render(PaperContextMenu);
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: /copy bibtex/i })).toHaveFocus(),
+    );
+  });
+
+  it('ArrowDown/ArrowUp rove through items with wrap-around, Home/End jump', async () => {
+    render(PaperContextMenu);
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: /copy bibtex/i })).toHaveFocus(),
+    );
+    await userEvent.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: /identify/i })).toHaveFocus();
+    await userEvent.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: /delete/i })).toHaveFocus();
+    await userEvent.keyboard('{ArrowDown}'); // wraps to the top
+    expect(screen.getByRole('menuitem', { name: /copy bibtex/i })).toHaveFocus();
+    await userEvent.keyboard('{ArrowUp}'); // wraps to the bottom
+    expect(screen.getByRole('menuitem', { name: /delete/i })).toHaveFocus();
+    await userEvent.keyboard('{Home}');
+    expect(screen.getByRole('menuitem', { name: /copy bibtex/i })).toHaveFocus();
+    await userEvent.keyboard('{End}');
+    expect(screen.getByRole('menuitem', { name: /delete/i })).toHaveFocus();
+  });
+
+  it('Enter activates the focused item', async () => {
+    render(PaperContextMenu);
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: /copy bibtex/i })).toHaveFocus(),
+    );
+    await userEvent.keyboard('{ArrowDown}{Enter}'); // Identify…
+    expect(identifyState.open).toBe(true);
+    expect(contextMenu.open).toBe(false);
+  });
+
+  it('restores focus to the previously focused element on close', async () => {
+    contextMenu.open = false;
+    contextMenu.paper = null;
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    outside.focus();
+    render(PaperContextMenu);
+    contextMenu.open = true;
+    contextMenu.paper = paper;
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: /copy bibtex/i })).toHaveFocus(),
+    );
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(outside).toHaveFocus());
+    outside.remove();
+  });
+});
