@@ -78,19 +78,34 @@ pub struct SearchService {
 }
 
 impl SearchService {
-    pub async fn open(pool: SqlitePool, cfg: &SearchConfig, ai: &crate::config::AiConfig) -> Result<Arc<Self>> {
+    pub async fn open(
+        pool: SqlitePool,
+        cfg: &SearchConfig,
+        ai: &crate::config::AiConfig,
+    ) -> Result<Arc<Self>> {
         let (fts_idx, created) = fts::FtsIndex::open(&cfg.index_dir)?;
-        if created { store::clear_stamps(&pool, true, false).await?; }
+        if created {
+            store::clear_stamps(&pool, true, false).await?;
+        }
         let (embedder, dims) = match &ai.embedding {
             Some(e) => {
                 let r = ai.resolve(&e.endpoint);
                 let model = e.model();
-                (embedder::Embedder::from_resolved(&r, &model, e.dims), e.dims)
+                (
+                    embedder::Embedder::from_resolved(&r, &model, e.dims),
+                    e.dims,
+                )
             }
             None => (None, 1536),
         };
         let vectors = vector::QdrantStore::new(&cfg.qdrant_url, &cfg.qdrant_collection, dims)?;
-        Ok(Arc::new(Self { pool, fts: fts_idx, vectors, embedder, notify: tokio::sync::Notify::new() }))
+        Ok(Arc::new(Self {
+            pool,
+            fts: fts_idx,
+            vectors,
+            embedder,
+            notify: tokio::sync::Notify::new(),
+        }))
     }
 
     /// Dependency-injection constructor for tests.
@@ -100,7 +115,13 @@ impl SearchService {
         vectors: vector::QdrantStore,
         embedder: Option<embedder::Embedder>,
     ) -> Arc<Self> {
-        Arc::new(Self { pool, fts, vectors, embedder, notify: tokio::sync::Notify::new() })
+        Arc::new(Self {
+            pool,
+            fts,
+            vectors,
+            embedder,
+            notify: tokio::sync::Notify::new(),
+        })
     }
 
     /// Nudge the indexer to sweep now (harmless if nothing is stale).
@@ -118,7 +139,10 @@ impl SearchService {
 
     fn semantic_config_state(&self) -> SemanticState {
         match &self.embedder {
-            Some(_) => SemanticState { available: true, reason: None },
+            Some(_) => SemanticState {
+                available: true,
+                reason: None,
+            },
             None => SemanticState {
                 available: false,
                 reason: Some(
@@ -158,7 +182,10 @@ impl SearchService {
                 }
                 Err(e) => {
                     tracing::warn!("semantic search failed: {e}");
-                    semantic = SemanticState { available: false, reason: Some(e.to_string()) };
+                    semantic = SemanticState {
+                        available: false,
+                        reason: Some(e.to_string()),
+                    };
                 }
             }
         }
@@ -184,10 +211,14 @@ impl SearchService {
         )
         .await?;
 
-        let kw_by_id: std::collections::HashMap<&str, &fts::FtsHit> =
-            keyword_hits.iter().map(|h| (h.paper_id.as_str(), h)).collect();
-        let sem_by_id: std::collections::HashMap<&str, &vector::VecHit> =
-            semantic_best.iter().map(|h| (h.paper_id.as_str(), h)).collect();
+        let kw_by_id: std::collections::HashMap<&str, &fts::FtsHit> = keyword_hits
+            .iter()
+            .map(|h| (h.paper_id.as_str(), h))
+            .collect();
+        let sem_by_id: std::collections::HashMap<&str, &vector::VecHit> = semantic_best
+            .iter()
+            .map(|h| (h.paper_id.as_str(), h))
+            .collect();
 
         let mut results = Vec::with_capacity(papers.len());
         for p in papers {
@@ -228,7 +259,11 @@ impl SearchService {
 
     /// Snippet for a semantic-only hit: the matching chunk's text (escaped, trimmed).
     async fn semantic_match_info(&self, hit: &vector::VecHit) -> MatchInfo {
-        let (field, page) = if hit.seq == 0 { ("abstract", None) } else { ("body", hit.page) };
+        let (field, page) = if hit.seq == 0 {
+            ("abstract", None)
+        } else {
+            ("body", hit.page)
+        };
         let text = store::chunk_text(&self.pool, &hit.paper_id, hit.seq)
             .await
             .ok()
@@ -236,7 +271,11 @@ impl SearchService {
             .map(|c| c.text)
             .unwrap_or_default();
         let trimmed: String = text.chars().take(SEMANTIC_SNIPPET_CHARS).collect();
-        let ellipsis = if text.chars().count() > SEMANTIC_SNIPPET_CHARS { "…" } else { "" };
+        let ellipsis = if text.chars().count() > SEMANTIC_SNIPPET_CHARS {
+            "…"
+        } else {
+            ""
+        };
         MatchInfo {
             engine: "semantic".into(),
             field: field.into(),
@@ -278,9 +317,7 @@ impl SearchService {
                 if content_ok && r.fts_indexed_at.is_some() {
                     fts_indexed += 1;
                 }
-                if content_ok
-                    && r.vectors_indexed_at.is_some()
-                    && r.embed_model.as_deref() == model
+                if content_ok && r.vectors_indexed_at.is_some() && r.embed_model.as_deref() == model
                 {
                     vec_indexed += 1;
                 }
@@ -290,12 +327,24 @@ impl SearchService {
         let sem = self.semantic_config_state();
         // Without an embedder the vectors tier is idle, not "all indexed".
         let vectors = if self.embedder.is_some() {
-            TierCounts { indexed: vec_indexed, pending: live_n - vec_indexed, failed }
+            TierCounts {
+                indexed: vec_indexed,
+                pending: live_n - vec_indexed,
+                failed,
+            }
         } else {
-            TierCounts { indexed: 0, pending: 0, failed }
+            TierCounts {
+                indexed: 0,
+                pending: 0,
+                failed,
+            }
         };
         Ok(IndexStatus {
-            fts: TierCounts { indexed: fts_indexed, pending: live_n - fts_indexed, failed },
+            fts: TierCounts {
+                indexed: fts_indexed,
+                pending: live_n - fts_indexed,
+                failed,
+            },
             vectors,
             semantic_available: sem.available,
             reason: sem.reason,
@@ -357,22 +406,45 @@ mod tests {
     async fn keyword_search_returns_papers_with_snippets_in_rank_order() {
         let pool = pool().await;
         for (id, title) in [("a", "Fuzzing Firmware"), ("b", "Sorting Networks")] {
-            crate::db::insert_paper(&pool, &paper(id, title)).await.unwrap();
+            crate::db::insert_paper(&pool, &paper(id, title))
+                .await
+                .unwrap();
         }
         let svc = keyword_only_service(pool).await;
-        svc.fts.upsert(&fts::PaperDoc {
-            id: "a".into(), title: "Fuzzing Firmware".into(), authors: "Ada Lovelace".into(),
-            venue: String::new(), abstract_text: String::new(), body: "we fuzz routers".into(),
-        }).unwrap();
-        svc.fts.upsert(&fts::PaperDoc {
-            id: "b".into(), title: "Sorting Networks".into(), authors: "Ada Lovelace".into(),
-            venue: String::new(), abstract_text: String::new(), body: "batcher merge".into(),
-        }).unwrap();
+        svc.fts
+            .upsert(&fts::PaperDoc {
+                id: "a".into(),
+                title: "Fuzzing Firmware".into(),
+                authors: "Ada Lovelace".into(),
+                venue: String::new(),
+                abstract_text: String::new(),
+                body: "we fuzz routers".into(),
+            })
+            .unwrap();
+        svc.fts
+            .upsert(&fts::PaperDoc {
+                id: "b".into(),
+                title: "Sorting Networks".into(),
+                authors: "Ada Lovelace".into(),
+                venue: String::new(),
+                abstract_text: String::new(),
+                body: "batcher merge".into(),
+            })
+            .unwrap();
 
-        let out = svc.search(&SearchRequest {
-            q: "fuzzing".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
-        }).await.unwrap();
+        let out = svc
+            .search(&SearchRequest {
+                q: "fuzzing".into(),
+                fields: fts::FieldSel::all(),
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
 
         assert!(!out.semantic.available); // no embedder configured
         assert!(out.semantic.reason.is_some());
@@ -385,38 +457,70 @@ mod tests {
     #[tokio::test]
     async fn trashed_papers_are_filtered_at_hydration() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "Fuzzing Firmware")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "Fuzzing Firmware"))
+            .await
+            .unwrap();
         crate::db::soft_delete(&pool, "a").await.unwrap();
         let svc = keyword_only_service(pool).await;
-        svc.fts.upsert(&fts::PaperDoc {
-            id: "a".into(), title: "Fuzzing Firmware".into(), authors: String::new(),
-            venue: String::new(), abstract_text: String::new(), body: String::new(),
-        }).unwrap();
-        let out = svc.search(&SearchRequest {
-            q: "fuzzing".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: false, status: None, project: None, tag: None, starred: None,
-        }).await.unwrap();
-        assert!(out.results.is_empty(), "trashed paper leaked through hydration");
+        svc.fts
+            .upsert(&fts::PaperDoc {
+                id: "a".into(),
+                title: "Fuzzing Firmware".into(),
+                authors: String::new(),
+                venue: String::new(),
+                abstract_text: String::new(),
+                body: String::new(),
+            })
+            .unwrap();
+        let out = svc
+            .search(&SearchRequest {
+                q: "fuzzing".into(),
+                fields: fts::FieldSel::all(),
+                keyword: true,
+                semantic: false,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.results.is_empty(),
+            "trashed paper leaked through hydration"
+        );
     }
 
     #[tokio::test]
     async fn hybrid_search_fuses_and_marks_both() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "Fuzzing Firmware")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "Fuzzing Firmware"))
+            .await
+            .unwrap();
         // Chunk for the semantic snippet lookup.
         crate::search::store::replace_chunks(
-            &pool, "a",
-            &[crate::search::chunker::Chunk { seq: 1, page: Some(7), text: "router fuzz harness details".into() }],
-            "hash-a", "mh",
-        ).await.unwrap();
+            &pool,
+            "a",
+            &[crate::search::chunker::Chunk {
+                seq: 1,
+                page: Some(7),
+                text: "router fuzz harness details".into(),
+            }],
+            "hash-a",
+            "mh",
+        )
+        .await
+        .unwrap();
 
         // Wiremock plays both Qdrant and the embedding API.
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/embeddings"))
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3, 0.4]}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("POST")).and(path("/collections/xuewen/points/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "result": [{"id": "x", "score": 0.9, "payload": {"paper_id": "a", "seq": 1, "page": 7}}]
@@ -426,41 +530,71 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
         std::mem::forget(dir);
-        fts_idx.upsert(&fts::PaperDoc {
-            id: "a".into(), title: "Fuzzing Firmware".into(), authors: String::new(),
-            venue: String::new(), abstract_text: String::new(), body: "we fuzz routers".into(),
-        }).unwrap();
+        fts_idx
+            .upsert(&fts::PaperDoc {
+                id: "a".into(),
+                title: "Fuzzing Firmware".into(),
+                authors: String::new(),
+                venue: String::new(),
+                abstract_text: String::new(),
+                body: "we fuzz routers".into(),
+            })
+            .unwrap();
         let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
         let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
         let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
 
-        let out = svc.search(&SearchRequest {
-            q: "fuzzing".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
-        }).await.unwrap();
+        let out = svc
+            .search(&SearchRequest {
+                q: "fuzzing".into(),
+                fields: fts::FieldSel::all(),
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
 
         assert!(out.semantic.available);
         assert_eq!(out.results.len(), 1);
         assert_eq!(out.results[0].1.engine, "both");
-        assert!(out.results[0].1.snippet.contains("<mark>"), "keyword snippet preferred");
+        assert!(
+            out.results[0].1.snippet.contains("<mark>"),
+            "keyword snippet preferred"
+        );
     }
 
     #[tokio::test]
     async fn semantic_only_hit_uses_chunk_text_snippet() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "Some Paper")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "Some Paper"))
+            .await
+            .unwrap();
         crate::search::store::replace_chunks(
-            &pool, "a",
-            &[crate::search::chunker::Chunk { seq: 2, page: Some(3), text: "novel <escaping> content".into() }],
-            "hash-a", "mh",
-        ).await.unwrap();
+            &pool,
+            "a",
+            &[crate::search::chunker::Chunk {
+                seq: 2,
+                page: Some(3),
+                text: "novel <escaping> content".into(),
+            }],
+            "hash-a",
+            "mh",
+        )
+        .await
+        .unwrap();
 
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/embeddings"))
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3, 0.4]}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("POST")).and(path("/collections/xuewen/points/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "result": [{"id": "x", "score": 0.9, "payload": {"paper_id": "a", "seq": 2, "page": 3}}]
@@ -474,39 +608,69 @@ mod tests {
         let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
         let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
 
-        let out = svc.search(&SearchRequest {
-            q: "different words entirely".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
-        }).await.unwrap();
+        let out = svc
+            .search(&SearchRequest {
+                q: "different words entirely".into(),
+                fields: fts::FieldSel::all(),
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
 
         assert_eq!(out.results.len(), 1);
         let m = &out.results[0].1;
         assert_eq!(m.engine, "semantic");
         assert_eq!(m.field, "body");
         assert_eq!(m.page, Some(3));
-        assert!(m.snippet.contains("&lt;escaping&gt;"), "chunk text must be HTML-escaped: {}", m.snippet);
+        assert!(
+            m.snippet.contains("&lt;escaping&gt;"),
+            "chunk text must be HTML-escaped: {}",
+            m.snippet
+        );
     }
 
     #[tokio::test]
     async fn semantic_failure_degrades_with_reason() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "Fuzzing Firmware")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "Fuzzing Firmware"))
+            .await
+            .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
         std::mem::forget(dir);
-        fts_idx.upsert(&fts::PaperDoc {
-            id: "a".into(), title: "Fuzzing Firmware".into(), authors: String::new(),
-            venue: String::new(), abstract_text: String::new(), body: String::new(),
-        }).unwrap();
+        fts_idx
+            .upsert(&fts::PaperDoc {
+                id: "a".into(),
+                title: "Fuzzing Firmware".into(),
+                authors: String::new(),
+                venue: String::new(),
+                abstract_text: String::new(),
+                body: String::new(),
+            })
+            .unwrap();
         // Embedder points at a dead port -> semantic path errors.
         let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
         let embedder = embedder::Embedder::for_tests("http://127.0.0.1:1/v1", "m", 4);
         let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
 
-        let out = svc.search(&SearchRequest {
-            q: "fuzzing".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
-        }).await.unwrap();
+        let out = svc
+            .search(&SearchRequest {
+                q: "fuzzing".into(),
+                fields: fts::FieldSel::all(),
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
 
         assert!(!out.semantic.available);
         assert!(out.semantic.reason.is_some());
@@ -517,11 +681,24 @@ mod tests {
     async fn authors_only_selection_skips_semantic() {
         let pool = pool().await;
         let svc = keyword_only_service(pool).await;
-        let out = svc.search(&SearchRequest {
-            q: "lovelace".into(),
-            fields: fts::FieldSel { title: false, authors: true, abstract_text: false, body: false },
-            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
-        }).await.unwrap();
+        let out = svc
+            .search(&SearchRequest {
+                q: "lovelace".into(),
+                fields: fts::FieldSel {
+                    title: false,
+                    authors: true,
+                    abstract_text: false,
+                    body: false,
+                },
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
         // Semantic was requested but is meaningless for authors-only.
         assert!(!out.semantic.available);
     }
@@ -529,7 +706,9 @@ mod tests {
     #[tokio::test]
     async fn status_counts_pending_and_failed() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "T")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "T"))
+            .await
+            .unwrap();
         let svc = keyword_only_service(pool).await;
         let st = svc.status().await.unwrap();
         assert_eq!(st.fts.pending, 1); // never indexed
@@ -540,24 +719,38 @@ mod tests {
     #[tokio::test]
     async fn authors_only_disables_semantic_even_with_embedder() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "Some Paper")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "Some Paper"))
+            .await
+            .unwrap();
         crate::search::store::replace_chunks(
-            &pool, "a",
-            &[crate::search::chunker::Chunk { seq: 0, page: None, text: "Ada content".into() }],
-            "hash-a", "mh",
-        ).await.unwrap();
+            &pool,
+            "a",
+            &[crate::search::chunker::Chunk {
+                seq: 0,
+                page: None,
+                text: "Ada content".into(),
+            }],
+            "hash-a",
+            "mh",
+        )
+        .await
+        .unwrap();
 
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/embeddings"))
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3, 0.4]}]
             })))
-            .mount(&server).await;
-        Mock::given(method("POST")).and(path("/collections/xuewen/points/search"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/collections/xuewen/points/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "result": []
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
 
         let dir = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
@@ -566,13 +759,29 @@ mod tests {
         let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
         let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
 
-        let out = svc.search(&SearchRequest {
-            q: "ada".into(),
-            fields: fts::FieldSel { title: false, authors: true, abstract_text: false, body: false },
-            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
-        }).await.unwrap();
+        let out = svc
+            .search(&SearchRequest {
+                q: "ada".into(),
+                fields: fts::FieldSel {
+                    title: false,
+                    authors: true,
+                    abstract_text: false,
+                    body: false,
+                },
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
 
-        assert!(!out.semantic.available, "semantic should be disabled for authors-only");
+        assert!(
+            !out.semantic.available,
+            "semantic should be disabled for authors-only"
+        );
         assert_eq!(
             out.semantic.reason.as_deref(),
             Some("semantic search does not apply to an authors-only query"),
@@ -583,13 +792,25 @@ mod tests {
     #[tokio::test]
     async fn status_counts_failed_rows() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "T")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "T"))
+            .await
+            .unwrap();
         crate::search::store::replace_chunks(
-            &pool, "a",
-            &[crate::search::chunker::Chunk { seq: 0, page: None, text: "some chunk".into() }],
-            "hash-a", "mh",
-        ).await.unwrap();
-        crate::search::store::record_error(&pool, "a", "boom").await.unwrap();
+            &pool,
+            "a",
+            &[crate::search::chunker::Chunk {
+                seq: 0,
+                page: None,
+                text: "some chunk".into(),
+            }],
+            "hash-a",
+            "mh",
+        )
+        .await
+        .unwrap();
+        crate::search::store::record_error(&pool, "a", "boom")
+            .await
+            .unwrap();
 
         let svc = keyword_only_service(pool).await;
         let st = svc.status().await.unwrap();
@@ -599,20 +820,32 @@ mod tests {
     #[tokio::test]
     async fn semantic_snippet_truncates_long_chunks_with_ellipsis() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "Some Paper")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "Some Paper"))
+            .await
+            .unwrap();
         let long_text = "x".repeat(250);
         crate::search::store::replace_chunks(
-            &pool, "a",
-            &[crate::search::chunker::Chunk { seq: 2, page: Some(3), text: long_text }],
-            "hash-a", "mh",
-        ).await.unwrap();
+            &pool,
+            "a",
+            &[crate::search::chunker::Chunk {
+                seq: 2,
+                page: Some(3),
+                text: long_text,
+            }],
+            "hash-a",
+            "mh",
+        )
+        .await
+        .unwrap();
 
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/embeddings"))
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3, 0.4]}]
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("POST")).and(path("/collections/xuewen/points/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "result": [{"id": "x", "score": 0.9, "payload": {"paper_id": "a", "seq": 2, "page": 3}}]
@@ -626,36 +859,64 @@ mod tests {
         let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
         let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
 
-        let out = svc.search(&SearchRequest {
-            q: "different words entirely".into(), fields: fts::FieldSel::all(),
-            keyword: true, semantic: true, status: None, project: None, tag: None, starred: None,
-        }).await.unwrap();
+        let out = svc
+            .search(&SearchRequest {
+                q: "different words entirely".into(),
+                fields: fts::FieldSel::all(),
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
 
         assert_eq!(out.results.len(), 1);
         let m = &out.results[0].1;
         assert_eq!(m.engine, "semantic");
-        assert!(m.snippet.ends_with("…"), "snippet should end with ellipsis: {}", m.snippet);
+        assert!(
+            m.snippet.ends_with("…"),
+            "snippet should end with ellipsis: {}",
+            m.snippet
+        );
         let text_before_ellipsis = m.snippet.trim_end_matches('…');
-        assert_eq!(text_before_ellipsis.chars().count(), 200, "text before ellipsis should be exactly 200 chars");
+        assert_eq!(
+            text_before_ellipsis.chars().count(),
+            200,
+            "text before ellipsis should be exactly 200 chars"
+        );
     }
 
     #[tokio::test]
     async fn status_counts_backed_off_failures_as_pending() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "T")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "T"))
+            .await
+            .unwrap();
         crate::search::store::replace_chunks(
             &pool,
             "a",
-            &[crate::search::chunker::Chunk { seq: 0, page: None, text: "T".into() }],
+            &[crate::search::chunker::Chunk {
+                seq: 0,
+                page: None,
+                text: "T".into(),
+            }],
             "hash-a",
             "mh",
         )
         .await
         .unwrap();
-        crate::search::store::record_error(&pool, "a", "boom").await.unwrap();
+        crate::search::store::record_error(&pool, "a", "boom")
+            .await
+            .unwrap();
         let svc = keyword_only_service(pool).await;
         let st = svc.status().await.unwrap();
-        assert_eq!(st.fts.pending, 1, "failed+backed-off paper is still pending");
+        assert_eq!(
+            st.fts.pending, 1,
+            "failed+backed-off paper is still pending"
+        );
         assert_eq!(st.fts.indexed, 0);
         assert_eq!(st.fts.failed, 1);
         assert_eq!(st.vectors.indexed, 0);

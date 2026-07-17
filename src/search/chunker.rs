@@ -27,12 +27,20 @@ pub fn chunk_paper(title: Option<&str>, abstract_text: Option<&str>, body: &str)
         (None, None) => None,
     };
     if let Some(text) = summary {
-        out.push(Chunk { seq: 0, page: None, text });
+        out.push(Chunk {
+            seq: 0,
+            page: None,
+            text,
+        });
     }
     let mut seq = 1;
     for (i, page) in body.split('\u{0c}').enumerate() {
         for text in chunk_page(page) {
-            out.push(Chunk { seq, page: Some((i + 1) as i64), text });
+            out.push(Chunk {
+                seq,
+                page: Some((i + 1) as i64),
+                text,
+            });
             seq += 1;
         }
     }
@@ -138,14 +146,21 @@ mod tests {
         let para = "x".repeat(395) + " end.";
         let body = vec![para.clone(); 5].join("\n\n");
         let out = chunk_paper(None, None, &body);
-        assert!(out.len() >= 2, "expected multiple chunks, got {}", out.len());
+        assert!(
+            out.len() >= 2,
+            "expected multiple chunks, got {}",
+            out.len()
+        );
         for c in &out {
             assert!(c.text.len() <= TARGET_CHARS + OVERLAP_CHARS + 2);
         }
         // Overlap: the tail of chunk N reappears at the head of chunk N+1.
         // (overlap_tail is private but visible to this child test module.)
         let tail = overlap_tail(&out[0].text, OVERLAP_CHARS);
-        assert!(out[1].text.starts_with(&tail), "chunk 2 must start with chunk 1's tail");
+        assert!(
+            out[1].text.starts_with(&tail),
+            "chunk 2 must start with chunk 1's tail"
+        );
     }
 
     #[test]
@@ -154,7 +169,9 @@ mod tests {
         let para = sentence.repeat(60); // ~2500 chars, no blank lines
         let out = chunk_paper(None, None, &para);
         assert!(out.len() >= 2);
-        assert!(out.iter().all(|c| c.text.len() <= TARGET_CHARS + OVERLAP_CHARS + 2));
+        assert!(out
+            .iter()
+            .all(|c| c.text.len() <= TARGET_CHARS + OVERLAP_CHARS + 2));
     }
 
     #[test]

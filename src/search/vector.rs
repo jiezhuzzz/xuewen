@@ -30,8 +30,11 @@ pub enum SeqFilter {
 
 /// Deterministic point id: UUIDv5 of "paper_id:seq" — re-upserts overwrite.
 pub fn point_id(paper_id: &str, seq: i64) -> String {
-    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, format!("{paper_id}:{seq}").as_bytes())
-        .to_string()
+    uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_OID,
+        format!("{paper_id}:{seq}").as_bytes(),
+    )
+    .to_string()
 }
 
 /// Qdrant over its REST API (the official crate would pull in the whole
@@ -206,9 +209,14 @@ impl QdrantStore {
                     let Some(paper_id) = p["payload"]["paper_id"].as_str() else {
                         continue;
                     };
-                    let Some(vec) = p["vector"].as_array() else { continue };
-                    let v: Vec<f32> =
-                        vec.iter().filter_map(|x| x.as_f64()).map(|x| x as f32).collect();
+                    let Some(vec) = p["vector"].as_array() else {
+                        continue;
+                    };
+                    let v: Vec<f32> = vec
+                        .iter()
+                        .filter_map(|x| x.as_f64())
+                        .map(|x| x as f32)
+                        .collect();
                     out.push((paper_id.to_string(), v));
                 }
             }
@@ -268,7 +276,9 @@ mod tests {
             .await;
         Mock::given(method("PUT"))
             .and(path("/collections/xuewen"))
-            .and(body_partial_json(json!({"vectors": {"size": 4, "distance": "Cosine"}})))
+            .and(body_partial_json(
+                json!({"vectors": {"size": 4, "distance": "Cosine"}}),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": true})))
             .expect(1)
             .mount(&server)
@@ -286,7 +296,11 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let err = store(&server).ensure_collection().await.unwrap_err().to_string();
+        let err = store(&server)
+            .ensure_collection()
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("rebuild --vectors-only"), "got: {err}");
     }
 
@@ -295,12 +309,19 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/collections/xuewen/points"))
-            .and(body_partial_json(json!({"points": [{"payload": {"paper_id": "p1", "seq": 0}}]})))
+            .and(body_partial_json(
+                json!({"points": [{"payload": {"paper_id": "p1", "seq": 0}}]}),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": {}})))
             .expect(1)
             .mount(&server)
             .await;
-        let pts = vec![ChunkPoint { paper_id: "p1".into(), seq: 0, page: None, vector: vec![0.1; 4] }];
+        let pts = vec![ChunkPoint {
+            paper_id: "p1".into(),
+            seq: 0,
+            page: None,
+            vector: vec![0.1; 4],
+        }];
         store(&server).upsert(&pts).await.unwrap();
     }
 
@@ -309,7 +330,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/collections/xuewen/points/search"))
-            .and(body_partial_json(json!({"filter": {"must": [{"key": "seq", "range": {"gte": 1}}]}})))
+            .and(body_partial_json(
+                json!({"filter": {"must": [{"key": "seq", "range": {"gte": 1}}]}}),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "result": [
                     {"id": "x", "score": 0.9, "payload": {"paper_id": "p1", "seq": 3, "page": 7}},
@@ -319,7 +342,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let hits = store(&server).search(&[0.1; 4], 10, SeqFilter::OnlyBody).await.unwrap();
+        let hits = store(&server)
+            .search(&[0.1; 4], 10, SeqFilter::OnlyBody)
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].paper_id, "p1");
         assert_eq!(hits[0].seq, 3);
@@ -332,7 +358,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/collections/xuewen/points/delete"))
-            .and(body_partial_json(json!({"filter": {"must": [{"key": "paper_id", "match": {"value": "p1"}}]}})))
+            .and(body_partial_json(
+                json!({"filter": {"must": [{"key": "paper_id", "match": {"value": "p1"}}]}}),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": {}})))
             .expect(1)
             .mount(&server)
@@ -351,7 +379,9 @@ mod tests {
             .await;
         Mock::given(method("PUT"))
             .and(path("/collections/xuewen"))
-            .and(body_partial_json(json!({"vectors": {"size": 4, "distance": "Cosine"}})))
+            .and(body_partial_json(
+                json!({"vectors": {"size": 4, "distance": "Cosine"}}),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": true})))
             .expect(1)
             .mount(&server)

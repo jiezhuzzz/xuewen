@@ -64,13 +64,15 @@ pub async fn get_run(pool: &SqlitePool, batch_date: &str) -> Result<Option<Daily
     .bind(batch_date)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(batch_date, status, papers_found, error, ran_at)| DailyRun {
-        batch_date,
-        status,
-        papers_found,
-        error,
-        ran_at,
-    }))
+    Ok(row.map(
+        |(batch_date, status, papers_found, error, ran_at)| DailyRun {
+            batch_date,
+            status,
+            papers_found,
+            error,
+            ran_at,
+        },
+    ))
 }
 
 /// Replace `batch_date`'s papers in one transaction (re-runs overwrite).
@@ -254,13 +256,9 @@ mod tests {
     #[tokio::test]
     async fn replace_batch_and_latest_batch_roundtrip() {
         let pool = pool().await;
-        replace_batch(
-            &pool,
-            "2026-07-09",
-            &[paper("2026-07-09", 1, "2507.00001")],
-        )
-        .await
-        .unwrap();
+        replace_batch(&pool, "2026-07-09", &[paper("2026-07-09", 1, "2507.00001")])
+            .await
+            .unwrap();
         replace_batch(
             &pool,
             "2026-07-10",
@@ -281,13 +279,9 @@ mod tests {
         assert_eq!(papers[0].categories, vec!["cs.AI"]);
 
         // Re-run replaces the date's rows.
-        replace_batch(
-            &pool,
-            "2026-07-10",
-            &[paper("2026-07-10", 1, "2507.00009")],
-        )
-        .await
-        .unwrap();
+        replace_batch(&pool, "2026-07-10", &[paper("2026-07-10", 1, "2507.00009")])
+            .await
+            .unwrap();
         let (_, papers) = latest_batch(&pool).await.unwrap().unwrap();
         assert_eq!(papers.len(), 1);
         assert_eq!(papers[0].arxiv_id, "2507.00009");
@@ -303,7 +297,9 @@ mod tests {
     async fn prune_deletes_older_batches_and_runs() {
         let pool = pool().await;
         for date in ["2026-06-01", "2026-07-10"] {
-            replace_batch(&pool, date, &[paper(date, 1, "x")]).await.unwrap();
+            replace_batch(&pool, date, &[paper(date, 1, "x")])
+                .await
+                .unwrap();
             record_run(
                 &pool,
                 &DailyRun {
@@ -407,7 +403,9 @@ mod tests {
             limitations: "Small data.".into(),
         });
         p.code_url = Some("https://github.com/acme/widget".into());
-        replace_batch(&pool, "2026-07-10", std::slice::from_ref(&p)).await.unwrap();
+        replace_batch(&pool, "2026-07-10", std::slice::from_ref(&p))
+            .await
+            .unwrap();
         let (_, papers) = latest_batch(&pool).await.unwrap().unwrap();
         assert_eq!(papers[0].summary, p.summary);
         assert_eq!(papers[0].code_url, p.code_url);

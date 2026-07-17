@@ -35,11 +35,10 @@ pub async fn build_profile(pool: &SqlitePool, vectors: &QdrantStore) -> Result<O
     let points = vectors.scroll_summaries().await?;
     let mut by_id: HashMap<String, Vec<f32>> = points.into_iter().collect();
 
-    let ids: Vec<(String,)> = sqlx::query_as(
-        "SELECT id FROM papers WHERE deleted_at IS NULL ORDER BY added_at DESC, id",
-    )
-    .fetch_all(pool)
-    .await?;
+    let ids: Vec<(String,)> =
+        sqlx::query_as("SELECT id FROM papers WHERE deleted_at IS NULL ORDER BY added_at DESC, id")
+            .fetch_all(pool)
+            .await?;
 
     // Newest-first vectors for live papers that are actually indexed.
     let mut ranked: Vec<Vec<f32>> = Vec::new();

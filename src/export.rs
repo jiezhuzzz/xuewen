@@ -23,7 +23,11 @@ pub fn format_entry(p: &Paper, fmt: BibFormat) -> String {
         fields.push((venue_field(kind, fmt), venue.to_string()));
     }
     if let Some(year) = p.meta.year {
-        let field = if fmt == BibFormat::Biblatex { "date" } else { "year" };
+        let field = if fmt == BibFormat::Biblatex {
+            "date"
+        } else {
+            "year"
+        };
         fields.push((field, year.to_string()));
     }
     if let Some(axv) = p.meta.arxiv_id.as_deref() {
@@ -76,7 +80,11 @@ fn entry_type(p: &Paper, fmt: BibFormat) -> &'static str {
         return "article";
     }
     if p.meta.arxiv_id.is_some() {
-        return if fmt == BibFormat::Biblatex { "online" } else { "misc" };
+        return if fmt == BibFormat::Biblatex {
+            "online"
+        } else {
+            "misc"
+        };
     }
     "misc"
 }
@@ -169,7 +177,10 @@ mod tests {
     #[test]
     fn inproceedings_from_dblp_conf_prefix() {
         let out = format_entry(&paper(), BibFormat::Bibtex);
-        assert!(out.starts_with("@inproceedings{wang2019kgat,\n"), "got: {out}");
+        assert!(
+            out.starts_with("@inproceedings{wang2019kgat,\n"),
+            "got: {out}"
+        );
         assert!(out.contains("author = {Xiang Wang and Xiangnan He},\n"));
         assert!(out.contains("title = {KGAT: Knowledge Graph Attention Network},\n"));
         assert!(out.contains("booktitle = {KDD},\n"));
@@ -224,7 +235,10 @@ mod tests {
         p.meta.title = Some("Cost & Effect: 50% Faster #wins".into());
         p.meta.doi = None;
         let out = format_entry(&p, BibFormat::Bibtex);
-        assert!(out.contains(r"title = {Cost \& Effect: 50\% Faster \#wins},"), "got: {out}");
+        assert!(
+            out.contains(r"title = {Cost \& Effect: 50\% Faster \#wins},"),
+            "got: {out}"
+        );
         assert!(!out.contains("doi ="));
     }
 
@@ -254,8 +268,14 @@ mod tests {
         p.meta.url = Some("https://example.com/paper".into());
         p.meta.arxiv_id = Some("1706.03762".into());
         let out = format_entry(&p, BibFormat::Bibtex);
-        assert!(out.contains("url = {https://example.com/paper},"), "got: {out}");
-        assert!(!out.contains("https://arxiv.org/abs/1706.03762"), "got: {out}");
+        assert!(
+            out.contains("url = {https://example.com/paper},"),
+            "got: {out}"
+        );
+        assert!(
+            !out.contains("https://arxiv.org/abs/1706.03762"),
+            "got: {out}"
+        );
     }
 
     #[test]

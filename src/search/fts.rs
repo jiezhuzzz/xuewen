@@ -19,13 +19,23 @@ pub struct FieldSel {
 
 impl FieldSel {
     pub fn all() -> Self {
-        Self { title: true, authors: true, abstract_text: true, body: true }
+        Self {
+            title: true,
+            authors: true,
+            abstract_text: true,
+            body: true,
+        }
     }
 
     /// Parse a `fields=title,body` CSV. Absent, empty, or all-unknown input
     /// falls back to every field (unknown values are ignored, never an error).
     pub fn parse(csv: Option<&str>) -> Self {
-        let mut sel = Self { title: false, authors: false, abstract_text: false, body: false };
+        let mut sel = Self {
+            title: false,
+            authors: false,
+            abstract_text: false,
+            body: false,
+        };
         for part in csv.unwrap_or("").split(',').map(str::trim) {
             match part {
                 "title" => sel.title = true,
@@ -102,7 +112,10 @@ impl FtsIndex {
         match Self::try_open(dir) {
             Ok(idx) => Ok((idx, fresh)),
             Err(e) => {
-                tracing::warn!("tantivy index at {} unusable ({e}); rebuilding", dir.display());
+                tracing::warn!(
+                    "tantivy index at {} unusable ({e}); rebuilding",
+                    dir.display()
+                );
                 std::fs::remove_dir_all(dir)?;
                 std::fs::create_dir_all(dir)?;
                 Ok((Self::try_open(dir)?, true))
@@ -125,7 +138,14 @@ impl FtsIndex {
             index,
             writer: Mutex::new(None),
             reader,
-            f: FtsFields { id, title, authors, venue, abstract_text, body },
+            f: FtsFields {
+                id,
+                title,
+                authors,
+                venue,
+                abstract_text,
+                body,
+            },
         })
     }
 
@@ -171,10 +191,18 @@ impl FtsIndex {
             return Ok(Vec::new());
         }
         let mut fields = Vec::new();
-        if sel.title { fields.push(self.f.title); }
-        if sel.authors { fields.push(self.f.authors); }
-        if sel.abstract_text { fields.push(self.f.abstract_text); }
-        if sel.body { fields.push(self.f.body); }
+        if sel.title {
+            fields.push(self.f.title);
+        }
+        if sel.authors {
+            fields.push(self.f.authors);
+        }
+        if sel.abstract_text {
+            fields.push(self.f.abstract_text);
+        }
+        if sel.body {
+            fields.push(self.f.body);
+        }
 
         let mut parser = QueryParser::for_index(&self.index, fields);
         parser.set_field_boost(self.f.title, 3.0);
@@ -194,7 +222,12 @@ impl FtsIndex {
                 .unwrap_or_default()
                 .to_string();
             let (field, snippet_html) = self.best_snippet(&searcher, query.as_ref(), &doc, sel)?;
-            out.push(FtsHit { paper_id, score, field, snippet_html });
+            out.push(FtsHit {
+                paper_id,
+                score,
+                field,
+                snippet_html,
+            });
         }
         Ok(out)
     }
@@ -222,7 +255,10 @@ impl FtsIndex {
             gen.set_max_num_chars(200);
             let snip = gen.snippet_from_doc(doc);
             if !snip.highlighted().is_empty() {
-                let html = snip.to_html().replace("<b>", "<mark>").replace("</b>", "</mark>");
+                let html = snip
+                    .to_html()
+                    .replace("<b>", "<mark>")
+                    .replace("</b>", "</mark>");
                 return Ok((name.to_string(), html));
             }
         }
@@ -279,22 +315,43 @@ mod tests {
     #[test]
     fn upsert_search_and_snippet() {
         let (idx, _dir) = open_tmp();
-        idx.upsert(&doc("p1", "AntiFuzz: Impeding Fuzzing Audits", "fuzzing resistance techniques")).unwrap();
-        idx.upsert(&doc("p2", "Unrelated Paper", "nothing to see here")).unwrap();
+        idx.upsert(&doc(
+            "p1",
+            "AntiFuzz: Impeding Fuzzing Audits",
+            "fuzzing resistance techniques",
+        ))
+        .unwrap();
+        idx.upsert(&doc("p2", "Unrelated Paper", "nothing to see here"))
+            .unwrap();
 
         let hits = idx.search("fuzzing", &FieldSel::all(), 10).unwrap();
         assert_eq!(hits[0].paper_id, "p1");
-        assert!(hits[0].snippet_html.contains("<mark>"), "got: {}", hits[0].snippet_html);
+        assert!(
+            hits[0].snippet_html.contains("<mark>"),
+            "got: {}",
+            hits[0].snippet_html
+        );
         assert!(!hits.iter().any(|h| h.paper_id == "p2"));
     }
 
     #[test]
     fn field_selection_restricts_matching() {
         let (idx, _dir) = open_tmp();
-        idx.upsert(&doc("p1", "A Title", "the body mentions quicksort")).unwrap();
-        let sel = FieldSel { title: true, authors: false, abstract_text: false, body: false };
+        idx.upsert(&doc("p1", "A Title", "the body mentions quicksort"))
+            .unwrap();
+        let sel = FieldSel {
+            title: true,
+            authors: false,
+            abstract_text: false,
+            body: false,
+        };
         assert!(idx.search("quicksort", &sel, 10).unwrap().is_empty());
-        let sel = FieldSel { title: false, authors: false, abstract_text: false, body: true };
+        let sel = FieldSel {
+            title: false,
+            authors: false,
+            abstract_text: false,
+            body: true,
+        };
         let hits = idx.search("quicksort", &sel, 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].field, "body");
@@ -303,8 +360,14 @@ mod tests {
     #[test]
     fn title_hit_outranks_body_hit() {
         let (idx, _dir) = open_tmp();
-        idx.upsert(&doc("in-title", "Quicksort Analysis", "some text")).unwrap();
-        idx.upsert(&doc("in-body", "Sorting Survey", "quicksort quicksort quicksort")).unwrap();
+        idx.upsert(&doc("in-title", "Quicksort Analysis", "some text"))
+            .unwrap();
+        idx.upsert(&doc(
+            "in-body",
+            "Sorting Survey",
+            "quicksort quicksort quicksort",
+        ))
+        .unwrap();
         let hits = idx.search("quicksort", &FieldSel::all(), 10).unwrap();
         assert_eq!(hits[0].paper_id, "in-title");
     }
@@ -343,13 +406,24 @@ mod tests {
         idx1.upsert(&doc("p1", "A Title", "body")).unwrap(); // forces writer creation, lock held
 
         let (idx2, _created2) = FtsIndex::open(dir.path()).unwrap(); // open is lazy, succeeds
-        assert!(idx2.delete("x").is_err(), "second writer on a locked dir must fail");
+        assert!(
+            idx2.delete("x").is_err(),
+            "second writer on a locked dir must fail"
+        );
     }
 
     #[test]
     fn zero_limit_returns_empty_instead_of_panicking() {
         let (idx, _dir) = open_tmp();
-        idx.upsert(&doc("p1", "AntiFuzz: Impeding Fuzzing Audits", "fuzzing resistance")).unwrap();
-        assert!(idx.search("fuzzing", &FieldSel::all(), 0).unwrap().is_empty());
+        idx.upsert(&doc(
+            "p1",
+            "AntiFuzz: Impeding Fuzzing Audits",
+            "fuzzing resistance",
+        ))
+        .unwrap();
+        assert!(idx
+            .search("fuzzing", &FieldSel::all(), 0)
+            .unwrap()
+            .is_empty());
     }
 }

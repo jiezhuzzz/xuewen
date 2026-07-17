@@ -87,7 +87,11 @@ async fn imported_pdf_becomes_keyword_searchable_by_body_text() {
     let (paper, m) = &out.results[0];
     assert!(paper.rel_path.ends_with(".pdf"));
     assert_eq!(m.field, "body");
-    assert!(m.snippet.contains("<mark>zanzibar</mark>"), "got: {}", m.snippet);
+    assert!(
+        m.snippet.contains("<mark>zanzibar</mark>"),
+        "got: {}",
+        m.snippet
+    );
 
     // 4. Status agrees everything is indexed.
     let st = svc.status().await.unwrap();

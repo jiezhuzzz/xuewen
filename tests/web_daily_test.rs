@@ -60,9 +60,13 @@ fn batch_paper(date: &str, rank: i64, id: &str, tldr: Option<&str>) -> store::Da
 #[tokio::test]
 async fn get_daily_returns_latest_batch() {
     let (dir, pool) = temp_pool().await;
-    store::replace_batch(&pool, "2026-07-09", &[batch_paper("2026-07-09", 1, "2507.1", None)])
-        .await
-        .unwrap();
+    store::replace_batch(
+        &pool,
+        "2026-07-09",
+        &[batch_paper("2026-07-09", 1, "2507.1", None)],
+    )
+    .await
+    .unwrap();
     let mut rich = batch_paper("2026-07-10", 1, "2507.2", Some("Short."));
     rich.summary = Some(xuewen::daily::tldr::Summary {
         tldr: "Short.".into(),
@@ -75,16 +79,17 @@ async fn get_daily_returns_latest_batch() {
     store::replace_batch(
         &pool,
         "2026-07-10",
-        &[
-            rich,
-            batch_paper("2026-07-10", 2, "2507.3", None),
-        ],
+        &[rich, batch_paper("2026-07-10", 2, "2507.3", None)],
     )
     .await
     .unwrap();
     let daily = dead_service(pool.clone());
-    let server =
-        TestServer::new(build_router_with_daily(pool, dir.path().to_path_buf(), daily)).unwrap();
+    let server = TestServer::new(build_router_with_daily(
+        pool,
+        dir.path().to_path_buf(),
+        daily,
+    ))
+    .unwrap();
 
     let resp = server.get("/api/daily").await;
     assert_eq!(resp.status_code(), 200);
@@ -107,8 +112,12 @@ async fn get_daily_returns_latest_batch() {
 async fn get_daily_empty_state_is_200_with_null_date() {
     let (dir, pool) = temp_pool().await;
     let daily = dead_service(pool.clone());
-    let server =
-        TestServer::new(build_router_with_daily(pool, dir.path().to_path_buf(), daily)).unwrap();
+    let server = TestServer::new(build_router_with_daily(
+        pool,
+        dir.path().to_path_buf(),
+        daily,
+    ))
+    .unwrap();
     let resp = server.get("/api/daily").await;
     assert_eq!(resp.status_code(), 200);
     let v: Value = resp.json();
@@ -149,8 +158,12 @@ async fn post_run_starts_then_conflicts_while_running() {
         &format!("{}/atom", mock.uri()),
         "http://127.0.0.1:1/pdf",
     );
-    let server =
-        TestServer::new(build_router_with_daily(pool, dir.path().to_path_buf(), daily)).unwrap();
+    let server = TestServer::new(build_router_with_daily(
+        pool,
+        dir.path().to_path_buf(),
+        daily,
+    ))
+    .unwrap();
 
     assert_eq!(server.post("/api/daily/run").await.status_code(), 202);
     assert_eq!(server.post("/api/daily/run").await.status_code(), 409);
