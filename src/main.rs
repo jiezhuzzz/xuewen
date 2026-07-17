@@ -192,6 +192,8 @@ enum Command {
     },
     /// Search the library from the terminal.
     Search {
+        /// Query; supports tag:/project:/is:starred/status:/in:/author: qualifiers
+        /// and "quoted phrases" (e.g. 'tag:nlp author:smith attention').
         query: String,
         /// Comma-separated fields: title,authors,abstract,body (default all).
         #[arg(long)]
@@ -890,16 +892,29 @@ async fn main() -> Result<()> {
             semantic_only,
         } => {
             let svc = SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await?;
+            let parsed = xuewen::search::query::parse(&query);
+            // `project:` carries a name; an unknown one matches no paper.
+            let project = match parsed.project {
+                Some(name) => Some(
+                    xuewen::db::find_project_by_name(&pool, &name)
+                        .await?
+                        .map(|p| p.id)
+                        .unwrap_or(name),
+                ),
+                None => None,
+            };
             let req = xuewen::search::SearchRequest {
-                q: query,
-                author_terms: Vec::new(),
-                fields: FieldSel::parse(fields.as_deref()),
+                q: parsed.text,
+                author_terms: parsed.authors,
+                fields: parsed
+                    .fields
+                    .unwrap_or_else(|| FieldSel::parse(fields.as_deref())),
                 keyword: !semantic_only,
                 semantic: !keyword_only,
-                status: None,
-                project: None,
-                tag: None,
-                starred: None,
+                status: parsed.status,
+                project,
+                tag: parsed.tag,
+                starred: parsed.starred.then_some(true),
             };
             let out = svc.search(&req).await?;
             if let Some(reason) = &out.semantic.reason {
