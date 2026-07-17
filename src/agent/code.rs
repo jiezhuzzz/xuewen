@@ -47,7 +47,7 @@ pub fn spawn_clone(
 
 /// The clone job body (awaitable directly in tests). Never panics; every
 /// outcome lands in `paper_code.status`.
-pub(crate) async fn run_clone(
+pub async fn run_clone(
     pool: SqlitePool,
     library_root: PathBuf,
     paper_id: String,

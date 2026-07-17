@@ -151,6 +151,11 @@ enum Command {
         #[command(subcommand)]
         cmd: TagCmd,
     },
+    /// Attach, inspect, or detach a paper's code repository
+    Code {
+        #[command(subcommand)]
+        cmd: CodeCmd,
+    },
     /// Star a paper.
     Star { paper: String },
     /// Un-star a paper.
@@ -263,6 +268,16 @@ enum TagCmd {
     Rm { name: String },
     /// List papers carrying a tag (or its prefix).
     Show { name: String },
+}
+
+#[derive(Subcommand)]
+enum CodeCmd {
+    /// Attach a repo (https URL) — clones now, pinned to HEAD
+    Set { paper: String, url: String },
+    /// Show the attached repo and its clone status
+    Status { paper: String },
+    /// Detach the repo and delete the local checkout
+    Rm { paper: String },
 }
 
 #[derive(Subcommand)]
@@ -738,6 +753,59 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Command::Code { cmd } => {
+            match cmd {
+                CodeCmd::Set { paper, url } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    let paper_id = paper.id.clone();
+                    xuewen::agent::code::validate_repo_url(&url).map_err(|e| anyhow::anyhow!(e))?;
+                    xuewen::db::upsert_paper_code_cloning(&pool, &paper_id, url.trim()).await?;
+                    // CLI clones inline so the outcome prints immediately.
+                    xuewen::agent::code::run_clone(
+                        pool.clone(),
+                        cfg.library_root.clone(),
+                        paper_id.clone(),
+                        url.trim().to_string(),
+                        cfg.ai.agent.max_repo_mb,
+                    )
+                    .await;
+                    match xuewen::db::get_paper_code(&pool, &paper_id).await? {
+                        Some(c) if c.status == "ready" => {
+                            println!(
+                                "attached {} at {}",
+                                c.repo_url,
+                                c.commit_sha.as_deref().unwrap_or("?")
+                            )
+                        }
+                        Some(c) => println!(
+                            "attach failed: {}",
+                            c.error.as_deref().unwrap_or("unknown error")
+                        ),
+                        None => println!("attach failed: no record"),
+                    }
+                }
+                CodeCmd::Status { paper } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    let paper_id = paper.id;
+                    match xuewen::db::get_paper_code(&pool, &paper_id).await? {
+                        None => println!("no repo attached"),
+                        Some(c) => println!(
+                            "{} — {}{}",
+                            c.repo_url,
+                            c.status,
+                            c.commit_sha.map(|s| format!(" @ {s}")).unwrap_or_default()
+                        ),
+                    }
+                }
+                CodeCmd::Rm { paper } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    let paper_id = paper.id;
+                    xuewen::agent::code::remove_checkout(&cfg.library_root, &paper_id).await;
+                    xuewen::db::delete_paper_code(&pool, &paper_id).await?;
+                    println!("detached");
+                }
+            }
+        }
         Command::Star { paper } => {
             let paper = db::find_one(&pool, &paper).await?;
             let label = paper.cite_key.as_deref().unwrap_or(&paper.id);
