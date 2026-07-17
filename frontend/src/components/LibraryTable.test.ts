@@ -124,4 +124,16 @@ describe('LibraryTable', () => {
     const row = screen.getByRole('button', { name: 'Second Paper' }).closest('tr')!;
     expect(row.dataset.cursor).toBe('true');
   });
+
+  it('hides sort arrows and disables sort buttons while a search is active', () => {
+    filters.q = 'fuzzing';
+    render(LibraryTable);
+    const year = screen.getByRole('button', { name: 'Year' });
+    expect(year).toBeDisabled();
+    expect(year.title).toMatch(/relevance/i);
+    // No aria-sort claim while relevance-ranked.
+    for (const th of screen.getAllByRole('columnheader')) {
+      expect(th).not.toHaveAttribute('aria-sort');
+    }
+  });
 });

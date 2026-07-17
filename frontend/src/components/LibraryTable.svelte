@@ -54,6 +54,10 @@
     void loadPapers();
   }
 
+  // While a query is active the server ranks by relevance; sort headers
+  // would lie, so they go inert (arrows off, buttons disabled, no aria-sort).
+  const searching = $derived(filters.q.trim() !== '');
+
   function authorsLine(p: PaperSummary): string {
     return p.authors.length > 2
       ? `${p.authors[0]} … ${p.authors[p.authors.length - 1]}`
@@ -110,7 +114,7 @@
   const th =
     'px-3 py-2 text-left text-caption font-semibold uppercase tracking-[.07em] text-stone-500 dark:text-stone-400';
   const sortBtn =
-    'inline-flex items-center gap-1 rounded uppercase tracking-[.07em] hover:text-ink dark:hover:text-stone-200';
+    'inline-flex items-center gap-1 rounded uppercase tracking-[.07em] hover:text-ink disabled:cursor-default disabled:hover:text-inherit dark:hover:text-stone-200';
   const td = 'px-3 py-2.5 align-top';
   const bulkBtn =
     'inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-stone-600 hover:bg-parchment disabled:opacity-50 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800';
@@ -191,38 +195,52 @@
           <th class="w-9"></th>
           <th
             class={`${th} w-[30%]`}
-            aria-sort={filters.sort === 'title' ? 'ascending' : undefined}
+            aria-sort={!searching && filters.sort === 'title' ? 'ascending' : undefined}
           >
-            <button type="button" class={sortBtn} onclick={() => setSort('title')}>
-              Title{#if filters.sort === 'title'}<ArrowUp size={11} />{/if}
+            <button
+              type="button"
+              class={sortBtn}
+              disabled={searching}
+              title={searching ? 'Sorted by relevance during search' : undefined}
+              onclick={() => setSort('title')}
+            >
+              Title{#if !searching && filters.sort === 'title'}<ArrowUp size={11} />{/if}
             </button>
           </th>
           <th class={`${th} w-[16%]`}>Authors</th>
           <th class={`${th} w-[14%]`}>Venue</th>
           <th
             class={`${th} w-16`}
-            aria-sort={filters.sort === 'year_desc'
+            aria-sort={!searching && filters.sort === 'year_desc'
               ? 'descending'
-              : filters.sort === 'year_asc'
+              : !searching && filters.sort === 'year_asc'
                 ? 'ascending'
                 : undefined}
           >
             <button
               type="button"
               class={sortBtn}
+              disabled={searching}
+              title={searching ? 'Sorted by relevance during search' : undefined}
               onclick={() => setSort(filters.sort === 'year_desc' ? 'year_asc' : 'year_desc')}
             >
               Year
-              {#if filters.sort === 'year_desc'}<ArrowDown size={11} />{:else if filters.sort === 'year_asc'}<ArrowUp size={11} />{/if}
+              {#if !searching}{#if filters.sort === 'year_desc'}<ArrowDown size={11} />{:else if filters.sort === 'year_asc'}<ArrowUp size={11} />{/if}{/if}
             </button>
           </th>
           <th class={th}>Tags</th>
           <th
             class={`${th} w-28`}
-            aria-sort={filters.sort === 'added_desc' ? 'descending' : undefined}
+            aria-sort={!searching && filters.sort === 'added_desc' ? 'descending' : undefined}
           >
-            <button type="button" class={sortBtn} onclick={() => setSort('added_desc')}>
-              Added{#if filters.sort === 'added_desc'}<ArrowDown size={11} />{/if}
+            <button
+              type="button"
+              class={sortBtn}
+              disabled={searching}
+              title={searching ? 'Sorted by relevance during search' : undefined}
+              onclick={() => setSort('added_desc')}
+            >
+              Added{#if !searching && filters.sort === 'added_desc'}<ArrowDown size={11} />{/if}
             </button>
           </th>
         </tr>

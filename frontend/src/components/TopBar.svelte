@@ -2,6 +2,7 @@
   import { Monitor, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
   import {
     filters,
+    library,
     loadPapers,
     openImport,
     stats,
@@ -15,6 +16,12 @@
   const themeLabel = $derived(
     theme.mode === 'light' ? 'Light' : theme.mode === 'dark' ? 'Dark' : 'System',
   );
+
+  // While searching, library.papers holds relevance-ranked search results
+  // rather than the whole library — show how many matched instead of the
+  // library-wide total.
+  const searching = $derived(filters.q.trim() !== '');
+  const matchCount = $derived(library.papers.length);
 </script>
 
 <header class="flex h-14 shrink-0 items-center justify-between border-b border-stone-200 bg-paper px-4 dark:border-stone-800 dark:bg-night">
@@ -34,7 +41,11 @@
   <div class="flex items-center gap-3">
     {#if stats.value}
       <div class="hidden items-center gap-3 text-xs text-stone-500 sm:flex dark:text-stone-400">
-        <span>{stats.value.total} papers</span>
+        {#if searching}
+          <span>{matchCount} {matchCount === 1 ? 'match' : 'matches'}</span>
+        {:else}
+          <span>{stats.value.total} papers</span>
+        {/if}
         {#if stats.value.needs_review > 0}
           <button
             type="button"
