@@ -136,4 +136,17 @@ describe('LibraryTable', () => {
       expect(th).not.toHaveAttribute('aria-sort');
     }
   });
+
+  it('shows em-dash placeholders for missing metadata and opens Identify from the pill', async () => {
+    const { identifyState } = await import('../lib/state.svelte');
+    library.papers = [
+      paper('p3', 'Mystery Paper', { authors: [], venue: null, year: null, status: 'needs_review' }),
+    ];
+    render(LibraryTable);
+    // authors + venue + year each show a placeholder dash
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
+    await userEvent.click(screen.getByRole('button', { name: /resolve metadata/i }));
+    expect(identifyState.open).toBe(true);
+    expect(identifyState.paperId).toBe('p3');
+  });
 });

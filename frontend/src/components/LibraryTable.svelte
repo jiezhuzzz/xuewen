@@ -10,6 +10,7 @@
     filters,
     library,
     loadPapers,
+    openIdentify,
     openTab,
     projects,
     removePapers,
@@ -295,15 +296,38 @@
               >
                 {p.title ?? '(untitled)'}
               </button>
-              <StatusPill status={p.status} />
+              {#if p.status !== 'resolved'}
+                <!-- The pill doubles as the repair affordance: no need to
+                     open the paper to fix its metadata. -->
+                <button
+                  type="button"
+                  aria-label="Resolve metadata"
+                  title="Resolve metadata…"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    openIdentify(p.id, { doi: p.doi, arxiv_id: p.arxiv_id });
+                  }}
+                  class="rounded-full hover:opacity-80"
+                >
+                  <StatusPill status={p.status} />
+                </button>
+              {:else}
+                <StatusPill status={p.status} />
+              {/if}
             </td>
             <td class={`${td} text-stone-500 dark:text-stone-400`}>
-              <div class="truncate" title={p.authors.join(', ')}>{authorsLine(p)}</div>
+              <div class="truncate" title={p.authors.join(', ')}>
+                {#if p.authors.length}{authorsLine(p)}{:else}<span class="text-stone-300 dark:text-stone-600">—</span>{/if}
+              </div>
             </td>
             <td class={`${td} text-stone-500 dark:text-stone-400`}>
-              <div class="truncate" title={p.venue ?? undefined}>{p.venue ?? ''}</div>
+              <div class="truncate" title={p.venue ?? undefined}>
+                {#if p.venue}{p.venue}{:else}<span class="text-stone-300 dark:text-stone-600">—</span>{/if}
+              </div>
             </td>
-            <td class={`${td} tabular-nums text-stone-500 dark:text-stone-400`}>{p.year ?? ''}</td>
+            <td class={`${td} tabular-nums text-stone-500 dark:text-stone-400`}>
+              {#if p.year !== null}{p.year}{:else}<span class="text-stone-300 dark:text-stone-600">—</span>{/if}
+            </td>
             <td class={td}><PaperRowTags paper={p} /></td>
             <td class={`${td} whitespace-nowrap text-stone-400 dark:text-stone-500`}>
               {p.added_at
