@@ -205,6 +205,51 @@ export function toggleInfo(): void {
   setInfoOpen(!viewer.infoOpen);
 }
 
+export type DockTab = 'details' | 'ask';
+
+/// The reader dock: one right-docked panel hosting the Details and Ask tabs
+/// (replaces the old separate info panel + chat float). Open state and tab
+/// are remembered across sessions.
+export const dock = $state<{ open: boolean; tab: DockTab }>({ open: false, tab: 'details' });
+
+const DOCK_KEY = 'xuewen-dock';
+
+/// Load the remembered dock state (default: closed, Details). Call once at startup.
+export function initDock(): void {
+  try {
+    const raw = localStorage.getItem(DOCK_KEY);
+    if (!raw) return;
+    const v = JSON.parse(raw) as { open?: unknown; tab?: unknown };
+    dock.open = v.open === true;
+    dock.tab = v.tab === 'ask' ? 'ask' : 'details';
+  } catch {
+    /* corrupted value — keep defaults */
+  }
+}
+
+function saveDock(): void {
+  localStorage.setItem(DOCK_KEY, JSON.stringify({ open: dock.open, tab: dock.tab }));
+}
+
+export function openDock(tab: DockTab): void {
+  dock.open = true;
+  dock.tab = tab;
+  saveDock();
+}
+
+export function closeDock(): void {
+  dock.open = false;
+  saveDock();
+}
+
+/// The `i`/`c` shortcut behavior: close if already open on that tab,
+/// otherwise open on (or switch to) it. The dock only exists over a PDF.
+export function toggleDock(tab: DockTab): void {
+  if (viewer.activeId === null) return;
+  if (dock.open && dock.tab === tab) closeDock();
+  else openDock(tab);
+}
+
 /// Activate the Library home tab (keeps PDF tabs open). Leaving the reader
 /// always leaves zen too — zen without a PDF is a blank screen.
 export function goHome(): void {
