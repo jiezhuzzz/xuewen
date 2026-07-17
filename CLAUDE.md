@@ -30,7 +30,7 @@ Tests & checks:
 
 ```sh
 cargo test                             # backend unit + integration tests
-cargo test -p xuewen-desktop           # desktop crate unit tests
+cargo test -p xuewen-desktop           # desktop crate unit tests (needs sidecar files — see note below)
 cargo test <name_substring>            # a single backend test
 cargo clippy                           # lint
 cargo fmt
@@ -46,7 +46,7 @@ nix flake check                        # builds packages + checks (a NixOS VM te
 
 Semantic search and the daily feed need a running **Qdrant** (`http://localhost:6333`) plus `[ai.embedding]` configured; keyword search, chat, and everything else do not.
 
-Desktop crate builds (`cargo build`/`test -p xuewen-desktop`) link against macOS system frameworks (WebKit, AppKit) through Tauri; if that fails inside the Nix shell, fall back to running the same command outside it (plain `cargo`, via a rustup toolchain) rather than fighting the sandboxed linker. To produce the `.dmg`: `bash desktop/scripts/prepare-sidecars.sh` (bundles Node + `pdftotext` as sidecars; needs Homebrew `poppler` and `dylibbundler`), then `cd desktop && npx @tauri-apps/cli build`.
+Desktop crate builds (`cargo build`/`test -p xuewen-desktop`) link against macOS system frameworks (WebKit, AppKit) through Tauri; if that fails inside the Nix shell, fall back to running the same command outside it (plain `cargo`, via a rustup toolchain) rather than fighting the sandboxed linker. They also require `desktop/binaries/pdftotext-<host triple>` and `node-<host triple>` to exist: `tauri-build` validates the `externalBin` paths at compile time, even for tests, so on a clean checkout (that directory is gitignored) the build fails with `resource path binaries/pdftotext-aarch64-apple-darwin doesn't exist`. Run `bash desktop/scripts/prepare-sidecars.sh` to create them properly, or — as a quick local unblock — copy any `pdftotext`/`node` executables to those paths (only their existence matters for compiling). To produce the `.dmg`: `prepare-sidecars.sh` (bundles Node + `pdftotext` as sidecars; needs Homebrew `poppler` and `dylibbundler`), then `cd desktop && npx @tauri-apps/cli build`.
 
 ## Architecture
 
