@@ -58,24 +58,12 @@ fn run() -> Result<()> {
     // the app's whole life.
     let rt = tokio::runtime::Runtime::new()?;
     tauri::async_runtime::set(rt.handle().clone());
-    let addr = rt.block_on(async {
-        let pool = xuewen::db::connect(&cfg.database_url).await?;
-        let services = xuewen::server::spawn_services(&cfg, pool.clone()).await?;
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-        let addr = listener.local_addr()?;
-        let server = xuewen::server::serve_on(listener, pool, &cfg, services);
-        tokio::spawn(async move {
-            if let Err(e) = server.await {
-                tracing::error!("server exited: {e:#}");
-            }
-        });
-        anyhow::Ok(addr)
-    })?;
-    tracing::info!("desktop backend on http://{addr}");
 
-    let url: tauri::Url = format!("http://{addr}")
-        .parse()
-        .context("building backend url")?;
+    // Backend bring-up happens inside `.setup()`, which Tauri runs *after*
+    // plugin initialization: a second app launch is terminated by the
+    // single-instance plugin before it ever touches the SQLite db, spawns
+    // services, or binds a port.
+    let setup_cfg_path = cfg_path.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // Second launch: focus the existing window instead of racing the
@@ -86,13 +74,37 @@ fn run() -> Result<()> {
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(move |app| {
-            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url.clone()))
+            let addr = tauri::async_runtime::block_on(async {
+                let pool = xuewen::db::connect(&cfg.database_url).await?;
+                let services = xuewen::server::spawn_services(&cfg, pool.clone()).await?;
+                let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+                let addr = listener.local_addr()?;
+                let server = xuewen::server::serve_on(listener, pool, &cfg, services);
+                tokio::spawn(async move {
+                    if let Err(e) = server.await {
+                        tracing::error!("server exited: {e:#}");
+                    }
+                });
+                anyhow::Ok(addr)
+            })
+            .with_context(|| format!("config file: {}", setup_cfg_path.display()))?;
+            tracing::info!("desktop backend on http://{addr}");
+
+            let url: tauri::Url = format!("http://{addr}")
+                .parse()
+                .context("building backend url")?;
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))
                 .title("Xuewen")
                 .inner_size(1280.0, 800.0)
                 .build()?;
             Ok(())
         })
         .run(tauri::generate_context!())
-        .context("running tauri application")?;
+        .with_context(|| {
+            format!(
+                "running tauri application (config file: {})",
+                cfg_path.display()
+            )
+        })?;
     Ok(())
 }
