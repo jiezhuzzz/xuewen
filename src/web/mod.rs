@@ -278,8 +278,35 @@ pub async fn serve(
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("xuewen serving on http://{addr}");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
+}
+
+/// Resolve on SIGINT or SIGTERM. The container runs the server as PID 1,
+/// which gets no default signal disposition — without an explicit handler
+/// `docker stop` and Kubernetes rollouts hang the full grace period and
+/// end in SIGKILL.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install the Ctrl-C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install the SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
 }
 
 /// Whether `host` is a loopback bind (safe to serve without auth). Non-IP
