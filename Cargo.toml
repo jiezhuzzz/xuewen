@@ -40,3 +40,6 @@ tempfile = "3"
 printpdf = "0.7"
 wiremock = "0.6"
 axum-test = "17"
+
+[workspace]
+members = ["."]
