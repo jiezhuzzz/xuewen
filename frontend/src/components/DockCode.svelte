@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getPaperCode, removePaperCode, setPaperCode } from '../lib/api';
   import type { PaperCodeStatus } from '../lib/types';
+  import ConfirmButtons from './ConfirmButtons.svelte';
   import Spinner from './Spinner.svelte';
 
   let { id }: { id: string } = $props();
@@ -10,6 +11,7 @@
   let url = $state('');
   let busy = $state(false);
   let error = $state<string | null>(null);
+  let confirmingDetach = $state(false);
 
   async function refresh() {
     try {
@@ -60,6 +62,7 @@
       error = (e as Error).message;
     } finally {
       busy = false;
+      confirmingDetach = false;
     }
   }
 
@@ -103,12 +106,20 @@
       {:else}
         <span class="rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400">{code.error ?? 'clone failed'}</span>
       {/if}
-      <button
-        type="button"
-        onclick={() => void detach()}
-        disabled={busy}
-        class="text-[11px] text-stone-500 underline-offset-2 hover:underline dark:text-stone-400"
-      >Remove</button>
+      {#if confirmingDetach}
+        <ConfirmButtons
+          confirmLabel="Remove repo"
+          onConfirm={() => void detach()}
+          onCancel={() => (confirmingDetach = false)}
+        />
+      {:else}
+        <button
+          type="button"
+          onclick={() => (confirmingDetach = true)}
+          disabled={busy}
+          class="text-[11px] text-stone-500 underline-offset-2 hover:underline dark:text-stone-400"
+        >Remove</button>
+      {/if}
     </div>
   {/if}
   {#if error}
