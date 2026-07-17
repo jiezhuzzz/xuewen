@@ -23,6 +23,7 @@
   import { mergeStructured } from '../lib/refMerge';
   import { resolveAuthorYearMarkers } from '../lib/textCitations';
   import { reader } from '../lib/readerState.svelte';
+  import { pdfAppearance } from '../lib/state.svelte';
   import { createPillHide } from '../lib/pillHide.svelte';
   import { Spring } from 'svelte/motion';
   import { prefersReducedMotion, SPRINGS } from '../lib/motion';
@@ -189,8 +190,14 @@
            framework); TilingLayer draws crisp visible tiles at the real zoom.
            This mirrors the ready-made viewer and is the perf fix — do NOT
            remove scale={1} or pages re-render fully on every zoom. -->
-      <RenderLayer {documentId} pageIndex={page.pageIndex} scale={1} class="pointer-events-none" />
-      <TilingLayer {documentId} pageIndex={page.pageIndex} class="pointer-events-none" />
+      <!-- Dark-mode dim/invert (app.css, .dark-scoped) wraps ONLY the raster
+           layers: selection/search highlights and citation overlays keep
+           their true colors, and nothing position:fixed lives under the
+           filter (a filter creates a new containing block). -->
+      <div class="pointer-events-none absolute inset-0" data-pdf-appearance={pdfAppearance.mode}>
+        <RenderLayer {documentId} pageIndex={page.pageIndex} scale={1} class="pointer-events-none" />
+        <TilingLayer {documentId} pageIndex={page.pageIndex} class="pointer-events-none" />
+      </div>
       <SelectionLayer {documentId} pageIndex={page.pageIndex} />
       <SearchLayer
         {documentId}

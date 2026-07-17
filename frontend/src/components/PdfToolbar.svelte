@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { ChevronDown, ChevronLeft, ChevronRight, PanelLeft, Search, ZoomIn, ZoomOut } from 'lucide-svelte';
+  import { ChevronDown, ChevronLeft, ChevronRight, Contrast, PanelLeft, Search, ZoomIn, ZoomOut } from 'lucide-svelte';
   import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { DUR, dur, EASE } from '../lib/motion';
-  import { ui, viewer } from '../lib/state.svelte';
+  import { cyclePdfAppearance, pdfAppearance, ui, viewer } from '../lib/state.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
   import { clampPage } from '../lib/pageNav';
   import { formatScale, isActivePreset, ZOOM_PRESETS } from '../lib/zoomPresets';
@@ -190,6 +190,18 @@
   </button>
 
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
+
+  <!-- Only offered in dark mode (hidden dark:inline-flex): the dim/invert
+       CSS is .dark-scoped, so in light mode the button would do nothing. -->
+  <button
+    type="button"
+    class={`${pdfAppearance.mode !== 'normal' ? activeBtn : btn} !hidden dark:!inline-flex`}
+    aria-label={`Page appearance: ${pdfAppearance.mode}`}
+    title={`Page appearance: ${pdfAppearance.mode} (click to cycle)`}
+    onclick={cyclePdfAppearance}
+  >
+    <Contrast size={16} />
+  </button>
 
   <button
     type="button"

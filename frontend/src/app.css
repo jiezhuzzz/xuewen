@@ -59,6 +59,19 @@ body {
   font-family: var(--font-sans);
 }
 
+/* Dark-mode PDF page appearance (reader toolbar cycles it): dim eases the
+   glare of the white page; invert flips it dark (0.93 keeps blacks as dark
+   gray, and hue-rotate restores color hues). Scoped to .dark so the
+   preference is inert in light mode, and applied only to the raster
+   render/tiling layers so selection, search, and citation overlays keep
+   their colors and positioning. */
+.dark [data-pdf-appearance='dim'] {
+  filter: brightness(0.85);
+}
+.dark [data-pdf-appearance='invert'] {
+  filter: invert(0.93) hue-rotate(180deg);
+}
+
 /* Theme toggles use the View Transitions API for a soft crossfade; kill it
    for users who asked for less motion. */
 @media (prefers-reduced-motion: reduce) {

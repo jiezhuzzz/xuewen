@@ -271,6 +271,29 @@ export function toggleSidebar(): void {
   ui.sidebarOpen = !ui.sidebarOpen;
 }
 
+/// Dark-mode page appearance for the PDF reader: dim eases the glare of the
+/// white page, invert flips it dark. Applied via dark-scoped CSS (app.css)
+/// on the raster layers only, so the preference is inert in light mode.
+export type PdfAppearance = 'normal' | 'dim' | 'invert';
+export const pdfAppearance = $state<{ mode: PdfAppearance }>({ mode: 'normal' });
+const PDF_APPEARANCE_KEY = 'xuewen-pdf-appearance';
+const PDF_APPEARANCE_CYCLE: PdfAppearance[] = ['normal', 'dim', 'invert'];
+
+export function initPdfAppearance(): void {
+  const saved = localStorage.getItem(PDF_APPEARANCE_KEY);
+  if (saved === 'normal' || saved === 'dim' || saved === 'invert') pdfAppearance.mode = saved;
+}
+
+export function cyclePdfAppearance(): void {
+  const idx = PDF_APPEARANCE_CYCLE.indexOf(pdfAppearance.mode);
+  pdfAppearance.mode = PDF_APPEARANCE_CYCLE[(idx + 1) % PDF_APPEARANCE_CYCLE.length];
+  try {
+    localStorage.setItem(PDF_APPEARANCE_KEY, pdfAppearance.mode);
+  } catch {
+    /* no localStorage — the mode still applies, only persistence is lost */
+  }
+}
+
 /// Below ~lg the fixed 304px list pane crushes the reader, so it starts
 /// collapsed there and follows live crossings of the breakpoint. `[`, the
 /// edge-peek button, and the TopBar toggle still override at any width —

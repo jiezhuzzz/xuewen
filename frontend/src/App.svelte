@@ -23,6 +23,7 @@
     dock,
     identifyState,
     initDock,
+    initPdfAppearance,
     initResponsiveSidebar,
     initTabs,
     initTheme,
@@ -40,6 +41,7 @@
     initTheme();
     initDock();
     initResponsiveSidebar();
+    initPdfAppearance();
     void initTabs();
     loadStats();
     loadProjects();

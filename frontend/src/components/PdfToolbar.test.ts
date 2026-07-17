@@ -8,7 +8,9 @@ vi.mock('@embedpdf/plugin-scroll/svelte', () => ({
   useScroll: () => ({ state: { currentPage: 1, totalPages: 3 }, provides: null }),
 }));
 
+import userEvent from '@testing-library/user-event';
 import PdfToolbar from './PdfToolbar.svelte';
+import { pdfAppearance } from '../lib/state.svelte';
 
 const pill = {
   visible: true,
@@ -18,6 +20,16 @@ const pill = {
 } as never;
 
 describe('PdfToolbar', () => {
+  it('cycles the dark-mode page appearance from its toolbar button', async () => {
+    pdfAppearance.mode = 'normal';
+    render(PdfToolbar, { props: { documentId: 'd1', pill } });
+    const btn = screen.getByRole('button', { name: /page appearance/i });
+    await userEvent.click(btn);
+    expect(pdfAppearance.mode).toBe('dim');
+    await userEvent.click(btn);
+    expect(pdfAppearance.mode).toBe('invert');
+  });
+
   it('gives icon-only nav and zoom buttons hover tooltips', () => {
     render(PdfToolbar, { props: { documentId: 'd1', pill } });
     for (const name of ['Previous page', 'Next page', 'Zoom out', 'Zoom in']) {
