@@ -11,6 +11,8 @@ if (req.question.includes('fail')) {
 } else if (req.question.includes('die')) {
   process.stderr.write('stub exploded\n');
   process.exit(3); // exits without done/error
+} else if (req.question.includes('empty')) {
+  say({ type: 'done' });
 } else {
   say({ type: 'tool', name: 'Read', detail: 'paper.txt' });
   say({ type: 'delta', text: 'Hel' });

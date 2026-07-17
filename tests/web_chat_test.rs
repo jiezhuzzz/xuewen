@@ -99,6 +99,29 @@ async fn send_error_persists_nothing() {
 }
 
 #[tokio::test]
+async fn send_with_empty_reply_errors_and_persists_nothing() {
+    let (pool, root) = common::pool_and_root_with_paper("p1").await;
+    let server = TestServer::new(xuewen::web::build_router_with_agent(
+        pool.clone(),
+        root,
+        stub_agent(),
+    ))
+    .unwrap();
+    let resp = server
+        .post("/api/papers/p1/chat")
+        .json(&json!({"model_id": "claude_code", "message": "answer with empty please"}))
+        .await;
+    resp.assert_status_ok();
+    let body = resp.text();
+    assert!(body.contains("event: error"));
+    assert!(body.contains("empty reply"));
+    assert!(xuewen::chat::store::list(&pool, "p1")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn send_validates_model_message_paper_and_config() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
     let plain = TestServer::new(xuewen::web::build_router(pool.clone(), root.clone())).unwrap();
