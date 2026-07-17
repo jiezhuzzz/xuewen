@@ -29,46 +29,11 @@ export const translateBox = $state<{
   error: null,
 });
 
-const STORAGE_KEY = 'xuewen.translateMode';
-
-function initialMode(): 'auto' | 'manual' {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY);
-    if (v === 'auto' || v === 'manual') return v;
-  } catch {
-    /* no localStorage (SSR/test) */
-  }
-  return appSettings.translate.trigger ?? 'auto';
-}
-
-/// The user's selection-translate trigger preference, persisted in
-/// localStorage and seeded from the server's `[translate].trigger` default.
-export const translateMode = $state<{ value: 'auto' | 'manual' }>({ value: initialMode() });
-
-export function setTranslateMode(m: 'auto' | 'manual'): void {
-  translateMode.value = m;
-  try {
-    localStorage.setItem(STORAGE_KEY, m);
-  } catch {
-    /* ignore */
-  }
-}
-
-/// Reconciles `translateMode` against the server's `[translate].trigger`
-/// default once settings have loaded. `initialMode()` runs at module
-/// evaluation time — before the async `loadSettings()` populates
-/// `appSettings.translate.trigger` — so a first-time user (no stored
-/// localStorage pref) always got the hardcoded 'auto' fallback. Call this
-/// after `loadSettings()` resolves to apply the server default; a user who
-/// has ever explicitly chosen a mode (stored in localStorage) keeps it.
-export function syncTranslateModeFromSettings(): void {
-  try {
-    if (localStorage.getItem(STORAGE_KEY) !== null) return; // explicit stored pref — keep it
-  } catch {
-    /* no localStorage */
-  }
-  const t = appSettings.translate.trigger;
-  if (t === 'auto' || t === 'manual') translateMode.value = t;
+/// Selection-translate trigger. Config-only: `[translate].trigger` in
+/// xuewen.toml is the single source of truth (the old in-app 譯 toggle and
+/// its localStorage state are gone).
+export function translateTrigger(): 'auto' | 'manual' {
+  return appSettings.translate.trigger === 'manual' ? 'manual' : 'auto';
 }
 
 // Guards against a slower, superseded request clobbering a newer one's

@@ -16,7 +16,6 @@
   import { loadChatModels, loadThread } from './lib/chat.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
-  import { syncTranslateModeFromSettings } from './lib/translate.svelte';
   import {
     dock,
     identifyState,
@@ -38,7 +37,7 @@
     loadProjects();
     loadPapers();
     loadSearchStatus();
-    void loadSettings().then(syncTranslateModeFromSettings);
+    void loadSettings();
     loadChatModels();
   });
 

@@ -27,7 +27,7 @@
   import { Spring } from 'svelte/motion';
   import { prefersReducedMotion, SPRINGS } from '../lib/motion';
   import { appSettings } from '../lib/state.svelte';
-  import { requestTranslate, translateMode } from '../lib/translate.svelte';
+  import { requestTranslate, translateTrigger } from '../lib/translate.svelte';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
 
@@ -167,7 +167,7 @@
           bubble = null;
           return;
         }
-        if (translateMode.value === 'auto') {
+        if (translateTrigger() === 'auto') {
           bubble = null;
           void requestTranslate(text, at);
         } else {
