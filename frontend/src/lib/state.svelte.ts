@@ -243,6 +243,7 @@ export function toggleDock(tab: DockTab): void {
 export function goHome(): void {
   viewer.activeId = null;
   ui.zen = false;
+  saveTabs();
 }
 
 /// Zen requires an active PDF tab; toggling from home is a no-op.
@@ -521,6 +522,7 @@ export function openTab(p: PaperSummary): void {
   }
   viewer.activeId = p.id;
   selection.id = p.id;
+  saveTabs();
 }
 
 export function closeTab(id: string): void {
@@ -532,6 +534,75 @@ export function closeTab(id: string): void {
     viewer.activeId = viewer.tabs[Math.max(0, idx - 1)]?.id ?? null;
   }
   if (viewer.tabs.length === 0) ui.zen = false;
+  saveTabs();
+}
+
+/// Switch the reader to an already-open tab (the tab strip's click target).
+export function activateTab(id: string | null): void {
+  viewer.activeId = id;
+  saveTabs();
+}
+
+const TABS_KEY = 'xuewen-tabs';
+
+function saveTabs(): void {
+  try {
+    localStorage.setItem(
+      TABS_KEY,
+      JSON.stringify({
+        tabs: viewer.tabs.map((t) => ({ id: t.id, title: t.title })),
+        activeId: viewer.activeId,
+      }),
+    );
+  } catch {
+    /* no localStorage — tabs still work, only persistence is lost */
+  }
+}
+
+/// Restore the remembered tab set (and active tab) at startup, then prune
+/// ids the server no longer knows — a paper deleted or purged since the last
+/// session must not resurrect as a dead tab. Restore is immediate (titles
+/// come from storage); the validation round-trip only removes losers after.
+export async function initTabs(): Promise<void> {
+  let parsed: { tabs?: unknown; activeId?: unknown };
+  try {
+    const raw = localStorage.getItem(TABS_KEY);
+    if (!raw) return;
+    parsed = JSON.parse(raw) as { tabs?: unknown; activeId?: unknown };
+  } catch {
+    return; // corrupted value — start with no tabs
+  }
+  const tabs = Array.isArray(parsed.tabs)
+    ? (parsed.tabs as unknown[]).filter(
+        (t): t is Tab =>
+          !!t && typeof (t as Tab).id === 'string' && typeof (t as Tab).title === 'string',
+      )
+    : [];
+  if (tabs.length === 0) return;
+  viewer.tabs = tabs;
+  viewer.activeId =
+    typeof parsed.activeId === 'string' && tabs.some((t) => t.id === parsed.activeId)
+      ? parsed.activeId
+      : null;
+  const alive = new Set(
+    (
+      await Promise.all(
+        tabs.map(async (t) => {
+          try {
+            await getPaper(t.id);
+            return t.id;
+          } catch {
+            return null;
+          }
+        }),
+      )
+    ).filter((id): id is string => id !== null),
+  );
+  if (alive.size !== tabs.length) {
+    viewer.tabs = viewer.tabs.filter((t) => alive.has(t.id));
+    if (viewer.activeId !== null && !alive.has(viewer.activeId)) viewer.activeId = null;
+    saveTabs();
+  }
 }
 
 export async function loadDetail(id: string): Promise<PaperDetail> {

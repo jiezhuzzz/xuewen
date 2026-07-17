@@ -22,6 +22,7 @@
     dock,
     identifyState,
     initDock,
+    initTabs,
     initTheme,
     loadPapers,
     loadProjects,
@@ -35,6 +36,7 @@
   onMount(() => {
     initTheme();
     initDock();
+    void initTabs();
     loadStats();
     loadProjects();
     loadPapers();
