@@ -1,3 +1,6 @@
+mod bootstrap;
+mod bundle;
+
 fn main() {
     tauri::Builder::default()
         .run(tauri::generate_context!())
