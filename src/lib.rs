@@ -17,6 +17,7 @@ pub mod pipeline;
 pub mod refresh;
 pub mod resolve;
 pub mod search;
+pub mod server;
 pub mod summary;
 pub mod translate;
 pub mod watcher;

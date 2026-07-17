@@ -244,43 +244,6 @@ fn router_with(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Bind `host:port` and serve the router until the process is stopped.
-#[allow(clippy::too_many_arguments)]
-pub async fn serve(
-    host: &str,
-    port: u16,
-    pool: SqlitePool,
-    library_root: PathBuf,
-    ingest: Arc<Ingest>,
-    proxy_login_url: Option<String>,
-    search: Option<Arc<crate::search::SearchService>>,
-    daily: Option<Arc<crate::daily::DailyService>>,
-    agent: Option<Arc<crate::agent::AgentService>>,
-    citations: Arc<crate::citations::CitationsService>,
-    translate: Option<Arc<crate::translate::TranslateService>>,
-    ui: crate::config::UiConfig,
-) -> Result<()> {
-    let addr = format!("{host}:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("xuewen serving on http://{addr}");
-    serve_on(
-        listener,
-        AppState {
-            pool,
-            library_root,
-            ingest: Some(ingest),
-            proxy_login_url,
-            search,
-            daily,
-            agent,
-            citations,
-            translate,
-            ui,
-        },
-    )
-    .await
-}
-
 /// Serve the full router on a listener the caller has already bound —
 /// lets the caller bind port 0 and learn the real port from
 /// `listener.local_addr()` before starting the server.
