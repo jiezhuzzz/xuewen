@@ -1,6 +1,6 @@
 <script lang="ts">
   import { closeTranslate, requestTranslate, translateBox } from '../lib/translate.svelte';
-  import { appSettings, copyText } from '../lib/state.svelte';
+  import { appSettings, copyText, openDock } from '../lib/state.svelte';
   import { chat } from '../lib/chat.svelte';
   import { toast } from '../lib/toasts.svelte';
 
@@ -34,7 +34,7 @@
   }
   function askAbout() {
     chat.draft = `Explain this passage:\n\n"${translateBox.source}"`;
-    chat.open = true;
+    openDock('ask');
     closeTranslate();
   }
   function onWindowKeydown(e: KeyboardEvent) {

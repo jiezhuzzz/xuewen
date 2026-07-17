@@ -1,14 +1,6 @@
 <script lang="ts">
-  import { Eraser, Minus, SendHorizontal, Square } from 'lucide-svelte';
-  import { scale } from 'svelte/transition';
-  import { DUR, dur } from '../lib/motion';
-  import {
-    chat,
-    clearChatThread,
-    sendChatMessage,
-    setChatModel,
-    stopChatStream,
-  } from '../lib/chat.svelte';
+  import { Eraser, SendHorizontal, Square } from 'lucide-svelte';
+  import { chat, clearChatThread, sendChatMessage, setChatModel, stopChatStream } from '../lib/chat.svelte';
   import ConfirmButtons from './ConfirmButtons.svelte';
 
   let transcript = $state<HTMLElement | null>(null);
@@ -26,13 +18,6 @@
 
   let confirmingClear = $state(false);
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      // The panel owns this Esc — it must not also exit zen.
-      e.stopPropagation();
-      chat.open = false;
-    }
-  }
   function onComposerKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -41,17 +26,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -- the section
-     is not an interaction target; it delegates Esc bubbling up from the
-     focused composer/controls so the panel can close itself. -->
-<section
-  role="complementary"
-  aria-label="Paper chat"
-  onkeydown={onKeydown}
-  transition:scale={{ start: 0.92, duration: dur(DUR.base) }}
-  style="transform-origin: bottom right"
-  class="absolute bottom-5 right-5 z-[45] flex h-[560px] max-h-[80%] w-[400px] max-w-[calc(100%-2.5rem)] flex-col overflow-hidden rounded-xl border border-stone-200 bg-paper shadow-2xl dark:border-stone-800 dark:bg-soot"
->
+<div class="flex min-h-0 flex-1 flex-col">
   <header class="flex shrink-0 items-center gap-2 border-b border-stone-200 px-3 py-2 dark:border-stone-800">
     <select
       aria-label="Model"
@@ -70,15 +45,6 @@
       class="rounded-lg p-1.5 text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
     >
       <Eraser size={15} />
-    </button>
-    <button
-      type="button"
-      aria-label="Minimize chat"
-      title="Minimize (Esc)"
-      onclick={() => (chat.open = false)}
-      class="rounded-lg p-1.5 text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
-    >
-      <Minus size={15} />
     </button>
   </header>
 
@@ -162,4 +128,4 @@
       </button>
     {/if}
   </footer>
-</section>
+</div>

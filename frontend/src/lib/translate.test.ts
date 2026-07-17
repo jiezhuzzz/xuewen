@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { requestTranslate, translateBox, closeTranslate } from './translate.svelte';
+import { requestTranslate, translateBox, closeTranslate, translateTrigger } from './translate.svelte';
+import { appSettings } from './state.svelte';
 
 beforeEach(() => {
   closeTranslate();
@@ -78,5 +79,14 @@ describe('requestTranslate', () => {
     expect(translateBox.translation).toBe('B translated');
     expect(translateBox.loading).toBe(false);
     expect(translateBox.error).toBeNull();
+  });
+});
+
+describe('translateTrigger', () => {
+  it('reads the trigger from server settings, defaulting to auto', () => {
+    appSettings.translate = { enabled: true, providers: ['llm'], default_provider: 'llm', target_lang: 'zh', trigger: 'manual' };
+    expect(translateTrigger()).toBe('manual');
+    appSettings.translate = { enabled: true, providers: ['llm'], default_provider: 'llm', target_lang: 'zh' };
+    expect(translateTrigger()).toBe('auto');
   });
 });

@@ -69,7 +69,8 @@ database_url  = "sqlite:./library.db"
 #[translate]
 #target_lang = "zh"     # translate INTO this language (Simplified Chinese)
 #provider    = "llm"    # default provider when both are configured: "llm" | "deepl"
-#trigger     = "auto"   # default reader mode: "auto" (popup) | "manual" (bubble)
+#trigger     = "auto"   # "auto" translates on selection; "manual" shows a 譯 bubble
+#                       # to click. This is the only place the mode is set.
 #
 # LLM provider — reuses the shared [ai] endpoint (like [ai.summary]).
 #[ai.translate]

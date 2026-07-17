@@ -1,15 +1,16 @@
 import { tick } from 'svelte';
-import { chat, toggleChat } from './chat.svelte';
+import { chat } from './chat.svelte';
 import { openFind } from './readerState.svelte';
 import {
+  closeDock,
   closeTab,
+  dock,
   identifyState,
   library,
   openTab,
   selection,
   selectPaper,
-  setInfoOpen,
-  toggleInfo,
+  toggleDock,
   toggleSidebar,
   toggleZen,
   ui,
@@ -75,8 +76,7 @@ export function handleKeydown(e: KeyboardEvent): void {
   }
   if (e.key === 'Escape') {
     if (ui.paletteOpen) ui.paletteOpen = false;
-    else if (chat.open) chat.open = false;
-    else if (viewer.infoOpen) setInfoOpen(false);
+    else if (dock.open && viewer.activeId !== null) closeDock();
     else if (ui.zen) ui.zen = false;
     return;
   }
@@ -100,10 +100,10 @@ export function handleKeydown(e: KeyboardEvent): void {
       toggleSidebar();
       break;
     case 'c':
-      toggleChat();
+      if (chat.available) toggleDock('ask');
       break;
     case 'i':
-      if (viewer.activeId) toggleInfo();
+      toggleDock('details');
       break;
     case 'z':
       toggleZen();

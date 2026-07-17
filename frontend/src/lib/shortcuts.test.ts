@@ -2,7 +2,7 @@ import { tick } from 'svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { handleKeydown, isEditable } from './shortcuts';
 import { chat } from './chat.svelte';
-import { identifyState, library, selection, ui, viewer } from './state.svelte';
+import { dock, identifyState, library, selection, ui, viewer } from './state.svelte';
 import { reader } from './readerState.svelte';
 import type { PaperSummary } from './types';
 
@@ -24,15 +24,16 @@ beforeEach(() => {
   library.papers = [paper('a'), paper('b'), paper('c')];
   viewer.tabs = [];
   viewer.activeId = null;
-  viewer.infoOpen = false;
+  dock.open = false;
+  dock.tab = 'details';
   selection.id = null;
   ui.zen = false;
   ui.paletteOpen = false;
   ui.sidebarOpen = true;
   ui.importOpen = false;
   identifyState.open = false;
-  chat.open = false;
   chat.available = false;
+  localStorage.clear();
   for (const k of Object.keys(reader.find)) delete reader.find[k];
 });
 
@@ -102,52 +103,55 @@ describe('handleKeydown', () => {
     expect(ui.zen).toBe(false);
   });
 
-  it('c toggles the chat only with an active tab and available chat', () => {
+  it('c toggles the dock on Ask only with an active tab and available chat', () => {
     handleKeydown(key('c'));
-    expect(chat.open).toBe(false);
+    expect(dock.open).toBe(false);
     chat.available = true;
     handleKeydown(key('j'));
     handleKeydown(key('Enter'));
     handleKeydown(key('c'));
-    expect(chat.open).toBe(true);
+    expect(dock.open).toBe(true);
+    expect(dock.tab).toBe('ask');
     handleKeydown(key('c'));
-    expect(chat.open).toBe(false);
+    expect(dock.open).toBe(false);
   });
 
-  it('Escape closes the chat before exiting zen', () => {
+  it('Escape closes the dock before exiting zen', () => {
     chat.available = true;
     handleKeydown(key('j'));
     handleKeydown(key('Enter'));
     handleKeydown(key('z'));
     handleKeydown(key('c'));
     expect(ui.zen).toBe(true);
-    expect(chat.open).toBe(true);
+    expect(dock.open).toBe(true);
     handleKeydown(key('Escape'));
-    expect(chat.open).toBe(false);
+    expect(dock.open).toBe(false);
     expect(ui.zen).toBe(true);
     handleKeydown(key('Escape'));
     expect(ui.zen).toBe(false);
   });
 
-  it('i toggles the info panel only with an active tab', () => {
+  it('i toggles the dock on Details only with an active tab', () => {
     handleKeydown(key('i'));
-    expect(viewer.infoOpen).toBe(false); // no active paper
+    expect(dock.open).toBe(false); // no active paper
     handleKeydown(key('j'));
     handleKeydown(key('Enter'));
     handleKeydown(key('i'));
-    expect(viewer.infoOpen).toBe(true);
+    expect(dock.open).toBe(true);
+    expect(dock.tab).toBe('details');
     handleKeydown(key('i'));
-    expect(viewer.infoOpen).toBe(false);
+    expect(dock.open).toBe(false);
   });
 
-  it('Escape closes the info panel before exiting zen', () => {
+  it('Escape closes a dock opened directly (not via a shortcut) before exiting zen', () => {
     handleKeydown(key('j'));
     handleKeydown(key('Enter'));
     handleKeydown(key('z'));
-    viewer.infoOpen = true;
+    dock.open = true;
+    dock.tab = 'details';
     expect(ui.zen).toBe(true);
     handleKeydown(key('Escape'));
-    expect(viewer.infoOpen).toBe(false);
+    expect(dock.open).toBe(false);
     expect(ui.zen).toBe(true);
     handleKeydown(key('Escape'));
     expect(ui.zen).toBe(false);

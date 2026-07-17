@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { chat } from '../lib/chat.svelte';
 import { appSettings, identifyState, library, openTab, removePaper, viewer } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
-import InfoPanel from './InfoPanel.svelte';
+import DockDetails from './DockDetails.svelte';
 
 function paper(id: string): PaperSummary {
   return {
@@ -56,9 +56,8 @@ function detail(id: string) {
   };
 }
 
-describe('InfoPanel', () => {
+describe('DockDetails', () => {
   beforeEach(() => {
-    viewer.infoOpen = true;
     appSettings.foldAbstract = false;
     identifyState.open = false;
     identifyState.paperId = null;
@@ -73,7 +72,7 @@ describe('InfoPanel', () => {
   });
 
   it('renders the title, identifier pills, and abstract', async () => {
-    render(InfoPanel, { props: { id: 'info1' } });
+    render(DockDetails, { props: { id: 'info1' } });
     expect(await screen.findByText('Attention')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /DOI/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /arXiv/ })).toBeInTheDocument();
@@ -81,23 +80,13 @@ describe('InfoPanel', () => {
   });
 
   it('collapses the abstract', async () => {
-    render(InfoPanel, { props: { id: 'info1' } });
+    render(DockDetails, { props: { id: 'info1' } });
     await screen.findByText('Attention');
     await userEvent.click(screen.getByRole('button', { name: /Abstract/ }));
     expect(screen.queryByText(/dominant sequence transduction/)).not.toBeInTheDocument();
   });
 
-  it('the close button remembers the panel as closed', async () => {
-    render(InfoPanel, { props: { id: 'info1' } });
-    await screen.findByText('Attention');
-    await userEvent.click(screen.getByRole('button', { name: /Close details/ }));
-    expect(viewer.infoOpen).toBe(false);
-    expect(localStorage.getItem('xuewen-info-open')).toBe('0');
-  });
-
   it('renders the LLM summary when present', async () => {
-    // Use a fresh id: loadDetail caches by id, and 'info1' is already cached
-    // (without a summary) by earlier tests in this file.
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -110,15 +99,14 @@ describe('InfoPanel', () => {
         ),
       ),
     );
-
-    render(InfoPanel, { props: { id: 'info-summary' } });
+    render(DockDetails, { props: { id: 'info-summary' } });
     expect(await screen.findByText('Short.')).toBeInTheDocument();
     expect(screen.getByText(/Results/i)).toBeInTheDocument();
   });
 
   it('starts the abstract folded when fold_abstract is true', async () => {
     appSettings.foldAbstract = true;
-    render(InfoPanel, { props: { id: 'info1' } });
+    render(DockDetails, { props: { id: 'info1' } });
     const toggle = await screen.findByRole('button', { name: /abstract/i });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
@@ -126,7 +114,7 @@ describe('InfoPanel', () => {
   it('does not render a Chat button even when chat is available', async () => {
     chat.available = true;
     try {
-      render(InfoPanel, { props: { id: 'info1' } });
+      render(DockDetails, { props: { id: 'info1' } });
       await screen.findByText('Attention');
       expect(screen.queryByRole('button', { name: /Chat/ })).not.toBeInTheDocument();
     } finally {
@@ -135,7 +123,7 @@ describe('InfoPanel', () => {
   });
 
   it('launches Identify from a direct button in the pane', async () => {
-    render(InfoPanel, { props: { id: 'info1' } });
+    render(DockDetails, { props: { id: 'info1' } });
     await screen.findByText('Attention');
     await userEvent.click(screen.getByRole('button', { name: /Identify/ }));
     expect(identifyState.open).toBe(true);
@@ -143,7 +131,7 @@ describe('InfoPanel', () => {
   });
 
   it('shows a standalone Delete paper button and no overflow menu', async () => {
-    render(InfoPanel, { props: { id: 'info1' } });
+    render(DockDetails, { props: { id: 'info1' } });
     await screen.findByText('Attention');
     expect(screen.getByRole('button', { name: /Delete paper/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /More actions/ })).not.toBeInTheDocument();

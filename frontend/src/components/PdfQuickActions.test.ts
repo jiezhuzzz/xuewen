@@ -2,8 +2,8 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import PdfQuickActions from './PdfQuickActions.svelte';
-import { appSettings } from '../lib/state.svelte';
-import { translateMode } from '../lib/translate.svelte';
+import { chat } from '../lib/chat.svelte';
+import { dock, ui, viewer } from '../lib/state.svelte';
 import type { PillHide } from '../lib/pillHide.svelte';
 
 /// A plain fake matching the real `PillHide` interface (see
@@ -24,34 +24,47 @@ function makePill(): PillHide {
 }
 
 beforeEach(() => {
-  translateMode.value = 'auto';
+  viewer.activeId = 'p1';
+  dock.open = false;
+  dock.tab = 'details';
+  ui.zen = false;
+  chat.available = true;
+  localStorage.clear();
 });
 
-describe('PdfQuickActions translate toggle', () => {
-  it('shows the 譯 toggle only when translate is enabled', async () => {
-    appSettings.translate = { enabled: false };
-    const { rerender } = render(PdfQuickActions, { props: { pill: makePill() } });
+describe('PdfQuickActions seals', () => {
+  it('renders 禪 詳 問 and no translate toggle', () => {
+    render(PdfQuickActions, { props: { pill: makePill() } });
+    expect(screen.getByRole('button', { name: 'Zen mode' })).toHaveTextContent('禪');
+    expect(screen.getByRole('button', { name: 'Details' })).toHaveTextContent('詳');
+    expect(screen.getByRole('button', { name: 'Ask about this paper' })).toHaveTextContent('問');
     expect(screen.queryByRole('button', { name: /translate/i })).not.toBeInTheDocument();
-
-    appSettings.translate = { enabled: true, providers: ['llm'], default_provider: 'llm', target_lang: 'zh', trigger: 'auto' };
-    await rerender({ pill: makePill() });
-    expect(screen.getByRole('button', { name: /translate/i })).toBeInTheDocument();
   });
 
-  it('switching to Manual persists via translateMode', async () => {
-    appSettings.translate = { enabled: true, providers: ['llm'], default_provider: 'llm', target_lang: 'zh', trigger: 'auto' };
+  it('hides 問 when chat is unavailable', () => {
+    chat.available = false;
     render(PdfQuickActions, { props: { pill: makePill() } });
-    await userEvent.click(screen.getByRole('button', { name: /translate/i }));
-    await userEvent.click(screen.getByRole('button', { name: 'Manual' }));
-    expect(translateMode.value).toBe('manual');
+    expect(screen.queryByRole('button', { name: 'Ask about this paper' })).not.toBeInTheDocument();
   });
 
-  it('closes the mode popover on an outside click', async () => {
-    appSettings.translate = { enabled: true, providers: ['llm'], default_provider: 'llm', target_lang: 'zh', trigger: 'auto' };
+  it('詳 and 問 open the dock on their tabs', async () => {
     render(PdfQuickActions, { props: { pill: makePill() } });
-    await userEvent.click(screen.getByRole('button', { name: /translate/i }));
-    expect(screen.getByRole('menu')).toBeInTheDocument();
-    await userEvent.click(document.body);
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(dock.open).toBe(true);
+    expect(dock.tab).toBe('details');
+    await userEvent.click(screen.getByRole('button', { name: 'Ask about this paper' }));
+    expect(dock.tab).toBe('ask');
+  });
+
+  it('禪 toggles zen', async () => {
+    render(PdfQuickActions, { props: { pill: makePill() } });
+    await userEvent.click(screen.getByRole('button', { name: 'Zen mode' }));
+    expect(ui.zen).toBe(true);
+  });
+
+  it('the pill yields while the dock is open', () => {
+    dock.open = true;
+    render(PdfQuickActions, { props: { pill: makePill() } });
+    expect(screen.getByRole('toolbar', { name: 'Reader quick actions' }).className).toContain('opacity-0');
   });
 });

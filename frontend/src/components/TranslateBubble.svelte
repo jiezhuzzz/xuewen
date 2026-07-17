@@ -1,8 +1,8 @@
 <script lang="ts">
   // Manual-mode affordance: shown at the last pointer-up position after a
-  // finished text selection, when translateMode is 'manual'. Clicking it
+  // finished text selection, when [translate].trigger is 'manual'. Clicking it
   // (rather than auto-translating every selection) is the whole point of
-  // manual mode — see translate.svelte.ts's translateMode.
+  // manual mode — see translate.svelte.ts's translateTrigger().
   let { x, y, onTranslate }: { x: number; y: number; onTranslate: () => void } = $props();
 </script>
 

@@ -175,10 +175,9 @@ export interface Tab {
 /// The content pane's tab strip. `activeId === null` means the permanent
 /// "Library" home tab is active (shows the Welcome panel); a string means
 /// that PDF tab is active. Tabs persist while home is active.
-export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: boolean }>({
+export const viewer = $state<{ tabs: Tab[]; activeId: string | null }>({
   tabs: [],
   activeId: null,
-  infoOpen: false,
 });
 
 /// The browsing highlight for the Library list (moved by j/k). Distinct from viewer.activeId: the highlight is the list cursor; opening a paper reads it.
@@ -188,21 +187,53 @@ export function selectPaper(id: string | null): void {
   selection.id = id;
 }
 
-const INFO_KEY = 'xuewen-info-open';
+export type DockTab = 'details' | 'ask';
 
-/// Load the remembered info-panel state (default closed). Call once at startup.
-export function initInfo(): void {
-  viewer.infoOpen = localStorage.getItem(INFO_KEY) === '1';
+/// The reader dock: one right-docked panel hosting the Details and Ask tabs
+/// (replaces the old separate info panel + chat float). Open state and tab
+/// are remembered across sessions.
+export const dock = $state<{ open: boolean; tab: DockTab }>({ open: false, tab: 'details' });
+
+const DOCK_KEY = 'xuewen-dock';
+
+/// Load the remembered dock state (default: closed, Details). Call once at startup.
+export function initDock(): void {
+  try {
+    const raw = localStorage.getItem(DOCK_KEY);
+    if (!raw) return;
+    const v = JSON.parse(raw) as { open?: unknown; tab?: unknown };
+    dock.open = v.open === true;
+    dock.tab = v.tab === 'ask' ? 'ask' : 'details';
+  } catch {
+    /* corrupted value — keep defaults */
+  }
 }
 
-/// Set the info panel open/closed and remember the choice.
-export function setInfoOpen(open: boolean): void {
-  viewer.infoOpen = open;
-  localStorage.setItem(INFO_KEY, open ? '1' : '0');
+function saveDock(): void {
+  try {
+    localStorage.setItem(DOCK_KEY, JSON.stringify({ open: dock.open, tab: dock.tab }));
+  } catch {
+    /* no localStorage — state still applies, only persistence is lost */
+  }
 }
 
-export function toggleInfo(): void {
-  setInfoOpen(!viewer.infoOpen);
+export function openDock(tab: DockTab): void {
+  dock.open = true;
+  dock.tab = tab;
+  saveDock();
+}
+
+export function closeDock(): void {
+  dock.open = false;
+  saveDock();
+}
+
+/// The `i`/`c` shortcut behavior: close if already open on that tab,
+/// otherwise open on (or switch to) it. The dock only exists over a PDF.
+export function toggleDock(tab: DockTab): void {
+  if (viewer.activeId === null) return;
+  if (dock.open && dock.tab === tab) closeDock();
+  else openDock(tab);
 }
 
 /// Activate the Library home tab (keeps PDF tabs open). Leaving the reader
@@ -640,7 +671,7 @@ export const identifyState = $state<{
 });
 
 /// Bumped whenever a paper's cached detail is replaced in place, so already
-/// mounted views (InfoPanel) re-run loadDetail and pick up the fresh record.
+/// mounted views (DockDetails) re-run loadDetail and pick up the fresh record.
 export const detailRefresh = $state({ n: 0 });
 
 // Superseded-session guard (same pattern as importSession): an in-flight
