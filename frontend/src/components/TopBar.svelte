@@ -1,6 +1,15 @@
 <script lang="ts">
   import { Monitor, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
-  import { openImport, stats, theme, toggleSidebar, toggleTheme, ui } from '../lib/state.svelte';
+  import {
+    filters,
+    loadPapers,
+    openImport,
+    stats,
+    theme,
+    toggleSidebar,
+    toggleTheme,
+    ui,
+  } from '../lib/state.svelte';
   import SealMark from './SealMark.svelte';
 
   const themeLabel = $derived(
@@ -27,7 +36,15 @@
       <div class="hidden items-center gap-3 text-xs text-stone-500 sm:flex dark:text-stone-400">
         <span>{stats.value.total} papers</span>
         {#if stats.value.needs_review > 0}
-          <span class="text-yellow-700 dark:text-yellow-400">{stats.value.needs_review} to review</span>
+          <button
+            type="button"
+            title="Show papers that need review"
+            onclick={() => {
+              filters.status = 'needs_review';
+              void loadPapers();
+            }}
+            class="rounded text-yellow-700 underline-offset-2 hover:underline dark:text-yellow-400"
+          >{stats.value.needs_review} to review</button>
         {/if}
       </div>
     {/if}
