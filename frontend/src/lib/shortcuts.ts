@@ -76,7 +76,7 @@ export function handleKeydown(e: KeyboardEvent): void {
   }
   if (e.key === 'Escape') {
     if (ui.paletteOpen) ui.paletteOpen = false;
-    else if (dock.open) closeDock();
+    else if (dock.open && viewer.activeId !== null) closeDock();
     else if (ui.zen) ui.zen = false;
     return;
   }

@@ -210,7 +210,11 @@ export function initDock(): void {
 }
 
 function saveDock(): void {
-  localStorage.setItem(DOCK_KEY, JSON.stringify({ open: dock.open, tab: dock.tab }));
+  try {
+    localStorage.setItem(DOCK_KEY, JSON.stringify({ open: dock.open, tab: dock.tab }));
+  } catch {
+    /* no localStorage — state still applies, only persistence is lost */
+  }
 }
 
 export function openDock(tab: DockTab): void {
@@ -667,7 +671,7 @@ export const identifyState = $state<{
 });
 
 /// Bumped whenever a paper's cached detail is replaced in place, so already
-/// mounted views (InfoPanel) re-run loadDetail and pick up the fresh record.
+/// mounted views (DockDetails) re-run loadDetail and pick up the fresh record.
 export const detailRefresh = $state({ n: 0 });
 
 // Superseded-session guard (same pattern as importSession): an in-flight

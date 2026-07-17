@@ -13,6 +13,13 @@
   // degrades to Details rather than rendering a dead tab.
   const tab = $derived(dock.tab === 'ask' && !chat.available ? 'details' : dock.tab);
 
+  // A remembered 'ask' tab with chat unavailable would leave dock.tab
+  // pointing at a tab that isn't rendered — write the degrade back so the
+  // i/c shortcuts and the thread-follow effect see the truth.
+  $effect(() => {
+    if (dock.tab === 'ask' && !chat.available) openDock('details');
+  });
+
   const tabBase = 'rounded-lg px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[.07em]';
   const tabOff = 'text-stone-500 hover:bg-parchment hover:text-ink dark:text-stone-400 dark:hover:bg-stone-800';
   const tabOn = 'bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500';

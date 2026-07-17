@@ -55,6 +55,7 @@ describe('ReaderDock', () => {
     render(ReaderDock, { props: { id: 'p1' } });
     expect(screen.queryByRole('tab', { name: /Ask/ })).not.toBeInTheDocument();
     expect(await screen.findByText('Attention')).toBeInTheDocument(); // Details shown instead
+    expect(dock.tab).toBe('details');
   });
 
   it('the close button closes the dock', async () => {
