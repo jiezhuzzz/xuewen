@@ -95,6 +95,40 @@ npm --prefix frontend run dev        # UI on :5173, hot-reloads
 nix build            # ./result/bin/xuewen  (frontend already embedded)
 ```
 
+## Desktop app (macOS)
+
+The same server and UI, packaged as a native window — a [Tauri](https://tauri.app/)
+app boots the Axum backend in-process and opens a webview at it, no terminal
+required. Apple Silicon only; download the `.dmg` from
+[GitHub Releases](../../releases).
+
+**First launch:** the dmg is unsigned, so Gatekeeper blocks a plain double-click.
+Either right-click the app → **Open** (once), or:
+
+```sh
+xattr -d com.apple.quarantine /Applications/Xuewen.app
+```
+
+**Where data lives:** `~/Library/Application Support/Xuewen/` — `xuewen.toml`,
+an `env` file for API keys, `xuewen.db`, `library/`, `inbox/`, and
+`search-index/`. Logs go to `~/Library/Logs/Xuewen/`. First launch creates all
+of this; existing files are never overwritten.
+
+**Enabling AI features:** edit `xuewen.toml` (same `[ai.*]` sections as the
+server — see `xuewen.example.toml`) and put keys in the `env` file, one
+`KEY=value` per line (e.g. `OPENAI_API_KEY=sk-...`), then relaunch.
+
+**What's bundled:** `pdftotext` and Node.js ship inside the app, so PDF
+ingest and Agent Ask work out of the box. Semantic search still needs a
+Qdrant instance running locally, same as the server.
+
+**Building locally:**
+
+```sh
+bash desktop/scripts/prepare-sidecars.sh   # needs Homebrew poppler + dylibbundler
+cd desktop && npx @tauri-apps/cli build
+```
+
 ## Configuration
 
 Copy `xuewen.example.toml` to `xuewen.toml`. Only three keys are required:
