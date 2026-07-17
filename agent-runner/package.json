@@ -1,0 +1,11 @@
+{
+  "name": "xuewen-agent-runner",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test/" },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.212",
+    "@openai/codex-sdk": "^0.144.5"
+  }
+}
