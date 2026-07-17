@@ -23,6 +23,10 @@ let
   # unauthenticated mutating endpoints, so `serve` refuses them without
   # `--allow-remote`.
   isLoopback = h: h == "localhost" || h == "::1" || lib.hasPrefix "127." h;
+
+  # Agent Ask ([ai.agent.*]) spawns `node` for its runner; its presence also
+  # decides the MemoryDenyWriteExecute hardening below.
+  agentConfigured = lib.hasAttrByPath [ "ai" "agent" ] cfg.settings;
 in
 {
   options.services.xuewen = {
@@ -150,8 +154,9 @@ in
       # pdftotext (poppler-utils) is required for PDF text extraction, which the
       # ingest pipeline and paper chat both depend on. git backs the repo-attach
       # endpoint (PUT /api/papers/{id}/code shallow-clones into the agent
-      # workspace).
-      path = [ pkgs.poppler-utils pkgs.git ];
+      # workspace). node is only needed when [ai.agent.*] is configured.
+      path = [ pkgs.poppler-utils pkgs.git ]
+        ++ lib.optional agentConfigured pkgs.nodejs;
       environment = {
         RUST_LOG = lib.mkDefault "info";
         # reqwest talks HTTPS to arXiv/Crossref/OpenAI; give it a CA bundle
@@ -184,7 +189,9 @@ in
         RestrictNamespaces = true;
         RestrictRealtime = true;
         LockPersonality = true;
-        MemoryDenyWriteExecute = true;
+        # node's JIT needs writable-then-executable mappings, so this hardening
+        # must relax when Agent Ask spawns the runner.
+        MemoryDenyWriteExecute = !agentConfigured;
         SystemCallArchitectures = "native";
         RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
       };
