@@ -71,4 +71,33 @@ describe('CitationPopover', () => {
     const { findByText } = render(CitationPopover);
     expect(await findByText('raw ref text')).toBeInTheDocument();
   });
+
+  it('offers Import for an unmatched reference with a DOI', async () => {
+    show(
+      {
+        structured: {
+          authors: [], title: 'Fuzzgen', venue: 'USENIX Security', year: 2020,
+          doi: '10.1234/fuzzgen', arxiv_id: null, url: null,
+        },
+      },
+      null,
+    );
+    const { findByRole } = render(CitationPopover);
+    expect(await findByRole('button', { name: /^import$/i })).toBeInTheDocument();
+  });
+
+  it('does not offer Import when the reference is already in the library', async () => {
+    show(
+      {
+        structured: {
+          authors: [], title: 'Adam', venue: null, year: null,
+          doi: '10.1234/adam', arxiv_id: null, url: null,
+        },
+      },
+      paper,
+    );
+    const { queryByRole, findByRole } = render(CitationPopover);
+    await findByRole('button', { name: /open in library/i });
+    expect(queryByRole('button', { name: /^import$/i })).not.toBeInTheDocument();
+  });
 });
