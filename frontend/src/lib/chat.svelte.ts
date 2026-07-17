@@ -11,6 +11,7 @@ export interface ChatTurn {
   content: string;
   model: string | null;
   created_at: string;
+  tools: { name: string; detail: string }[] | null;
 }
 
 /// The floating paper-chat. `pending` is the user message awaiting a reply,
@@ -24,6 +25,7 @@ export const chat = $state<{
   messages: ChatTurn[];
   pending: string | null;
   streaming: string | null;
+  streamTools: { name: string; detail: string }[];
   busy: boolean;
   error: string | null;
   draft: string;
@@ -35,6 +37,7 @@ export const chat = $state<{
   messages: [],
   pending: null,
   streaming: null,
+  streamTools: [],
   busy: false,
   error: null,
   draft: '',
@@ -76,11 +79,26 @@ export async function loadThread(paperId: string): Promise<void> {
   chat.messages = [];
   chat.pending = null;
   chat.streaming = null;
+  chat.streamTools = [];
   chat.busy = false;
   chat.error = null;
   try {
-    const rows = (await getChatThread(paperId)) as ChatTurn[];
-    if (my === session) chat.messages = rows;
+    const rows = (await getChatThread(paperId)) as (Omit<ChatTurn, 'tools'> & {
+      tools_json?: string | null;
+    })[];
+    if (my === session) {
+      chat.messages = rows.map(({ tools_json, ...row }) => {
+        let tools: ChatTurn['tools'] = null;
+        if (tools_json) {
+          try {
+            tools = JSON.parse(tools_json);
+          } catch {
+            tools = null;
+          }
+        }
+        return { ...row, tools };
+      });
+    }
   } catch {
     if (my === session) {
       chat.paperId = null; // un-latch so reopening the panel retries the load
@@ -98,6 +116,7 @@ export async function sendChatMessage(): Promise<void> {
   chat.busy = true;
   chat.error = null;
   chat.streaming = '';
+  chat.streamTools = [];
   const myAborter = new AbortController();
   aborter = myAborter;
   let failure: string | null = null;
@@ -112,6 +131,9 @@ export async function sendChatMessage(): Promise<void> {
       if (my !== session) return;
       if (e.event === 'delta') {
         chat.streaming = (chat.streaming ?? '') + (JSON.parse(e.data).text ?? '');
+      } else if (e.event === 'tool') {
+        const t = JSON.parse(e.data) as { name?: string; detail?: string };
+        chat.streamTools.push({ name: String(t.name ?? ''), detail: String(t.detail ?? '') });
       } else if (e.event === 'error') {
         failure = String(JSON.parse(e.data).message ?? 'unknown error');
       } else if (e.event === 'done') {
@@ -124,6 +146,7 @@ export async function sendChatMessage(): Promise<void> {
           content: text,
           model: null,
           created_at: '',
+          tools: null,
         });
         chat.messages.push({
           id: doneId == null ? localId-- : Number(doneId),
@@ -131,9 +154,11 @@ export async function sendChatMessage(): Promise<void> {
           content: chat.streaming ?? '',
           model: label,
           created_at: '',
+          tools: chat.streamTools.length ? [...chat.streamTools] : null,
         });
         chat.pending = null;
         chat.streaming = null;
+        chat.streamTools = [];
       }
     });
     if (my !== session) return;
@@ -147,6 +172,7 @@ export async function sendChatMessage(): Promise<void> {
     const aborted = err instanceof DOMException && err.name === 'AbortError';
     chat.pending = null;
     chat.streaming = null;
+    chat.streamTools = [];
     chat.draft = text; // give the message back for editing or resend
     chat.error = aborted
       ? null

@@ -38,6 +38,7 @@ beforeEach(() => {
   chat.messages = [];
   chat.pending = null;
   chat.streaming = null;
+  chat.streamTools = [];
   chat.busy = false;
   chat.error = null;
   chat.draft = '';
@@ -93,6 +94,28 @@ describe('sendChatMessage', () => {
     expect(chat.busy).toBe(false);
     expect(chat.error).toBe(null);
     expect(chat.draft).toBe('');
+  });
+
+  it('collects tool events into the exchange and parses stored tools_json', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(
+        sseBody(
+          'event: tool\ndata: {"name":"Read","detail":"paper.txt"}\n\n' +
+            'event: delta\ndata: {"text":"grounded."}\n\n' +
+            'event: done\ndata: {"id":7}\n\n',
+        ),
+        { status: 200 },
+      ),
+    ));
+    chat.paperId = 'p1';
+    chat.modelId = 'claude_code';
+    chat.models = [{ id: 'claude_code', label: 'Claude Code' }];
+    chat.draft = 'where?';
+    await sendChatMessage();
+    const last = chat.messages[chat.messages.length - 1];
+    expect(last.role).toBe('assistant');
+    expect(last.tools).toEqual([{ name: 'Read', detail: 'paper.txt' }]);
+    expect(chat.streamTools).toEqual([]);
   });
 
   it('restores the draft and shows an inline error on failure', async () => {
@@ -167,6 +190,27 @@ describe('thread', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     await clearChatThread();
     expect(chat.messages).toEqual([]);
+  });
+
+  it('parses tools_json on history rows, and falls back to null on bad JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      json([
+        {
+          id: 1,
+          role: 'assistant',
+          content: 'a',
+          model: 'Claude Code',
+          created_at: '',
+          tools_json: '[{"name":"Read","detail":"paper.txt"}]',
+        },
+        { id: 2, role: 'assistant', content: 'b', model: null, created_at: '', tools_json: 'not json' },
+        { id: 3, role: 'user', content: 'c', model: null, created_at: '', tools_json: null },
+      ]),
+    ));
+    await loadThread('p1');
+    expect(chat.messages[0].tools).toEqual([{ name: 'Read', detail: 'paper.txt' }]);
+    expect(chat.messages[1].tools).toBe(null);
+    expect(chat.messages[2].tools).toBe(null);
   });
 
   it('a failed history load can be retried', async () => {

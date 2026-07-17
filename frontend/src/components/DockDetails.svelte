@@ -3,6 +3,7 @@
   import { appSettings, detailRefresh, loadDetail, openIdentify, toggleStar } from '../lib/state.svelte';
   import CiteActions from './CiteActions.svelte';
   import DeletePaperButton from './DeletePaperButton.svelte';
+  import DockCode from './DockCode.svelte';
   import PaperMeta from './PaperMeta.svelte';
   import PaperProjectEditor from './PaperProjectEditor.svelte';
   import PaperTagEditor from './PaperTagEditor.svelte';
@@ -80,6 +81,8 @@
           <dd class="text-ink dark:text-stone-200">{fmtDate(d.added_at)}</dd>
         </dl>
       </section>
+
+      <DockCode id={d.id} />
 
       <section class={divider}>
         <h3 class={label}>Organize</h3>
