@@ -17,5 +17,6 @@ pub mod refresh;
 pub mod resolve;
 pub mod search;
 pub mod summary;
+pub mod translate;
 pub mod watcher;
 pub mod web;

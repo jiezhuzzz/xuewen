@@ -92,6 +92,19 @@ export async function getSettings(): Promise<Settings> {
   return res.json();
 }
 
+export async function translateText(
+  text: string,
+  opts?: { provider?: 'llm' | 'deepl'; targetLang?: string },
+): Promise<{ translation: string; provider: string; source_lang: string | null; target_lang: string }> {
+  const res = await fetch('/api/translate', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text, provider: opts?.provider, target_lang: opts?.targetLang }),
+  });
+  if (!res.ok) throw await errorFromResponse(res, 'translate failed');
+  return res.json();
+}
+
 export async function setProxyCookie(cookie: string): Promise<void> {
   const res = await fetch('/api/settings/proxy-cookie', {
     method: 'PUT',

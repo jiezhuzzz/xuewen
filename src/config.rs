@@ -18,6 +18,9 @@ pub struct Config {
     /// Daily arXiv recommendations. Absent ⇒ the feature is off.
     #[serde(default)]
     pub daily: Option<DailyConfig>,
+    /// Translate-on-selection. Absent ⇒ feature off.
+    #[serde(default)]
+    pub translate: Option<TranslateConfig>,
     #[serde(default)]
     pub ai: AiConfig,
     #[serde(default)]
@@ -137,6 +140,8 @@ pub struct AiConfig {
     pub daily: Option<AiDefaults>,
     /// Structured reference parsing for PDF citation popovers. Absent ⇒ off.
     pub citations: Option<AiDefaults>,
+    /// LLM provider for translate-on-selection. Absent ⇒ LLM translate off.
+    pub translate: Option<AiDefaults>,
 }
 
 impl AiConfig {
@@ -232,6 +237,78 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             fold_abstract: true,
+        }
+    }
+}
+
+/// `[translate]` — translate-on-selection. Feature is enabled by the presence
+/// of a provider (`[ai.translate]` or `[translate.deepl]`), not this section;
+/// this section only sets defaults.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TranslateConfig {
+    /// Target language the selection is translated INTO. Default Simplified Chinese.
+    pub target_lang: String,
+    /// Default provider. `None` ⇒ resolved to the single available one, or Llm.
+    pub provider: Option<TranslateProvider>,
+    /// Seed for the client's Auto/Manual toggle default.
+    pub trigger: TranslateTrigger,
+    /// DeepL provider config. Present ⇒ DeepL available.
+    pub deepl: Option<DeeplConfig>,
+}
+
+impl Default for TranslateConfig {
+    fn default() -> Self {
+        Self {
+            target_lang: default_target_lang(),
+            provider: None,
+            trigger: TranslateTrigger::default(),
+            deepl: None,
+        }
+    }
+}
+
+fn default_target_lang() -> String {
+    "zh".to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TranslateProvider {
+    Llm,
+    Deepl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TranslateTrigger {
+    #[default]
+    Auto,
+    Manual,
+}
+
+/// DeepL provider config (`[translate.deepl]`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct DeeplConfig {
+    pub api_key_env: Option<String>,
+    pub plan: DeeplPlan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeeplPlan {
+    #[default]
+    Free,
+    Pro,
+}
+
+impl DeeplPlan {
+    /// DeepL API base URL for this plan.
+    pub fn base_url(self) -> &'static str {
+        match self {
+            DeeplPlan::Free => "https://api-free.deepl.com",
+            DeeplPlan::Pro => "https://api.deepl.com",
         }
     }
 }
@@ -702,5 +779,62 @@ model = "gpt-5.6-terra"
 
         let without: crate::config::AiConfig = toml::from_str("model = \"gpt-4o-mini\"").unwrap();
         assert!(without.citations.is_none());
+    }
+
+    #[test]
+    fn translate_defaults_when_section_present_but_minimal() {
+        let toml = r#"
+inbox_dir = "/i"
+library_root = "/l"
+database_url = "sqlite::memory:"
+
+[translate]
+
+[ai.translate]
+model = "gpt-4o-mini"
+"#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        let t = cfg.translate.as_ref().unwrap();
+        assert_eq!(t.target_lang, "zh");
+        assert!(matches!(t.trigger, TranslateTrigger::Auto));
+        assert!(t.provider.is_none()); // unset -> resolved later by the service
+        assert!(cfg.ai.translate.is_some());
+    }
+
+    #[test]
+    fn translate_parses_deepl_and_explicit_provider() {
+        let toml = r#"
+inbox_dir = "/i"
+library_root = "/l"
+database_url = "sqlite::memory:"
+
+[translate]
+target_lang = "en"
+provider = "deepl"
+trigger = "manual"
+
+[translate.deepl]
+api_key_env = "DEEPL_API_KEY"
+plan = "pro"
+"#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        let t = cfg.translate.as_ref().unwrap();
+        assert_eq!(t.target_lang, "en");
+        assert!(matches!(t.provider, Some(TranslateProvider::Deepl)));
+        assert!(matches!(t.trigger, TranslateTrigger::Manual));
+        let d = t.deepl.as_ref().unwrap();
+        assert_eq!(d.api_key_env.as_deref(), Some("DEEPL_API_KEY"));
+        assert!(matches!(d.plan, DeeplPlan::Pro));
+    }
+
+    #[test]
+    fn translate_absent_by_default() {
+        let toml = r#"
+inbox_dir = "/i"
+library_root = "/l"
+database_url = "sqlite::memory:"
+"#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert!(cfg.translate.is_none());
     }
 }

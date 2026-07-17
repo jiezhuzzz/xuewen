@@ -72,10 +72,19 @@ export type ImportResult =
   | { outcome: 'in_trash'; id: string }
   | { outcome: 'unfetched'; title: string | null; doi: string | null };
 
+export interface TranslateSettings {
+  enabled: boolean;
+  providers?: ('llm' | 'deepl')[];
+  default_provider?: 'llm' | 'deepl';
+  target_lang?: string;
+  trigger?: 'auto' | 'manual';
+}
+
 export interface Settings {
   proxy_cookie_set: boolean;
   proxy_cookie_updated_at: string | null;
   fold_abstract: boolean;
+  translate?: TranslateSettings;
 }
 
 export interface Candidate {

@@ -62,3 +62,20 @@ database_url  = "sqlite:./library.db"
 # Common CS styles are parsed for free by pattern matching; this LLM
 # parses only the leftovers. Empty ⇒ inherits [ai] endpoint + model.
 #[ai.citations]
+
+# --- Translate on selection (optional) ---
+# Enabled when at least one provider below is configured. Selecting text in the
+# PDF reader shows a translation card.
+#[translate]
+#target_lang = "zh"     # translate INTO this language (Simplified Chinese)
+#provider    = "llm"    # default provider when both are configured: "llm" | "deepl"
+#trigger     = "auto"   # default reader mode: "auto" (popup) | "manual" (bubble)
+#
+# LLM provider — reuses the shared [ai] endpoint (like [ai.summary]).
+#[ai.translate]
+#model = "gpt-4o-mini"
+#
+# DeepL provider (optional). Key comes from the environment.
+# [translate.deepl]
+# api_key_env = "DEEPL_API_KEY"
+# plan        = "free"   # "free" -> api-free.deepl.com, "pro" -> api.deepl.com

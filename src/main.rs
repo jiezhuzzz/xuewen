@@ -542,6 +542,8 @@ async fn main() -> Result<()> {
                 tracing::info!("paper chat disabled (no usable [[ai.chat.models]])");
             }
             let citations = xuewen::citations::CitationsService::from_config(pool.clone(), &cfg);
+            let translate =
+                xuewen::translate::TranslateService::from_config(&cfg).map(std::sync::Arc::new);
             web::serve(
                 &host,
                 port,
@@ -553,6 +555,7 @@ async fn main() -> Result<()> {
                 daily,
                 chat,
                 citations,
+                translate,
                 cfg.ui.clone(),
             )
             .await?;

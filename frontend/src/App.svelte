@@ -12,10 +12,12 @@
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
+  import TranslatePopover from './components/TranslatePopover.svelte';
   import Welcome from './components/Welcome.svelte';
   import { chat, loadChatModels, loadThread } from './lib/chat.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
+  import { syncTranslateModeFromSettings } from './lib/translate.svelte';
   import {
     identifyState,
     initInfo,
@@ -36,7 +38,7 @@
     loadProjects();
     loadPapers();
     loadSearchStatus();
-    loadSettings();
+    void loadSettings().then(syncTranslateModeFromSettings);
     loadChatModels();
   });
 
@@ -138,4 +140,5 @@
 {#if identifyState.open}<IdentifyModal />{/if}
 {#if ui.paletteOpen}<CommandPalette />{/if}
 <PaperContextMenu />
+<TranslatePopover />
 <Toaster />
