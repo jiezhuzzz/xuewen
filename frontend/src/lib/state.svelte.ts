@@ -270,6 +270,18 @@ export const ui = $state<{
 export function toggleSidebar(): void {
   ui.sidebarOpen = !ui.sidebarOpen;
 }
+
+/// Below ~lg the fixed 304px list pane crushes the reader, so it starts
+/// collapsed there and follows live crossings of the breakpoint. `[`, the
+/// edge-peek button, and the TopBar toggle still override at any width —
+/// this only sets the default on load/resize, it doesn't lock anything.
+export function initResponsiveSidebar(): void {
+  const q = window.matchMedia('(max-width: 1023px)');
+  if (q.matches) ui.sidebarOpen = false;
+  q.addEventListener('change', (e) => {
+    ui.sidebarOpen = !e.matches;
+  });
+}
 export function openImport(): void {
   importSession++;
   pending.length = 0;

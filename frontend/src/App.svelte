@@ -23,6 +23,7 @@
     dock,
     identifyState,
     initDock,
+    initResponsiveSidebar,
     initTabs,
     initTheme,
     library,
@@ -38,6 +39,7 @@
   onMount(() => {
     initTheme();
     initDock();
+    initResponsiveSidebar();
     void initTabs();
     loadStats();
     loadProjects();
@@ -94,8 +96,17 @@
       <div class="absolute inset-y-0 left-0 w-[304px]"><LibraryPane /></div>
     </div>
     {#if paneHidden}
-      <!-- Edge peek: hover the left edge to overlay the list without expanding it. -->
-      <div class="absolute inset-y-0 left-0 z-30 w-2" onmouseenter={() => (peek = true)} role="presentation"></div>
+      <!-- Edge peek: hovering the left edge overlays the list without
+           expanding it; as a real button it also gives keyboard and touch
+           users a path — activating it pins the pane open instead. -->
+      <button
+        type="button"
+        aria-label="Open library list"
+        title="Open library list ([)"
+        onmouseenter={() => (peek = true)}
+        onclick={() => (ui.sidebarOpen = true)}
+        class="absolute inset-y-0 left-0 z-30 w-2 focus-visible:bg-amber-700/20"
+      ></button>
       {#if peek}
         <div
           transition:fly={{ x: -24, duration: dur(DUR.base) }}
