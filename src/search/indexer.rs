@@ -51,7 +51,11 @@ pub async fn sweep(svc: &SearchService, library_root: &Path) -> Result<SweepSumm
     Ok(summary)
 }
 
-async fn index_paper(svc: &SearchService, library_root: &Path, work: &planner::Work) -> Result<bool> {
+async fn index_paper(
+    svc: &SearchService,
+    library_root: &Path,
+    work: &planner::Work,
+) -> Result<bool> {
     let Some(paper) = crate::db::get_by_id(&svc.pool, &work.paper_id).await? else {
         return Ok(false); // purged since the plan was computed; tombstone next sweep
     };
@@ -130,8 +134,10 @@ async fn deindex_paper(svc: &SearchService, paper_id: &str) -> Result<()> {
         // Qdrant cleanup only matters when vectors were ever written; a dead
         // Qdrant here must not wedge the tombstone forever.
         if let Err(e) = svc.vectors.delete_paper(paper_id).await {
-            tracing::warn!("qdrant delete {paper_id}: {e} (index row removed anyway; \
-                            orphan points are overwritten if the paper returns)");
+            tracing::warn!(
+                "qdrant delete {paper_id}: {e} (index row removed anyway; \
+                            orphan points are overwritten if the paper returns)"
+            );
         }
     }
     store::remove_index_entry(&svc.pool, paper_id).await?;
@@ -175,7 +181,8 @@ mod tests {
         doc.get_page(page1)
             .get_layer(layer1)
             .use_text(line, 12.0, Mm(15.0), Mm(280.0), &font);
-        doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap())).unwrap();
+        doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap()))
+            .unwrap();
     }
 
     struct Fixture {
@@ -196,12 +203,23 @@ mod tests {
         let (vectors, embed) = match server {
             Some(s) => (
                 vector::QdrantStore::new(&s.uri(), "xuewen", 4).unwrap(),
-                Some(embedder::Embedder::for_tests(&format!("{}/v1", s.uri()), "m1", 4)),
+                Some(embedder::Embedder::for_tests(
+                    &format!("{}/v1", s.uri()),
+                    "m1",
+                    4,
+                )),
             ),
-            None => (vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap(), None),
+            None => (
+                vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap(),
+                None,
+            ),
         };
         let svc = SearchService::open_with(pool, fts_idx, vectors, embed);
-        Fixture { svc, library_root, _dirs: vec![db_dir, idx_dir, lib_dir] }
+        Fixture {
+            svc,
+            library_root,
+            _dirs: vec![db_dir, idx_dir, lib_dir],
+        }
     }
 
     async fn insert_paper_with_pdf(f: &Fixture, id: &str, title: &str, body_line: &str) {
@@ -235,16 +253,29 @@ mod tests {
     #[tokio::test]
     async fn sweep_indexes_fts_even_without_embedder() {
         let f = fixture(None).await;
-        insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "the body mentions dictionaries").await;
+        insert_paper_with_pdf(
+            &f,
+            "p1",
+            "Fuzzing Firmware",
+            "the body mentions dictionaries",
+        )
+        .await;
 
         let s = sweep_in(&f).await.unwrap();
         assert_eq!(s.indexed, 1);
 
-        let hits = f.svc.fts.search("dictionaries", &fts::FieldSel::all(), 10).unwrap();
+        let hits = f
+            .svc
+            .fts
+            .search("dictionaries", &fts::FieldSel::all(), 10)
+            .unwrap();
         assert_eq!(hits.len(), 1, "body text searchable after sweep");
         let rows = store::all_index_rows(&f.svc.pool).await.unwrap();
         assert!(rows[0].fts_indexed_at.is_some());
-        assert!(rows[0].vectors_indexed_at.is_none(), "no embedder -> no vector stamp");
+        assert!(
+            rows[0].vectors_indexed_at.is_none(),
+            "no embedder -> no vector stamp"
+        );
 
         // Second sweep is a no-op.
         let s = sweep_in(&f).await.unwrap();
@@ -254,7 +285,8 @@ mod tests {
     #[tokio::test]
     async fn sweep_embeds_and_upserts_vectors_when_configured() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/embeddings"))
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
             .respond_with(|req: &wiremock::Request| {
                 let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
                 let n = body["input"].as_array().map(|a| a.len()).unwrap_or(1);
@@ -263,16 +295,21 @@ mod tests {
                     .collect();
                 ResponseTemplate::new(200).set_body_json(json!({"data": data}))
             })
-            .mount(&server).await;
-        Mock::given(method("GET")).and(path("/collections/xuewen"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
             })))
-            .mount(&server).await;
-        Mock::given(method("PUT")).and(path("/collections/xuewen/points"))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen/points"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": {}})))
             .expect(1..)
-            .mount(&server).await;
+            .mount(&server)
+            .await;
 
         let f = fixture(Some(&server)).await;
         insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "body words").await;
@@ -287,9 +324,11 @@ mod tests {
     #[tokio::test]
     async fn embedding_failure_keeps_fts_and_records_error() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/embeddings"))
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
             .respond_with(ResponseTemplate::new(400))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
 
         let f = fixture(Some(&server)).await;
         insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "body words").await;
@@ -343,7 +382,11 @@ mod tests {
 
         // Second sweep right away: backoff suppresses the retry.
         let s = sweep_in(&f).await.unwrap();
-        assert_eq!(s.indexed + s.deindexed + s.failed, 0, "backoff should suppress an immediate retry");
+        assert_eq!(
+            s.indexed + s.deindexed + s.failed,
+            0,
+            "backoff should suppress an immediate retry"
+        );
     }
 
     #[tokio::test]
@@ -351,21 +394,37 @@ mod tests {
         let f = fixture(None).await;
         insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "body words").await;
         sweep_in(&f).await.unwrap();
-        assert_eq!(f.svc.fts.search("fuzzing", &fts::FieldSel::all(), 10).unwrap().len(), 1);
+        assert_eq!(
+            f.svc
+                .fts
+                .search("fuzzing", &fts::FieldSel::all(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
 
         crate::db::soft_delete(&f.svc.pool, "p1").await.unwrap();
         let s = sweep_in(&f).await.unwrap();
         assert_eq!(s.deindexed, 1);
-        assert!(f.svc.fts.search("fuzzing", &fts::FieldSel::all(), 10).unwrap().is_empty());
+        assert!(f
+            .svc
+            .fts
+            .search("fuzzing", &fts::FieldSel::all(), 10)
+            .unwrap()
+            .is_empty());
         assert!(store::all_index_rows(&f.svc.pool).await.unwrap().is_empty());
-        assert!(store::chunks_for_paper(&f.svc.pool, "p1").await.unwrap().is_empty());
+        assert!(store::chunks_for_paper(&f.svc.pool, "p1")
+            .await
+            .unwrap()
+            .is_empty());
         // Qdrant delete for a no-embedder service is skipped, not an error.
     }
 
     #[tokio::test]
     async fn qdrant_delete_failure_does_not_wedge_tombstone() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/embeddings"))
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
             .respond_with(|req: &wiremock::Request| {
                 let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
                 let n = body["input"].as_array().map(|a| a.len()).unwrap_or(1);
@@ -374,20 +433,27 @@ mod tests {
                     .collect();
                 ResponseTemplate::new(200).set_body_json(json!({"data": data}))
             })
-            .mount(&server).await;
-        Mock::given(method("GET")).and(path("/collections/xuewen"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
             })))
-            .mount(&server).await;
-        Mock::given(method("PUT")).and(path("/collections/xuewen/points"))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen/points"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": {}})))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         // The delete endpoint is down: the tombstone must still clear.
-        Mock::given(method("POST")).and(path("/collections/xuewen/points/delete"))
+        Mock::given(method("POST"))
+            .and(path("/collections/xuewen/points/delete"))
             .respond_with(ResponseTemplate::new(500))
             .expect(1)
-            .mount(&server).await;
+            .mount(&server)
+            .await;
 
         let f = fixture(Some(&server)).await;
         insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "body words").await;
@@ -397,7 +463,12 @@ mod tests {
         let s = sweep_in(&f).await.unwrap();
         assert_eq!(s.deindexed, 1, "tombstone cleared despite qdrant failure");
         assert!(store::all_index_rows(&f.svc.pool).await.unwrap().is_empty());
-        assert!(f.svc.fts.search("fuzzing", &fts::FieldSel::all(), 10).unwrap().is_empty());
+        assert!(f
+            .svc
+            .fts
+            .search("fuzzing", &fts::FieldSel::all(), 10)
+            .unwrap()
+            .is_empty());
     }
 
     // Helper used by every test: sweep against the fixture's library root.

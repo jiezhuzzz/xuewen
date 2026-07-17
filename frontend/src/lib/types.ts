@@ -144,6 +144,18 @@ export interface SearchStatus {
   reason: string | null;
 }
 
+/** The state of a paper's attached repository (wire format shared with
+ *  the `PaperCode` struct in src/models.rs on the backend). */
+export interface PaperCodeStatus {
+  paper_id: string;
+  repo_url: string;
+  commit_sha: string | null;
+  status: 'cloning' | 'ready' | 'error';
+  error: string | null;
+  cloned_at: string | null;
+  size_bytes: number | null;
+}
+
 /** One bibliography entry parsed to fields by [ai.citations] (wire format
  *  shared with src/citations/mod.rs on the backend). */
 export interface StructuredReference {

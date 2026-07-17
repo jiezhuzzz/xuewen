@@ -48,7 +48,9 @@ impl DailyService {
     /// `[ai.embedding]`/`[ai.daily]`, or a missing API key (each case warns).
     /// `Err` only on invalid `[daily]` values.
     pub fn from_config(cfg: &Config, pool: SqlitePool) -> anyhow::Result<Option<Arc<Self>>> {
-        let Some(daily) = &cfg.daily else { return Ok(None) };
+        let Some(daily) = &cfg.daily else {
+            return Ok(None);
+        };
         if daily.categories.is_empty() {
             anyhow::bail!("[daily].categories must not be empty");
         }
@@ -59,12 +61,15 @@ impl DailyService {
         };
         let er = cfg.ai.resolve(&embed.endpoint);
         let emodel = embed.model();
-        let Some(embedder) = Embedder::from_resolved(&er, &emodel, embed.dims) else { return Ok(None); };
+        let Some(embedder) = Embedder::from_resolved(&er, &emodel, embed.dims) else {
+            return Ok(None);
+        };
         let Some(daily_use) = &cfg.ai.daily else {
             tracing::warn!("[daily] set but [ai.daily] missing — daily papers disabled");
             return Ok(None);
         };
-        let Some(chat) = crate::summary::Summarizer::from_resolved(&cfg.ai.resolve(daily_use)) else {
+        let Some(chat) = crate::summary::Summarizer::from_resolved(&cfg.ai.resolve(daily_use))
+        else {
             tracing::warn!("[ai.daily] has no model or API key — daily papers disabled");
             return Ok(None);
         };

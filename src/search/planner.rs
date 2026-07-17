@@ -36,7 +36,11 @@ pub fn plan(
     now: DateTime<Utc>,
 ) -> Plan {
     let by_id: HashMap<&str, &IndexRow> = rows.iter().map(|r| (r.paper_id.as_str(), r)).collect();
-    let live: HashSet<&str> = papers.iter().filter(|p| !p.trashed).map(|p| p.id.as_str()).collect();
+    let live: HashSet<&str> = papers
+        .iter()
+        .filter(|p| !p.trashed)
+        .map(|p| p.id.as_str())
+        .collect();
     let mut out = Plan::default();
 
     for p in papers.iter().filter(|p| !p.trashed) {
@@ -53,7 +57,11 @@ pub fn plan(
                     })
                     .unwrap_or(true));
         if (fts || vectors) && backoff_elapsed(row, now) {
-            out.index.push(Work { paper_id: p.id.clone(), fts, vectors });
+            out.index.push(Work {
+                paper_id: p.id.clone(),
+                fts,
+                vectors,
+            });
         }
     }
     for r in rows {
@@ -88,7 +96,12 @@ mod tests {
     use chrono::{Duration, Utc};
 
     fn ps(id: &str, ch: &str, mh: &str, trashed: bool) -> PaperState {
-        PaperState { id: id.into(), content_hash: ch.into(), meta_hash: mh.into(), trashed }
+        PaperState {
+            id: id.into(),
+            content_hash: ch.into(),
+            meta_hash: mh.into(),
+            trashed,
+        }
     }
 
     fn row(id: &str, ch: &str, mh: &str) -> crate::search::store::IndexRow {
@@ -116,21 +129,36 @@ mod tests {
 
     #[test]
     fn up_to_date_paper_yields_no_work() {
-        let p = plan(&[ps("a", "h", "m", false)], &[row("a", "h", "m")], Some("m1"), Utc::now());
+        let p = plan(
+            &[ps("a", "h", "m", false)],
+            &[row("a", "h", "m")],
+            Some("m1"),
+            Utc::now(),
+        );
         assert!(p.index.is_empty() && p.deindex.is_empty());
     }
 
     #[test]
     fn meta_change_and_content_change_force_both_tiers() {
         for (ch, mh) in [("h2", "m"), ("h", "m2")] {
-            let p = plan(&[ps("a", ch, mh, false)], &[row("a", "h", "m")], Some("m1"), Utc::now());
+            let p = plan(
+                &[ps("a", ch, mh, false)],
+                &[row("a", "h", "m")],
+                Some("m1"),
+                Utc::now(),
+            );
             assert!(p.index[0].fts && p.index[0].vectors, "case ({ch},{mh})");
         }
     }
 
     #[test]
     fn model_change_re_embeds_without_touching_fts() {
-        let p = plan(&[ps("a", "h", "m", false)], &[row("a", "h", "m")], Some("m2"), Utc::now());
+        let p = plan(
+            &[ps("a", "h", "m", false)],
+            &[row("a", "h", "m")],
+            Some("m2"),
+            Utc::now(),
+        );
         assert_eq!(p.index.len(), 1);
         assert!(!p.index[0].fts && p.index[0].vectors);
     }
@@ -143,7 +171,12 @@ mod tests {
 
     #[test]
     fn trashed_and_missing_papers_become_deindex_tombstones() {
-        let p = plan(&[ps("a", "h", "m", true)], &[row("a", "h", "m"), row("gone", "h", "m")], Some("m1"), Utc::now());
+        let p = plan(
+            &[ps("a", "h", "m", true)],
+            &[row("a", "h", "m"), row("gone", "h", "m")],
+            Some("m1"),
+            Utc::now(),
+        );
         assert!(p.index.is_empty());
         let mut d = p.deindex.clone();
         d.sort();

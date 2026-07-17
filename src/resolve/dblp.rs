@@ -139,7 +139,10 @@ mod tests {
             ]}
         }}]}}}"#;
         let cands = parse(json).unwrap();
-        assert_eq!(cands[0].authors, vec!["Jinho Jung", "Hong Hu", "Xiang Wang"]);
+        assert_eq!(
+            cands[0].authors,
+            vec!["Jinho Jung", "Hong Hu", "Xiang Wang"]
+        );
     }
 
     #[test]

@@ -37,19 +37,28 @@ impl SummaryService {
                 return None;
             }
         };
-        Some(Arc::new(Self { pool, summarizer, library_root: cfg.library_root.clone() }))
+        Some(Arc::new(Self {
+            pool,
+            summarizer,
+            library_root: cfg.library_root.clone(),
+        }))
     }
 
     /// DI constructor for tests.
     pub fn for_tests(pool: SqlitePool, summarizer: Summarizer, library_root: PathBuf) -> Arc<Self> {
-        Arc::new(Self { pool, summarizer, library_root })
+        Arc::new(Self {
+            pool,
+            summarizer,
+            library_root,
+        })
     }
 
     /// One pass: summarize up to `BATCH` papers that lack a summary. Best-effort
     /// per paper — one paper's failure is logged and skipped, never aborting the
     /// batch (mirrors the search indexer). Returns the number written.
     pub async fn sweep(&self) -> Result<usize> {
-        let retry_before = (chrono::Utc::now() - chrono::Duration::minutes(RETRY_BACKOFF_MINS)).to_rfc3339();
+        let retry_before =
+            (chrono::Utc::now() - chrono::Duration::minutes(RETRY_BACKOFF_MINS)).to_rfc3339();
         let ids = store::due_ids(&self.pool, BATCH, MAX_ATTEMPTS, &retry_before).await?;
         let mut written = 0;
         for id in ids {
@@ -71,14 +80,22 @@ impl SummaryService {
             return Ok(false); // purged since selection ran
         };
         let pdf_path = self.library_root.join(&paper.rel_path);
-        let full_text = match tokio::task::spawn_blocking(move || crate::pdf::extract_text_all(&pdf_path)).await {
+        let full_text = match tokio::task::spawn_blocking(move || {
+            crate::pdf::extract_text_all(&pdf_path)
+        })
+        .await
+        {
             Ok(Ok(t)) => Some(t),
             Ok(Err(e)) => {
-                tracing::warn!("pdf extraction failed for {id}: {e}; summarizing from abstract only");
+                tracing::warn!(
+                    "pdf extraction failed for {id}: {e}; summarizing from abstract only"
+                );
                 None
             }
             Err(e) => {
-                tracing::warn!("pdf extraction task panicked for {id}: {e}; summarizing from abstract only");
+                tracing::warn!(
+                    "pdf extraction task panicked for {id}: {e}; summarizing from abstract only"
+                );
                 None
             }
         };
@@ -128,8 +145,11 @@ mod tests {
     fn write_pdf(path: &std::path::Path, line: &str) {
         let (doc, p, l) = PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
         let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-        doc.get_page(p).get_layer(l).use_text(line, 12.0, Mm(15.0), Mm(280.0), &font);
-        doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap())).unwrap();
+        doc.get_page(p)
+            .get_layer(l)
+            .use_text(line, 12.0, Mm(15.0), Mm(280.0), &font);
+        doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap()))
+            .unwrap();
     }
 
     fn chat_reply(text: &str) -> serde_json::Value {
@@ -168,8 +188,13 @@ mod tests {
                 title: Some("Title".into()),
                 abstract_text: Some("Abstract.".into()),
                 authors: Authors(vec!["Ada".into()]),
-                venue: None, year: Some(2026), doi: None, arxiv_id: None,
-                dblp_key: None, url: None, source: None,
+                venue: None,
+                year: Some(2026),
+                doi: None,
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
                 status: PaperStatus::Resolved,
             },
         };
@@ -184,7 +209,11 @@ mod tests {
 
         assert_eq!(svc.sweep().await.unwrap(), 1);
         assert_eq!(
-            crate::summary::store::get(&pool, "p1").await.unwrap().unwrap().tldr,
+            crate::summary::store::get(&pool, "p1")
+                .await
+                .unwrap()
+                .unwrap()
+                .tldr,
             "TL;DR."
         );
         // Nothing left to do -> no more LLM calls (the .expect(1) mock enforces this).
@@ -223,8 +252,13 @@ mod tests {
                 title: Some("Title".into()),
                 abstract_text: Some("Abstract.".into()),
                 authors: Authors(vec!["Ada".into()]),
-                venue: None, year: Some(2026), doi: None, arxiv_id: None,
-                dblp_key: None, url: None, source: None,
+                venue: None,
+                year: Some(2026),
+                doi: None,
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
                 status: PaperStatus::Resolved,
             },
         };
@@ -238,7 +272,10 @@ mod tests {
         );
 
         assert_eq!(svc.sweep().await.unwrap(), 1);
-        assert!(crate::summary::store::get(&pool, "p1").await.unwrap().is_some());
+        assert!(crate::summary::store::get(&pool, "p1")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -270,8 +307,13 @@ mod tests {
                 title: Some("Title".into()),
                 abstract_text: Some("Abstract.".into()),
                 authors: Authors(vec!["Ada".into()]),
-                venue: None, year: Some(2026), doi: None, arxiv_id: None,
-                dblp_key: None, url: None, source: None,
+                venue: None,
+                year: Some(2026),
+                doi: None,
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
                 status: PaperStatus::Resolved,
             },
         };
@@ -291,8 +333,7 @@ mod tests {
         // retried because it's within the 30-minute backoff window.
         assert_eq!(svc.sweep().await.unwrap(), 0);
 
-        let recent_cutoff =
-            (chrono::Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
+        let recent_cutoff = (chrono::Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
         assert_eq!(
             crate::summary::store::due_ids(&pool, 10, MAX_ATTEMPTS, &recent_cutoff)
                 .await
@@ -320,8 +361,13 @@ mod tests {
                 title: Some("Title".into()),
                 abstract_text: Some("Abstract.".into()),
                 authors: Authors(vec!["Ada".into()]),
-                venue: None, year: Some(2026), doi: None, arxiv_id: None,
-                dblp_key: None, url: None, source: None,
+                venue: None,
+                year: Some(2026),
+                doi: None,
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
                 status: PaperStatus::Resolved,
             },
         };
@@ -329,12 +375,15 @@ mod tests {
         crate::db::insert_paper(&pool, &paper).await.unwrap();
 
         // Simulate a prior failed attempt, without calling the model.
-        crate::summary::store::record_failure(&pool, "p1").await.unwrap();
-        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM summary_failures WHERE paper_id = ?")
-            .bind("p1")
-            .fetch_one(&pool)
+        crate::summary::store::record_failure(&pool, "p1")
             .await
             .unwrap();
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM summary_failures WHERE paper_id = ?")
+                .bind("p1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(n, 1);
 
         let server = MockServer::start().await;
@@ -357,13 +406,17 @@ mod tests {
         );
 
         assert!(svc.summarize_one("p1").await.unwrap());
-        assert!(crate::summary::store::get(&pool, "p1").await.unwrap().is_some());
-
-        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM summary_failures WHERE paper_id = ?")
-            .bind("p1")
-            .fetch_one(&pool)
+        assert!(crate::summary::store::get(&pool, "p1")
             .await
-            .unwrap();
+            .unwrap()
+            .is_some());
+
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM summary_failures WHERE paper_id = ?")
+                .bind("p1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(n, 0);
     }
 }

@@ -90,7 +90,9 @@ pub async fn clear(pool: &SqlitePool, paper_id: Option<&str>) -> Result<()> {
                 .await?;
         }
         None => {
-            sqlx::query("DELETE FROM paper_summaries").execute(pool).await?;
+            sqlx::query("DELETE FROM paper_summaries")
+                .execute(pool)
+                .await?;
         }
     }
     Ok(())
@@ -106,7 +108,9 @@ pub async fn clear_failure(pool: &SqlitePool, paper_id: Option<&str>) -> Result<
                 .await?;
         }
         None => {
-            sqlx::query("DELETE FROM summary_failures").execute(pool).await?;
+            sqlx::query("DELETE FROM summary_failures")
+                .execute(pool)
+                .await?;
         }
     }
     Ok(())
@@ -213,10 +217,16 @@ mod tests {
 
         // last_attempt_at is "now", which is NOT before a cutoff far in the past.
         let past_cutoff = "2000-01-01T00:00:00Z";
-        assert_eq!(due_ids(&pool, 10, 5, past_cutoff).await.unwrap(), Vec::<String>::new());
+        assert_eq!(
+            due_ids(&pool, 10, 5, past_cutoff).await.unwrap(),
+            Vec::<String>::new()
+        );
 
         // Eligible again once the cutoff is far in the future.
-        assert_eq!(due_ids(&pool, 10, 5, FUTURE_CUTOFF).await.unwrap(), vec!["p1".to_string()]);
+        assert_eq!(
+            due_ids(&pool, 10, 5, FUTURE_CUTOFF).await.unwrap(),
+            vec!["p1".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -228,9 +238,15 @@ mod tests {
         record_failure(&pool, "p1").await.unwrap();
 
         // attempts == 3, not < 3 -> excluded.
-        assert_eq!(due_ids(&pool, 10, 3, FUTURE_CUTOFF).await.unwrap(), Vec::<String>::new());
+        assert_eq!(
+            due_ids(&pool, 10, 3, FUTURE_CUTOFF).await.unwrap(),
+            Vec::<String>::new()
+        );
         // attempts == 3 < 4 -> included.
-        assert_eq!(due_ids(&pool, 10, 4, FUTURE_CUTOFF).await.unwrap(), vec!["p1".to_string()]);
+        assert_eq!(
+            due_ids(&pool, 10, 4, FUTURE_CUTOFF).await.unwrap(),
+            vec!["p1".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -254,7 +270,10 @@ mod tests {
         let pool = pool().await;
         crate::db::insert_paper(&pool, &paper("p1")).await.unwrap();
         record_failure(&pool, "p1").await.unwrap();
-        assert_eq!(due_ids(&pool, 10, 5, "2000-01-01T00:00:00Z").await.unwrap(), Vec::<String>::new());
+        assert_eq!(
+            due_ids(&pool, 10, 5, "2000-01-01T00:00:00Z").await.unwrap(),
+            Vec::<String>::new()
+        );
 
         clear_failure(&pool, Some("p1")).await.unwrap();
         assert_eq!(

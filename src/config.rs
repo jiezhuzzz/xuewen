@@ -111,9 +111,7 @@ pub struct Resolved {
 impl Resolved {
     /// Runnable chat client for this endpoint — `None` when no model or no
     /// API key resolved. The single home for the config → client dance, so
-    /// every keyed service constructs its `LlmClient` identically. (Chat is
-    /// the deliberate exception: it permits keyless local endpoints and
-    /// builds its own client.)
+    /// every keyed service constructs its `LlmClient` identically.
     pub fn client(&self) -> Option<crate::llm::LlmClient> {
         let model = self.model.clone()?;
         let key = self.api_key.clone()?;
@@ -132,8 +130,6 @@ pub struct AiConfig {
     pub defaults: AiDefaults,
     /// Semantic-search embeddings. Absent ⇒ semantic search off.
     pub embedding: Option<EmbeddingConfig>,
-    /// Paper chat. No models ⇒ chat off.
-    pub chat: ChatConfig,
     /// Per-paper library summaries. Absent ⇒ off.
     pub summary: Option<AiDefaults>,
     /// Daily-feed summaries. Absent ⇒ off.
@@ -142,6 +138,8 @@ pub struct AiConfig {
     pub citations: Option<AiDefaults>,
     /// LLM provider for translate-on-selection. Absent ⇒ LLM translate off.
     pub translate: Option<AiDefaults>,
+    /// Agent Ask. No backend subsections ⇒ off.
+    pub agent: AgentConfig,
 }
 
 impl AiConfig {
@@ -200,29 +198,51 @@ impl EmbeddingConfig {
     }
 }
 
-/// Paper chat (`[ai.chat]`). No models ⇒ feature disabled.
+/// Agent Ask (`[ai.agent]`): the tool-using agent behind the reader's Ask
+/// tab. Off unless at least one backend subsection is present. Auth is the
+/// SDKs' own (CLI logins or ANTHROPIC_API_KEY / OPENAI_API_KEY) — never this
+/// file. Backends do not inherit `[ai]` defaults: base_url/api_key_env are
+/// meaningless to them, only their own `model` applies.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
-pub struct ChatConfig {
-    pub models: Vec<ChatModelConfig>,
-    pub max_context_chars: usize,
+pub struct AgentConfig {
+    /// Claude Code backend. Presence enables it.
+    pub claude_code: Option<AgentBackendConfig>,
+    /// Codex backend. Presence enables it.
+    pub codex: Option<AgentBackendConfig>,
+    /// Attached-repo clone size guard, in MB.
+    pub max_repo_mb: u64,
+    /// Per-turn wall-clock timeout.
+    pub timeout_secs: u64,
+    /// Runner script override (default: agent-runner/src/runner.mjs,
+    /// resolved from the server's working directory).
+    pub runner: Option<PathBuf>,
 }
-impl Default for ChatConfig {
+
+impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            models: Vec::new(),
-            max_context_chars: 60_000,
+            claude_code: None,
+            codex: None,
+            max_repo_mb: 500,
+            timeout_secs: 300,
+            runner: None,
         }
     }
 }
 
-/// One selectable chat model (`[[ai.chat.models]]`).
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChatModelConfig {
-    /// Shown in the UI dropdown; display-only.
-    pub label: String,
-    #[serde(flatten)]
-    pub endpoint: AiDefaults,
+impl AgentConfig {
+    pub fn enabled(&self) -> bool {
+        self.claude_code.is_some() || self.codex.is_some()
+    }
+}
+
+/// One agent backend (`[ai.agent.claude_code]` / `[ai.agent.codex]`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentBackendConfig {
+    /// Optional model override passed through to the SDK.
+    pub model: Option<String>,
 }
 
 /// UI preferences (`[ui]`), surfaced to the frontend via `/api/settings`.
@@ -322,7 +342,8 @@ impl Config {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         cfg.inbox_dir = expand_tilde(cfg.inbox_dir, home.clone());
         cfg.library_root = expand_tilde(cfg.library_root, home.clone());
-        cfg.search.index_dir = expand_tilde(cfg.search.index_dir, home);
+        cfg.search.index_dir = expand_tilde(cfg.search.index_dir, home.clone());
+        cfg.ai.agent.runner = cfg.ai.agent.runner.map(|p| expand_tilde(p, home));
         Ok(cfg)
     }
 }
@@ -513,52 +534,6 @@ categories = ["cs.AI", "cs.LG"]
     }
 
     #[test]
-    fn ai_chat_config_parses_models_with_defaults() {
-        let cfg: Config = toml::from_str(
-            r#"
-inbox_dir     = "./inbox"
-library_root  = "./library"
-database_url  = "sqlite:./x.db"
-
-[[ai.chat.models]]
-label = "GPT-5 Mini"
-model = "gpt-5-mini"
-
-[[ai.chat.models]]
-label    = "Local Qwen"
-base_url = "http://localhost:11434/v1"
-model    = "qwen3:32b"
-"#,
-        )
-        .unwrap();
-        assert_eq!(cfg.ai.chat.models.len(), 2);
-        assert_eq!(
-            cfg.ai.chat.models[1].endpoint.model.as_deref(),
-            Some("qwen3:32b")
-        );
-        assert_eq!(cfg.ai.chat.max_context_chars, 60_000);
-        // Endpoint fields resolve through [ai] defaults + built-ins.
-        let r0 = cfg.ai.resolve(&cfg.ai.chat.models[0].endpoint);
-        assert_eq!(r0.base_url, "https://api.openai.com/v1");
-        let r1 = cfg.ai.resolve(&cfg.ai.chat.models[1].endpoint);
-        assert_eq!(r1.base_url, "http://localhost:11434/v1");
-    }
-
-    #[test]
-    fn ai_chat_config_absent_means_disabled() {
-        let cfg: Config = toml::from_str(
-            r#"
-inbox_dir     = "./inbox"
-library_root  = "./library"
-database_url  = "sqlite:./x.db"
-"#,
-        )
-        .unwrap();
-        assert!(cfg.ai.chat.models.is_empty());
-        assert_eq!(cfg.ai.chat.max_context_chars, 60_000);
-    }
-
-    #[test]
     fn resolve_key_prefers_inline_over_env_and_empty_is_none() {
         assert_eq!(
             resolve_key(Some("sk-inline".into()), "XUEWEN_TEST_UNSET_ENV"),
@@ -657,11 +632,6 @@ reasoning_effort = "high"
 model = "text-embedding-3-small"
 dims = 1536
 
-[ai.chat]
-[[ai.chat.models]]
-label = "Terra"
-model = "gpt-5.6-terra"
-
 [ai.summary]
 
 [ai.daily]
@@ -677,13 +647,6 @@ model = "gpt-5.6-terra"
             Some("text-embedding-3-small")
         );
         assert_eq!(ai.embedding.as_ref().unwrap().dims, 1536);
-        // chat model present with its own model
-        assert_eq!(ai.chat.models[0].label, "Terra");
-        assert_eq!(
-            ai.chat.models[0].endpoint.model.as_deref(),
-            Some("gpt-5.6-terra")
-        );
-        assert_eq!(ai.chat.max_context_chars, 60_000);
         // present-but-empty summary/daily ⇒ Some(defaults), inherit via resolve
         assert!(ai.summary.is_some());
         assert_eq!(
@@ -709,7 +672,6 @@ model = "gpt-5.6-terra"
         .unwrap();
         let cfg = Config::load(f.path()).unwrap();
         assert!(cfg.ai.embedding.is_none());
-        assert!(cfg.ai.chat.models.is_empty());
         assert!(cfg.ai.summary.is_none());
         assert!(cfg.ai.daily.is_none());
         assert!(cfg.ai.citations.is_none());
@@ -836,5 +798,35 @@ database_url = "sqlite::memory:"
 "#;
         let cfg: Config = toml::from_str(toml).unwrap();
         assert!(cfg.translate.is_none());
+    }
+
+    #[test]
+    fn ai_agent_absent_means_disabled_with_defaults() {
+        let ai: crate::config::AiConfig = toml::from_str("").unwrap();
+        assert!(!ai.agent.enabled());
+        assert_eq!(ai.agent.max_repo_mb, 500);
+        assert_eq!(ai.agent.timeout_secs, 300);
+        assert!(ai.agent.runner.is_none());
+    }
+
+    #[test]
+    fn ai_agent_backends_toggle_independently() {
+        let ai: crate::config::AiConfig = toml::from_str(
+            "[agent]\nmax_repo_mb = 100\n[agent.claude_code]\nmodel = \"claude-sonnet-5\"\n",
+        )
+        .unwrap();
+        assert!(ai.agent.enabled());
+        assert_eq!(ai.agent.max_repo_mb, 100);
+        assert_eq!(
+            ai.agent.claude_code.as_ref().unwrap().model.as_deref(),
+            Some("claude-sonnet-5")
+        );
+        assert!(ai.agent.codex.is_none());
+
+        let both: crate::config::AiConfig =
+            toml::from_str("[agent.claude_code]\n[agent.codex]\n").unwrap();
+        assert!(both.agent.claude_code.is_some());
+        assert!(both.agent.codex.is_some());
+        assert!(both.agent.codex.as_ref().unwrap().model.is_none());
     }
 }

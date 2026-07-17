@@ -26,6 +26,16 @@
   }
 </script>
 
+{#snippet toolChips(tools: { name: string; detail: string }[])}
+  <div class="mb-1 flex flex-wrap gap-1">
+    {#each tools as t, i (i)}
+      <span class="rounded-md bg-amber-700/10 px-1.5 py-0.5 font-mono text-[9.5px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-500">
+        {t.name}{t.detail ? ` ${t.detail}` : ''}
+      </span>
+    {/each}
+  </div>
+{/snippet}
+
 <div class="flex min-h-0 flex-1 flex-col">
   <header class="flex shrink-0 items-center gap-2 border-b border-stone-200 px-3 py-2 dark:border-stone-800">
     <select
@@ -65,7 +75,7 @@
   <div bind:this={transcript} onscroll={onScroll} class="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
     {#if chat.messages.length === 0 && chat.pending === null}
       <p class="px-2 pt-6 text-center text-sm text-stone-400 dark:text-stone-500">
-        Ask about the methods, the results, or how this paper connects to what you already know.
+        Ask about the methods, the results — or, with a repo attached, where something is implemented.
       </p>
     {/if}
     {#each chat.messages as m (m.id)}
@@ -75,6 +85,7 @@
         </div>
       {:else}
         <div class="mr-2">
+          {#if m.tools?.length}{@render toolChips(m.tools)}{/if}
           <div class="whitespace-pre-wrap font-serif text-[15px] leading-relaxed text-stone-700 dark:text-stone-300">
             {m.content}
           </div>
@@ -90,8 +101,11 @@
       <div class="ml-8 whitespace-pre-wrap rounded-lg bg-parchment px-3 py-2 text-sm text-ink dark:bg-stone-800 dark:text-stone-100">
         {chat.pending}
       </div>
-      <div class="mr-2 whitespace-pre-wrap font-serif text-[15px] leading-relaxed text-stone-700 dark:text-stone-300">
-        {chat.streaming}<span class="animate-pulse">▍</span>
+      <div class="mr-2">
+        {#if chat.streamTools.length}{@render toolChips(chat.streamTools)}{/if}
+        <div class="whitespace-pre-wrap font-serif text-[15px] leading-relaxed text-stone-700 dark:text-stone-300">
+          {chat.streaming}<span class="animate-pulse">▍</span>
+        </div>
       </div>
     {/if}
     {#if chat.error}

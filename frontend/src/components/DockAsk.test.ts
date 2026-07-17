@@ -35,8 +35,8 @@ describe('DockAsk', () => {
 
   it('clear asks for confirmation before deleting', async () => {
     chat.messages = [
-      { id: 1, role: 'user', content: 'q', model: null, created_at: '' },
-      { id: 2, role: 'assistant', content: 'a', model: 'Mock A', created_at: '' },
+      { id: 1, role: 'user', content: 'q', model: null, created_at: '', tools: null },
+      { id: 2, role: 'assistant', content: 'a', model: 'Mock A', created_at: '', tools: null },
     ];
     const fetchSpy = vi.fn(async () => new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetchSpy);
@@ -50,10 +50,26 @@ describe('DockAsk', () => {
 
   it('renders the model label under assistant turns', () => {
     chat.messages = [
-      { id: 1, role: 'user', content: 'q', model: null, created_at: '' },
-      { id: 2, role: 'assistant', content: 'a', model: 'Mock A', created_at: '' },
+      { id: 1, role: 'user', content: 'q', model: null, created_at: '', tools: null },
+      { id: 2, role: 'assistant', content: 'a', model: 'Mock A', created_at: '', tools: null },
     ];
     render(DockAsk);
     expect(screen.getByText('Mock A', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('renders tool chips above the assistant text', () => {
+    chat.messages = [
+      { id: 1, role: 'user', content: 'q', model: null, created_at: '', tools: null },
+      {
+        id: 2,
+        role: 'assistant',
+        content: 'a',
+        model: 'Claude Code',
+        created_at: '',
+        tools: [{ name: 'Read', detail: 'paper.txt' }],
+      },
+    ];
+    render(DockAsk);
+    expect(screen.getByText(/Read paper\.txt/)).toBeInTheDocument();
   });
 });

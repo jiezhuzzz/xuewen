@@ -38,9 +38,9 @@ pub struct AppState {
     /// Present when daily arXiv recommendations are configured (`serve`).
     /// `None` -> /api/daily answers 503.
     pub daily: Option<Arc<crate::daily::DailyService>>,
-    /// Present when paper chat is configured (`serve`). `None` -> chat
+    /// Present when Agent Ask is configured (`serve`). `None` -> chat
     /// endpoints answer 503 / available:false.
-    pub chat: Option<Arc<crate::chat::ChatService>>,
+    pub agent: Option<Arc<crate::agent::AgentService>>,
     /// Always present: heuristic parsing needs no config; [ai.citations]
     /// adds the LLM fallback for entries heuristics can't parse.
     pub citations: Arc<crate::citations::CitationsService>,
@@ -54,7 +54,7 @@ pub struct AppState {
 
 impl AppState {
     /// Base state with every optional service off (heuristics-only
-    /// citations, no ingest/search/daily/chat, default UI prefs). The
+    /// citations, no ingest/search/daily/agent, default UI prefs). The
     /// `build_router*` helpers below flip on just what they need.
     fn base(pool: SqlitePool, library_root: PathBuf) -> Self {
         let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
@@ -65,7 +65,7 @@ impl AppState {
             proxy_login_url: None,
             search: None,
             daily: None,
-            chat: None,
+            agent: None,
             citations,
             translate: None,
             ui: crate::config::UiConfig::default(),
@@ -131,14 +131,14 @@ pub fn build_router_with_daily(
     router_with(state)
 }
 
-/// Read-only router plus a configured chat service. Used by tests.
-pub fn build_router_with_chat(
+/// Read-only router plus a configured agent service. Used by tests.
+pub fn build_router_with_agent(
     pool: SqlitePool,
     library_root: PathBuf,
-    chat: Arc<crate::chat::ChatService>,
+    agent: Arc<crate::agent::AgentService>,
 ) -> Router {
     let mut state = AppState::base(pool, library_root);
-    state.chat = Some(chat);
+    state.agent = Some(agent);
     router_with(state)
 }
 
@@ -233,6 +233,12 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{id}/citations",
             axum::routing::post(api::parse_citations),
         )
+        .route(
+            "/api/papers/{id}/code",
+            get(api::get_paper_code)
+                .put(api::set_paper_code)
+                .delete(api::delete_paper_code),
+        )
         .route("/api/translate", axum::routing::post(api::translate))
         .fallback(assets::static_handler)
         .with_state(state)
@@ -248,7 +254,7 @@ pub async fn serve(
     proxy_login_url: Option<String>,
     search: Option<Arc<crate::search::SearchService>>,
     daily: Option<Arc<crate::daily::DailyService>>,
-    chat: Option<Arc<crate::chat::ChatService>>,
+    agent: Option<Arc<crate::agent::AgentService>>,
     citations: Arc<crate::citations::CitationsService>,
     translate: Option<Arc<crate::translate::TranslateService>>,
     ui: crate::config::UiConfig,
@@ -260,7 +266,7 @@ pub async fn serve(
         proxy_login_url,
         search,
         daily,
-        chat,
+        agent,
         citations,
         translate,
         ui,

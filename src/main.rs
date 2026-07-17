@@ -151,6 +151,11 @@ enum Command {
         #[command(subcommand)]
         cmd: TagCmd,
     },
+    /// Attach, inspect, or detach a paper's code repository
+    Code {
+        #[command(subcommand)]
+        cmd: CodeCmd,
+    },
     /// Star a paper.
     Star { paper: String },
     /// Un-star a paper.
@@ -263,6 +268,16 @@ enum TagCmd {
     Rm { name: String },
     /// List papers carrying a tag (or its prefix).
     Show { name: String },
+}
+
+#[derive(Subcommand)]
+enum CodeCmd {
+    /// Attach a repo (https URL) — clones now, pinned to HEAD
+    Set { paper: String, url: String },
+    /// Show the attached repo and its clone status
+    Status { paper: String },
+    /// Detach the repo and delete the local checkout
+    Rm { paper: String },
 }
 
 #[derive(Subcommand)]
@@ -537,9 +552,14 @@ async fn main() -> Result<()> {
             if let Some(s) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) {
                 tokio::spawn(xuewen::summary::run(s, std::time::Duration::from_secs(60)));
             }
-            let chat = xuewen::chat::ChatService::from_config(&cfg.ai);
-            if chat.is_none() {
-                tracing::info!("paper chat disabled (no usable [[ai.chat.models]])");
+            let agent = xuewen::agent::AgentService::from_config(&cfg.ai.agent);
+            match &agent {
+                None => tracing::info!("agent ask disabled (no [ai.agent] backends)"),
+                Some(a) => {
+                    for p in a.preflight().await {
+                        tracing::warn!("agent ask: {p}");
+                    }
+                }
             }
             let citations = xuewen::citations::CitationsService::from_config(pool.clone(), &cfg);
             let translate =
@@ -553,7 +573,7 @@ async fn main() -> Result<()> {
                 cfg.proxy.as_ref().map(|p| p.login_url.clone()),
                 search,
                 daily,
-                chat,
+                agent,
                 citations,
                 translate,
                 cfg.ui.clone(),
@@ -613,6 +633,12 @@ async fn main() -> Result<()> {
                         Err(e) => tracing::warn!("could not remove {}: {e}", path.display()),
                     }
                     xuewen::chat::store::clear(&pool, &p.id).await?;
+                    xuewen::db::delete_paper_code(&pool, &p.id).await?;
+                    let _ = tokio::fs::remove_dir_all(xuewen::agent::workspace_dir(
+                        &cfg.library_root,
+                        &p.id,
+                    ))
+                    .await;
                     db::delete_row(&pool, &p.id).await?;
                 }
                 println!("purged {} paper(s)", targets.len());
@@ -721,8 +747,8 @@ async fn main() -> Result<()> {
                 println!("deleted tag {}", tag.name);
             }
             TagCmd::Show { name } => {
-                let papers = db::list_papers(&pool, None, None, None, None, Some(&name), None)
-                    .await?;
+                let papers =
+                    db::list_papers(&pool, None, None, None, None, Some(&name), None).await?;
                 println!("{name} — {} paper(s)", papers.len());
                 for p in papers {
                     println!(
@@ -733,6 +759,59 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Command::Code { cmd } => {
+            match cmd {
+                CodeCmd::Set { paper, url } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    let paper_id = paper.id.clone();
+                    xuewen::agent::code::validate_repo_url(&url).map_err(|e| anyhow::anyhow!(e))?;
+                    xuewen::db::upsert_paper_code_cloning(&pool, &paper_id, url.trim()).await?;
+                    // CLI clones inline so the outcome prints immediately.
+                    xuewen::agent::code::run_clone(
+                        pool.clone(),
+                        cfg.library_root.clone(),
+                        paper_id.clone(),
+                        url.trim().to_string(),
+                        cfg.ai.agent.max_repo_mb,
+                    )
+                    .await;
+                    match xuewen::db::get_paper_code(&pool, &paper_id).await? {
+                        Some(c) if c.status == "ready" => {
+                            println!(
+                                "attached {} at {}",
+                                c.repo_url,
+                                c.commit_sha.as_deref().unwrap_or("?")
+                            )
+                        }
+                        Some(c) => println!(
+                            "attach failed: {}",
+                            c.error.as_deref().unwrap_or("unknown error")
+                        ),
+                        None => println!("attach failed: no record"),
+                    }
+                }
+                CodeCmd::Status { paper } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    let paper_id = paper.id;
+                    match xuewen::db::get_paper_code(&pool, &paper_id).await? {
+                        None => println!("no repo attached"),
+                        Some(c) => println!(
+                            "{} — {}{}",
+                            c.repo_url,
+                            c.status,
+                            c.commit_sha.map(|s| format!(" @ {s}")).unwrap_or_default()
+                        ),
+                    }
+                }
+                CodeCmd::Rm { paper } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    let paper_id = paper.id;
+                    xuewen::agent::code::remove_checkout(&cfg.library_root, &paper_id).await;
+                    xuewen::db::delete_paper_code(&pool, &paper_id).await?;
+                    println!("detached");
+                }
+            }
+        }
         Command::Star { paper } => {
             let paper = db::find_one(&pool, &paper).await?;
             let label = paper.cite_key.as_deref().unwrap_or(&paper.id);

@@ -4,6 +4,7 @@ import type {
   Filters,
   IdentifyBody,
   ImportResult,
+  PaperCodeStatus,
   PaperDetail,
   PaperSummary,
   Project,
@@ -319,6 +320,34 @@ export async function postChatMessage(
   });
   if (!res.ok || !res.body) throw new Error(`request failed (${res.status})`);
   return res;
+}
+
+// --- code (attach-a-repo for the agent; Task 6 on the backend) ---
+
+export async function getPaperCode(
+  id: string,
+): Promise<{ attached: boolean; code: PaperCodeStatus | null }> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(id)}/code`);
+  if (!res.ok) return errorFromResponse(res, 'loading the code status failed');
+  return res.json();
+}
+
+export async function setPaperCode(
+  id: string,
+  repoUrl: string,
+): Promise<{ attached: boolean; code: PaperCodeStatus | null }> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(id)}/code`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ repo_url: repoUrl }),
+  });
+  if (!res.ok) return errorFromResponse(res, 'attaching the repo failed');
+  return res.json();
+}
+
+export async function removePaperCode(id: string): Promise<void> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(id)}/code`, { method: 'DELETE' });
+  if (!res.ok) return errorFromResponse(res, 'removing the repo failed');
 }
 
 /** Parse extracted reference strings via the backend LLM service. Returns

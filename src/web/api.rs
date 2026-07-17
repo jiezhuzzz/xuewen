@@ -1192,3 +1192,100 @@ pub async fn parse_citations(
         }
     }
 }
+
+#[derive(serde::Deserialize)]
+pub struct CodeBody {
+    pub repo_url: String,
+}
+
+/// Attach (or replace) a paper's code repo: 202 + row while the shallow
+/// clone runs in the background; poll GET for the outcome.
+pub async fn set_paper_code(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CodeBody>,
+) -> Response {
+    let Some(agent) = app.agent.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "agent ask is not configured"})),
+        )
+            .into_response();
+    };
+    let paper = match db::get_by_id(&app.pool, &id).await {
+        Ok(Some(p)) if p.deleted_at.is_none() => p,
+        Ok(_) => return not_found(),
+        Err(e) => {
+            tracing::error!("code paper lookup: {e}");
+            return internal_error();
+        }
+    };
+    if let Err(msg) = crate::agent::code::validate_repo_url(&body.repo_url) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": msg})),
+        )
+            .into_response();
+    }
+    if let Err(e) = db::upsert_paper_code_cloning(&app.pool, &paper.id, body.repo_url.trim()).await
+    {
+        tracing::error!("paper_code upsert: {e}");
+        return internal_error();
+    }
+    crate::agent::code::spawn_clone(
+        app.pool.clone(),
+        app.library_root.clone(),
+        paper.id.clone(),
+        body.repo_url.trim().to_string(),
+        agent.max_repo_mb,
+    );
+    match db::get_paper_code(&app.pool, &paper.id).await {
+        Ok(code) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "attached": true, "code": code })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("paper_code read-back: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn get_paper_code(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    match db::get_by_id(&app.pool, &id).await {
+        Ok(Some(p)) if p.deleted_at.is_none() => match db::get_paper_code(&app.pool, &p.id).await {
+            Ok(code) => Json(serde_json::json!({ "attached": code.is_some(), "code": code }))
+                .into_response(),
+            Err(e) => {
+                tracing::error!("paper_code get: {e}");
+                internal_error()
+            }
+        },
+        Ok(_) => not_found(),
+        Err(e) => {
+            tracing::error!("code paper lookup: {e}");
+            internal_error()
+        }
+    }
+}
+
+pub async fn delete_paper_code(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    match db::get_by_id(&app.pool, &id).await {
+        Ok(Some(p)) if p.deleted_at.is_none() => {
+            crate::agent::code::remove_checkout(&app.library_root, &p.id).await;
+            match db::delete_paper_code(&app.pool, &p.id).await {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(e) => {
+                    tracing::error!("paper_code delete: {e}");
+                    internal_error()
+                }
+            }
+        }
+        Ok(_) => not_found(),
+        Err(e) => {
+            tracing::error!("code paper lookup: {e}");
+            internal_error()
+        }
+    }
+}

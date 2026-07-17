@@ -12,11 +12,12 @@ pub struct ChatMessageRow {
     pub content: String,
     pub model: Option<String>,
     pub created_at: String,
+    pub tools_json: Option<String>,
 }
 
 pub async fn list(pool: &SqlitePool, paper_id: &str) -> Result<Vec<ChatMessageRow>> {
     Ok(sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT id, role, content, model, created_at
+        "SELECT id, role, content, model, created_at, tools_json
          FROM chat_messages WHERE paper_id = ? ORDER BY id",
     )
     .bind(paper_id)
@@ -31,6 +32,7 @@ pub async fn insert_exchange(
     user_content: &str,
     assistant_content: &str,
     model_label: &str,
+    tools_json: Option<&str>,
 ) -> Result<i64> {
     let mut tx = pool.begin().await?;
     sqlx::query("INSERT INTO chat_messages (paper_id, role, content) VALUES (?, 'user', ?)")
@@ -39,11 +41,12 @@ pub async fn insert_exchange(
         .execute(&mut *tx)
         .await?;
     let res = sqlx::query(
-        "INSERT INTO chat_messages (paper_id, role, content, model) VALUES (?, 'assistant', ?, ?)",
+        "INSERT INTO chat_messages (paper_id, role, content, model, tools_json) VALUES (?, 'assistant', ?, ?, ?)",
     )
     .bind(paper_id)
     .bind(assistant_content)
     .bind(model_label)
+    .bind(tools_json)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -81,9 +84,16 @@ mod tests {
     #[tokio::test]
     async fn exchange_roundtrip_in_order() {
         let pool = pool_with_paper("p1").await;
-        let aid = insert_exchange(&pool, "p1", "what is this?", "a paper.", "GPT-5 Mini")
-            .await
-            .unwrap();
+        let aid = insert_exchange(
+            &pool,
+            "p1",
+            "what is this?",
+            "a paper.",
+            "GPT-5 Mini",
+            Some(r#"[{"name":"Read","detail":"paper.txt"}]"#),
+        )
+        .await
+        .unwrap();
         assert!(aid > 0);
         insert_exchange(
             &pool,
@@ -91,6 +101,7 @@ mod tests {
             "and the method?",
             "transformers.",
             "Local Qwen",
+            None,
         )
         .await
         .unwrap();
@@ -102,7 +113,12 @@ mod tests {
         assert_eq!(rows[0].model, None);
         assert_eq!(rows[1].role, "assistant");
         assert_eq!(rows[1].model.as_deref(), Some("GPT-5 Mini"));
+        assert_eq!(
+            rows[1].tools_json.as_deref(),
+            Some(r#"[{"name":"Read","detail":"paper.txt"}]"#)
+        );
         assert_eq!(rows[3].model.as_deref(), Some("Local Qwen"));
+        assert_eq!(rows[3].tools_json, None);
     }
 
     #[tokio::test]
@@ -115,8 +131,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        insert_exchange(&pool, "p1", "q", "a", "M").await.unwrap();
-        insert_exchange(&pool, "p2", "q", "a", "M").await.unwrap();
+        insert_exchange(&pool, "p1", "q", "a", "M", None)
+            .await
+            .unwrap();
+        insert_exchange(&pool, "p2", "q", "a", "M", None)
+            .await
+            .unwrap();
 
         clear(&pool, "p1").await.unwrap();
         assert!(list(&pool, "p1").await.unwrap().is_empty());

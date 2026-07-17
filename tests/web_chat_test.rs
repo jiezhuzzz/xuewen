@@ -2,27 +2,21 @@ mod common;
 
 use axum_test::TestServer;
 use serde_json::json;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-use xuewen::config::{AiConfig, AiDefaults, ChatConfig, ChatModelConfig};
+use std::path::PathBuf;
+use xuewen::agent::AgentService;
+use xuewen::config::{AgentBackendConfig, AgentConfig};
 
-fn chat_cfg(base_url: &str) -> AiConfig {
-    AiConfig {
-        chat: ChatConfig {
-            models: vec![ChatModelConfig {
-                label: "Mock Model".into(),
-                endpoint: AiDefaults {
-                    base_url: Some(base_url.into()),
-                    api_key: None,
-                    api_key_env: Some("XUEWEN_TEST_UNSET".into()),
-                    model: Some("mock-1".into()),
-                    reasoning_effort: None,
-                },
-            }],
-            max_context_chars: 60_000,
-        },
-        ..Default::default()
-    }
+fn stub_agent() -> std::sync::Arc<AgentService> {
+    AgentService::from_config(&AgentConfig {
+        claude_code: Some(AgentBackendConfig::default()),
+        codex: Some(AgentBackendConfig::default()),
+        runner: Some(PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/stub_runner.mjs"
+        ))),
+        ..AgentConfig::default()
+    })
+    .unwrap()
 }
 
 #[tokio::test]
@@ -36,88 +30,126 @@ async fn models_report_unavailable_without_config() {
 }
 
 #[tokio::test]
-async fn models_list_labels_but_never_keys() {
+async fn models_list_agent_backends() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    let chat = xuewen::chat::ChatService::from_config(&chat_cfg("http://example.invalid")).unwrap();
-    let server = TestServer::new(xuewen::web::build_router_with_chat(pool, root, chat)).unwrap();
-    let resp = server.get("/api/chat/models").await;
-    let v: serde_json::Value = resp.json();
+    let server = TestServer::new(xuewen::web::build_router_with_agent(
+        pool,
+        root,
+        stub_agent(),
+    ))
+    .unwrap();
+    let v: serde_json::Value = server.get("/api/chat/models").await.json();
     assert_eq!(v["available"], true);
-    assert_eq!(v["models"][0]["id"], "0");
-    assert_eq!(v["models"][0]["label"], "Mock Model");
-    let raw = resp.text();
-    assert!(
-        !raw.contains("base_url") && !raw.contains("api_key"),
-        "no provider details leak"
-    );
+    assert_eq!(v["models"][0]["id"], "claude_code");
+    assert_eq!(v["models"][0]["label"], "Claude Code");
+    assert_eq!(v["models"][1]["id"], "codex");
 }
 
 #[tokio::test]
-async fn send_streams_deltas_and_persists_the_exchange() {
-    let upstream = MockServer::start().await;
-    let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n\
-               data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n\
-               data: [DONE]\n\n";
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
-        .mount(&upstream)
-        .await;
-
+async fn send_streams_tool_and_deltas_and_persists_with_tools() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    let chat = xuewen::chat::ChatService::from_config(&chat_cfg(&upstream.uri())).unwrap();
-    let server = TestServer::new(xuewen::web::build_router_with_chat(
+    let server = TestServer::new(xuewen::web::build_router_with_agent(
         pool.clone(),
         root,
-        chat,
+        stub_agent(),
     ))
     .unwrap();
 
     let resp = server
         .post("/api/papers/p1/chat")
-        .json(&json!({"model_id": "0", "message": "what is this?"}))
+        .json(&json!({"model_id": "claude_code", "message": "what is this?"}))
         .await;
     resp.assert_status_ok();
     let body = resp.text();
-    assert!(body.contains("event: delta"), "body: {body}");
-    assert!(body.contains("Hel"));
+    assert!(body.contains("event: tool"));
+    assert!(body.contains("\"name\":\"Read\""));
+    assert!(body.contains("event: delta"));
     assert!(body.contains("event: done"));
 
     let rows = xuewen::chat::store::list(&pool, "p1").await.unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].role, "user");
-    assert_eq!(rows[1].content, "Hello");
-    assert_eq!(rows[1].model.as_deref(), Some("Mock Model"));
+    assert_eq!(rows[1].role, "assistant");
+    assert_eq!(rows[1].content, "Hello from claude_code");
+    assert_eq!(rows[1].model.as_deref(), Some("Claude Code"));
+    let tools: serde_json::Value =
+        serde_json::from_str(rows[1].tools_json.as_deref().unwrap()).unwrap();
+    assert_eq!(tools[0]["name"], "Read");
+}
+
+#[tokio::test]
+async fn send_error_persists_nothing() {
+    let (pool, root) = common::pool_and_root_with_paper("p1").await;
+    let server = TestServer::new(xuewen::web::build_router_with_agent(
+        pool.clone(),
+        root,
+        stub_agent(),
+    ))
+    .unwrap();
+    let resp = server
+        .post("/api/papers/p1/chat")
+        .json(&json!({"model_id": "codex", "message": "please fail"}))
+        .await;
+    resp.assert_status_ok();
+    assert!(resp.text().contains("event: error"));
+    assert!(xuewen::chat::store::list(&pool, "p1")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn send_with_empty_reply_errors_and_persists_nothing() {
+    let (pool, root) = common::pool_and_root_with_paper("p1").await;
+    let server = TestServer::new(xuewen::web::build_router_with_agent(
+        pool.clone(),
+        root,
+        stub_agent(),
+    ))
+    .unwrap();
+    let resp = server
+        .post("/api/papers/p1/chat")
+        .json(&json!({"model_id": "claude_code", "message": "answer with empty please"}))
+        .await;
+    resp.assert_status_ok();
+    let body = resp.text();
+    assert!(body.contains("event: error"));
+    assert!(body.contains("empty reply"));
+    assert!(xuewen::chat::store::list(&pool, "p1")
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
 async fn send_validates_model_message_paper_and_config() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-
-    // 503 when chat is unconfigured.
     let plain = TestServer::new(xuewen::web::build_router(pool.clone(), root.clone())).unwrap();
     plain
         .post("/api/papers/p1/chat")
-        .json(&json!({"model_id": "0", "message": "hi"}))
+        .json(&json!({"model_id": "claude_code", "message": "hi"}))
         .await
         .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
 
-    let chat = xuewen::chat::ChatService::from_config(&chat_cfg("http://example.invalid")).unwrap();
-    let server = TestServer::new(xuewen::web::build_router_with_chat(pool, root, chat)).unwrap();
-    // 400: unknown model id; 400: empty message; 404: unknown paper.
+    let server = TestServer::new(xuewen::web::build_router_with_agent(
+        pool,
+        root,
+        stub_agent(),
+    ))
+    .unwrap();
     server
         .post("/api/papers/p1/chat")
-        .json(&json!({"model_id": "9", "message": "hi"}))
+        .json(&json!({"model_id": "nope", "message": "hi"}))
         .await
         .assert_status(axum::http::StatusCode::BAD_REQUEST);
     server
         .post("/api/papers/p1/chat")
-        .json(&json!({"model_id": "0", "message": "   "}))
+        .json(&json!({"model_id": "claude_code", "message": "  "}))
         .await
         .assert_status(axum::http::StatusCode::BAD_REQUEST);
     server
-        .post("/api/papers/nope/chat")
-        .json(&json!({"model_id": "0", "message": "hi"}))
+        .post("/api/papers/missing/chat")
+        .json(&json!({"model_id": "claude_code", "message": "hi"}))
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
 }
@@ -125,15 +157,17 @@ async fn send_validates_model_message_paper_and_config() {
 #[tokio::test]
 async fn history_roundtrip_and_clear() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    xuewen::chat::store::insert_exchange(&pool, "p1", "q", "a", "M")
+    xuewen::chat::store::insert_exchange(&pool, "p1", "q", "a", "Claude Code", None)
         .await
         .unwrap();
-    let chat = xuewen::chat::ChatService::from_config(&chat_cfg("http://example.invalid")).unwrap();
-    let server = TestServer::new(xuewen::web::build_router_with_chat(pool, root, chat)).unwrap();
-
+    let server = TestServer::new(xuewen::web::build_router_with_agent(
+        pool,
+        root,
+        stub_agent(),
+    ))
+    .unwrap();
     let rows: serde_json::Value = server.get("/api/papers/p1/chat").await.json();
     assert_eq!(rows.as_array().unwrap().len(), 2);
-
     server
         .delete("/api/papers/p1/chat")
         .await
@@ -141,42 +175,9 @@ async fn history_roundtrip_and_clear() {
     let rows: serde_json::Value = server.get("/api/papers/p1/chat").await.json();
     assert_eq!(rows.as_array().unwrap().len(), 0);
 
+    // Unknown paper: history is also guarded by live_paper.
     server
         .get("/api/papers/nope/chat")
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn send_with_empty_reply_errors_and_persists_nothing() {
-    let upstream = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"),
-        )
-        .mount(&upstream)
-        .await;
-
-    let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    let chat = xuewen::chat::ChatService::from_config(&chat_cfg(&upstream.uri())).unwrap();
-    let server = TestServer::new(xuewen::web::build_router_with_chat(
-        pool.clone(),
-        root,
-        chat,
-    ))
-    .unwrap();
-
-    let resp = server
-        .post("/api/papers/p1/chat")
-        .json(&serde_json::json!({"model_id": "0", "message": "hi"}))
-        .await;
-    resp.assert_status_ok();
-    let body = resp.text();
-    assert!(body.contains("event: error"), "body: {body}");
-    assert!(body.contains("empty reply"));
-    assert!(!body.contains("event: done"));
-
-    let rows = xuewen::chat::store::list(&pool, "p1").await.unwrap();
-    assert!(rows.is_empty(), "nothing may persist for an empty reply");
 }

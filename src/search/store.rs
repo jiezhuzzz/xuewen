@@ -33,9 +33,19 @@ pub fn meta_hash(p: &Paper) -> String {
         h.update(part.as_bytes());
         h.update([0x1f]);
     }
-    h.update(p.meta.year.map(|y| y.to_string()).unwrap_or_default().as_bytes());
+    h.update(
+        p.meta
+            .year
+            .map(|y| y.to_string())
+            .unwrap_or_default()
+            .as_bytes(),
+    );
     h.update([0x1f]);
-    h.update(serde_json::to_string(&p.meta.authors).unwrap_or_default().as_bytes());
+    h.update(
+        serde_json::to_string(&p.meta.authors)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
     hex::encode(h.finalize())
 }
 
@@ -172,9 +182,11 @@ pub async fn remove_index_entry(pool: &SqlitePool, paper_id: &str) -> Result<()>
 /// Force re-indexing of the given tier(s) for every paper (rebuild).
 pub async fn clear_stamps(pool: &SqlitePool, fts: bool, vectors: bool) -> Result<()> {
     if fts {
-        sqlx::query("UPDATE search_index SET fts_indexed_at = NULL, attempts = 0, last_error = NULL")
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "UPDATE search_index SET fts_indexed_at = NULL, attempts = 0, last_error = NULL",
+        )
+        .execute(pool)
+        .await?;
     }
     if vectors {
         sqlx::query(
@@ -219,12 +231,14 @@ pub async fn papers_by_ids_ordered(
         // NOTE: a tag name containing a literal `%`/`_` would over-match under
         // LIKE (no escaping applied). Tags rarely contain these characters;
         // revisit with `ESCAPE '\\'` + escaped bind if it ever matters.
-        qb.push(" AND id IN (SELECT pt.paper_id FROM paper_tags pt \
-                 JOIN tags t ON t.id = pt.tag_id WHERE t.name = ")
-            .push_bind(tag.to_string())
-            .push(" OR t.name LIKE ")
-            .push_bind(format!("{tag}/%"))
-            .push(")");
+        qb.push(
+            " AND id IN (SELECT pt.paper_id FROM paper_tags pt \
+                 JOIN tags t ON t.id = pt.tag_id WHERE t.name = ",
+        )
+        .push_bind(tag.to_string())
+        .push(" OR t.name LIKE ")
+        .push_bind(format!("{tag}/%"))
+        .push(")");
     }
     if starred == Some(true) {
         qb.push(" AND starred = 1");
@@ -277,8 +291,16 @@ mod tests {
 
     fn two_chunks() -> Vec<Chunk> {
         vec![
-            Chunk { seq: 0, page: None, text: "T\nA".into() },
-            Chunk { seq: 1, page: Some(1), text: "body".into() },
+            Chunk {
+                seq: 0,
+                page: None,
+                text: "T\nA".into(),
+            },
+            Chunk {
+                seq: 1,
+                page: Some(1),
+                text: "body".into(),
+            },
         ]
     }
 
@@ -297,17 +319,24 @@ mod tests {
         let p = paper("p1", "h1", "T");
         crate::db::insert_paper(&pool, &p).await.unwrap();
 
-        replace_chunks(&pool, "p1", &two_chunks(), "h1", &meta_hash(&p)).await.unwrap();
+        replace_chunks(&pool, "p1", &two_chunks(), "h1", &meta_hash(&p))
+            .await
+            .unwrap();
         let got = chunks_for_paper(&pool, "p1").await.unwrap();
         assert_eq!(got, two_chunks());
-        assert_eq!(chunk_text(&pool, "p1", 1).await.unwrap().unwrap().text, "body");
+        assert_eq!(
+            chunk_text(&pool, "p1", 1).await.unwrap().unwrap().text,
+            "body"
+        );
 
         let row = &all_index_rows(&pool).await.unwrap()[0];
         assert_eq!(row.chunk_count, 2);
         assert!(row.fts_indexed_at.is_none() && row.vectors_indexed_at.is_none());
 
         mark_fts_done(&pool, "p1").await.unwrap();
-        mark_vectors_done(&pool, "p1", "text-embedding-3-small").await.unwrap();
+        mark_vectors_done(&pool, "p1", "text-embedding-3-small")
+            .await
+            .unwrap();
         let row = &all_index_rows(&pool).await.unwrap()[0];
         assert!(row.fts_indexed_at.is_some() && row.vectors_indexed_at.is_some());
         assert_eq!(row.embed_model.as_deref(), Some("text-embedding-3-small"));
@@ -315,7 +344,9 @@ mod tests {
         assert!(row.last_error.is_none());
 
         // Replacing chunks again clears the stamps (fresh index required).
-        replace_chunks(&pool, "p1", &two_chunks(), "h2", &meta_hash(&p)).await.unwrap();
+        replace_chunks(&pool, "p1", &two_chunks(), "h2", &meta_hash(&p))
+            .await
+            .unwrap();
         let row = &all_index_rows(&pool).await.unwrap()[0];
         assert!(row.fts_indexed_at.is_none() && row.vectors_indexed_at.is_none());
         assert_eq!(row.content_hash, "h2");
@@ -326,7 +357,9 @@ mod tests {
         let pool = pool().await;
         let p = paper("p1", "h1", "T");
         crate::db::insert_paper(&pool, &p).await.unwrap();
-        replace_chunks(&pool, "p1", &two_chunks(), "h1", &meta_hash(&p)).await.unwrap();
+        replace_chunks(&pool, "p1", &two_chunks(), "h1", &meta_hash(&p))
+            .await
+            .unwrap();
 
         record_error(&pool, "p1", "boom").await.unwrap();
         record_error(&pool, "p1", "boom2").await.unwrap();
@@ -350,7 +383,9 @@ mod tests {
         // brand-new paper whose PDF extraction fails before chunking).
         assert!(all_index_rows(&pool).await.unwrap().is_empty());
 
-        record_error(&pool, "p1", "extraction failed").await.unwrap();
+        record_error(&pool, "p1", "extraction failed")
+            .await
+            .unwrap();
         let rows = all_index_rows(&pool).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].attempts, 1);
@@ -358,11 +393,16 @@ mod tests {
         assert_eq!(rows[0].content_hash, "");
         assert_eq!(rows[0].meta_hash, "");
 
-        record_error(&pool, "p1", "extraction failed again").await.unwrap();
+        record_error(&pool, "p1", "extraction failed again")
+            .await
+            .unwrap();
         let rows = all_index_rows(&pool).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].attempts, 2);
-        assert_eq!(rows[0].last_error.as_deref(), Some("extraction failed again"));
+        assert_eq!(
+            rows[0].last_error.as_deref(),
+            Some("extraction failed again")
+        );
     }
 
     #[tokio::test]
@@ -370,7 +410,9 @@ mod tests {
         let pool = pool().await;
         let p = paper("p1", "h1", "T");
         crate::db::insert_paper(&pool, &p).await.unwrap();
-        replace_chunks(&pool, "p1", &two_chunks(), "h1", &meta_hash(&p)).await.unwrap();
+        replace_chunks(&pool, "p1", &two_chunks(), "h1", &meta_hash(&p))
+            .await
+            .unwrap();
         mark_fts_done(&pool, "p1").await.unwrap();
         mark_vectors_done(&pool, "p1", "m").await.unwrap();
 
@@ -387,12 +429,21 @@ mod tests {
     async fn papers_by_ids_ordered_preserves_order_and_filters() {
         let pool = pool().await;
         for (id, hash, title) in [("a", "h1", "A"), ("b", "h2", "B"), ("c", "h3", "C")] {
-            crate::db::insert_paper(&pool, &paper(id, hash, title)).await.unwrap();
+            crate::db::insert_paper(&pool, &paper(id, hash, title))
+                .await
+                .unwrap();
         }
         crate::db::soft_delete(&pool, "c").await.unwrap();
 
-        let ids = vec!["c".to_string(), "b".to_string(), "a".to_string(), "zz".to_string()];
-        let got = papers_by_ids_ordered(&pool, &ids, None, None, None, None).await.unwrap();
+        let ids = vec![
+            "c".to_string(),
+            "b".to_string(),
+            "a".to_string(),
+            "zz".to_string(),
+        ];
+        let got = papers_by_ids_ordered(&pool, &ids, None, None, None, None)
+            .await
+            .unwrap();
         let got_ids: Vec<&str> = got.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(got_ids, vec!["b", "a"]); // trashed + unknown dropped, order kept
     }
@@ -400,17 +451,28 @@ mod tests {
     #[tokio::test]
     async fn papers_by_ids_ordered_filters_by_tag_prefix_and_starred() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "h1", "A")).await.unwrap();
-        crate::db::insert_paper(&pool, &paper("b", "h2", "B")).await.unwrap();
-        crate::db::add_paper_tag(&pool, "a", "security/fuzzing").await.unwrap();
-        crate::db::set_paper_starred(&pool, "b", true).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "h1", "A"))
+            .await
+            .unwrap();
+        crate::db::insert_paper(&pool, &paper("b", "h2", "B"))
+            .await
+            .unwrap();
+        crate::db::add_paper_tag(&pool, "a", "security/fuzzing")
+            .await
+            .unwrap();
+        crate::db::set_paper_starred(&pool, "b", true)
+            .await
+            .unwrap();
 
         let ids = vec!["a".to_string(), "b".to_string()];
 
         let got = papers_by_ids_ordered(&pool, &ids, None, None, Some("security"), None)
             .await
             .unwrap();
-        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["a"]);
+        assert_eq!(
+            got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["a"]
+        );
 
         let got = papers_by_ids_ordered(&pool, &ids, None, None, Some("ml"), None)
             .await
@@ -420,6 +482,9 @@ mod tests {
         let got = papers_by_ids_ordered(&pool, &ids, None, None, None, Some(true))
             .await
             .unwrap();
-        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["b"]);
+        assert_eq!(
+            got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["b"]
+        );
     }
 }
