@@ -27,6 +27,14 @@ import {
 } from './api';
 import { invalidateLibraryTitleIndex } from './citationMatch';
 import { dur } from './motion';
+import {
+  type FieldKey,
+  hasSearchTerms,
+  parseQuery,
+  setFieldQualifiers,
+  setQualifier,
+  setStarredQualifier,
+} from './searchQuery';
 import { dropReaderState } from './readerState.svelte';
 import { toast } from './toasts.svelte';
 import type {
@@ -40,6 +48,7 @@ import type {
   SearchMatch,
   SearchOpts,
   Stats,
+  StatusFilter,
   TagSummary,
   TranslateSettings,
 } from './types';
@@ -52,6 +61,24 @@ export const filters = $state<Filters>({
   tag: undefined,
   starred: undefined,
 });
+
+/// The search box string is the single source of truth; project/tag/starred/
+/// status on `filters` (and the field toggles on `searchOpts`) are a cache of
+/// its parse — `project:` names resolve to ids via the loaded projects list
+/// (unresolved names pass through verbatim and simply match nothing).
+function syncFiltersFromQuery(): void {
+  const p = parseQuery(filters.q);
+  filters.tag = p.tag ?? undefined;
+  filters.starred = p.starred || undefined;
+  filters.status = p.status ?? 'all';
+  filters.project = p.project
+    ? (projects.items.find((pr) => pr.name.toLowerCase() === p.project!.toLowerCase())?.id ??
+      p.project)
+    : 'all';
+  for (const k of ['title', 'authors', 'abstract', 'body'] as const) {
+    searchOpts[k] = p.fields === null || p.fields.includes(k);
+  }
+}
 
 export const searchOpts = $state<SearchOpts>({
   title: true,
@@ -79,13 +106,13 @@ export function semanticBlocked(): boolean {
   return authorsOnly || !searchMeta.semantic.available;
 }
 
-export function toggleSearchField(k: 'title' | 'authors' | 'abstract' | 'body'): void {
-  const on = ['title', 'authors', 'abstract', 'body'].filter(
-    (f) => searchOpts[f as keyof SearchOpts],
-  );
+export function toggleSearchField(k: FieldKey): void {
+  const on = (['title', 'authors', 'abstract', 'body'] as const).filter((f) => searchOpts[f]);
   if (searchOpts[k] && on.length === 1) return; // keep at least one field
-  searchOpts[k] = !searchOpts[k];
-  if (filters.q.trim()) void loadPapers();
+  const next = searchOpts[k] ? on.filter((f) => f !== k) : [...on, k];
+  filters.q = setFieldQualifiers(filters.q, next.length === 4 ? null : next);
+  syncFiltersFromQuery();
+  if (hasSearchTerms(parseQuery(filters.q))) void loadPapers();
 }
 
 export function toggleSearchEngine(k: 'keyword' | 'semantic'): void {
@@ -333,15 +360,17 @@ export async function loadPapers(opts?: { keywordOnly?: boolean }): Promise<void
   library.loading = true;
   library.error = null;
   try {
-    const q = filters.q.trim();
-    if (!q) {
-      const papers = await listPapers({ ...filters });
+    const parsed = parseQuery(filters.q);
+    if (!hasSearchTerms(parsed)) {
+      // Qualifier-only (or empty) query → plain filtered list. The parsed
+      // filters are already cached on `filters`; q itself must not leak in.
+      const papers = await listPapers({ ...filters, q: '' });
       if (my !== seq) return; // a newer request superseded this one
       library.papers = papers;
       searchMeta.byId = {};
     } else {
       const keywordOnly = Boolean(opts?.keywordOnly) || !searchOpts.semantic;
-      const resp = await searchPapers(q, { ...searchOpts }, { ...filters }, keywordOnly);
+      const resp = await searchPapers(filters.q, { ...searchOpts }, keywordOnly);
       if (my !== seq) return;
       library.papers = resp.results.map((r) => r.paper);
       searchMeta.byId = Object.fromEntries(resp.results.map((r) => [r.paper.id, r.match]));
@@ -370,27 +399,32 @@ export async function loadTags(): Promise<void> {
   }
 }
 
-/// The three list filters (project/tag/starred) are mutually exclusive in the
-/// UI: setting one clears the other two so exactly one is ever active.
-export async function setProjectFilter(id: string): Promise<void> {
-  filters.project = id;
-  filters.tag = undefined;
-  filters.starred = undefined;
+/// Pill clicks and the status control edit the query string; the parse then
+/// round-trips into the cached filters. Filters combine (AND) — the old
+/// project/tag/star mutual exclusivity is gone by design.
+async function applyQueryEdit(q: string): Promise<void> {
+  clearTimeout(kwDebounce);
+  clearTimeout(fullDebounce);
+  filters.q = q;
+  syncFiltersFromQuery();
   await loadPapers();
+}
+
+export async function setProjectFilter(id: string): Promise<void> {
+  const name = id === 'all' ? null : (projects.items.find((p) => p.id === id)?.name ?? id);
+  await applyQueryEdit(setQualifier(filters.q, 'project', name));
 }
 
 export async function setTagFilter(tag: string | undefined): Promise<void> {
-  filters.tag = tag;
-  filters.project = 'all';
-  filters.starred = undefined;
-  await loadPapers();
+  await applyQueryEdit(setQualifier(filters.q, 'tag', tag ?? null));
 }
 
 export async function setStarFilter(on: boolean): Promise<void> {
-  filters.starred = on || undefined;
-  filters.project = 'all';
-  filters.tag = undefined;
-  await loadPapers();
+  await applyQueryEdit(setStarredQualifier(filters.q, on));
+}
+
+export async function setStatusFilter(status: StatusFilter): Promise<void> {
+  await applyQueryEdit(setQualifier(filters.q, 'status', status === 'all' ? null : status));
 }
 
 /// Whether any list filter deviates from the default view — i.e. whether an
@@ -409,10 +443,7 @@ export function anyFilterActive(): boolean {
 /// view and reload — the escape hatch offered by the list's empty state.
 export async function clearFilters(): Promise<void> {
   filters.q = '';
-  filters.status = 'all';
-  filters.project = 'all';
-  filters.tag = undefined;
-  filters.starred = undefined;
+  syncFiltersFromQuery(); // empty q → all filters default, all fields on
   await loadPapers();
 }
 
@@ -534,10 +565,13 @@ let kwDebounce: ReturnType<typeof setTimeout> | undefined;
 let fullDebounce: ReturnType<typeof setTimeout> | undefined;
 export function setSearch(q: string): void {
   filters.q = q;
+  syncFiltersFromQuery();
   clearTimeout(kwDebounce);
   clearTimeout(fullDebounce);
-  if (!q.trim()) {
-    void loadPapers();
+  if (!hasSearchTerms(parseQuery(q))) {
+    // Qualifier-only (or empty) → plain list; small debounce so typing a
+    // qualifier character-by-character doesn't fire a request per keystroke.
+    kwDebounce = setTimeout(() => void loadPapers(), 150);
     return;
   }
   // Fast keyword-only pass while typing; the full (semantic) pass once settled.

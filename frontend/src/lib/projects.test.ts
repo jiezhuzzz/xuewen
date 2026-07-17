@@ -32,6 +32,7 @@ function stubFetch(handler: (url: string, init?: RequestInit) => unknown) {
 describe('projects state', () => {
   beforeEach(() => {
     projects.items = [];
+    filters.q = '';
     filters.project = 'all';
     filters.tag = undefined;
     filters.starred = undefined;
@@ -60,29 +61,30 @@ describe('projects state', () => {
     expect(lastUrl).toContain('project=p1');
   });
 
-  it('the project/tag/starred filters are mutually exclusive', async () => {
+  it('the project/tag/starred filters combine via query qualifiers', async () => {
     stubFetch(() => []);
 
     await setProjectFilter('p1');
     expect(filters.project).toBe('p1');
-    expect(filters.tag).toBeUndefined();
-    expect(filters.starred).toBeUndefined();
+    expect(filters.q).toContain('project:p1');
 
     await setTagFilter('security');
     expect(filters.tag).toBe('security');
-    expect(filters.project).toBe('all');
-    expect(filters.starred).toBeUndefined();
+    expect(filters.project).toBe('p1'); // filters AND together now
 
     await setStarFilter(true);
     expect(filters.starred).toBe(true);
-    expect(filters.project).toBe('all');
-    expect(filters.tag).toBeUndefined();
+    expect(filters.tag).toBe('security');
 
-    // setting the project filter again clears starred
-    await setProjectFilter('p2');
-    expect(filters.project).toBe('p2');
+    // toggling each qualifier off removes only that filter
+    await setProjectFilter('all');
+    expect(filters.project).toBe('all');
+    expect(filters.tag).toBe('security');
+    await setTagFilter(undefined);
     expect(filters.tag).toBeUndefined();
-    expect(filters.starred).toBeUndefined();
+    expect(filters.starred).toBe(true);
+    await setStarFilter(false);
+    expect(filters.q).toBe('');
   });
 
   it('setTagFilter and setStarFilter send the matching query params', async () => {

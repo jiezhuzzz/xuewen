@@ -249,38 +249,26 @@ export function exportUrl(f: Filters, fmt: BibFormat): string {
   return `/api/papers/export?${params.toString()}`;
 }
 
-/// Query string for /api/search. Omits fields/engines when everything is
-/// selected (the server default), so URLs stay short and cacheable.
-/// Callers keep at least one field and one engine selected (the UI toggles
-/// enforce this); an empty selection is treated the same as "all" by design.
-export function searchParams(
-  q: string,
-  opts: SearchOpts,
-  f: Filters,
-  keywordOnly = false,
-): URLSearchParams {
+/// Query string for /api/search. The raw query string carries every filter
+/// (tag:/project:/is:/status:/in:/author: qualifiers are parsed server-side);
+/// only the engine selection travels as a separate param, omitted when both
+/// engines are on (the server default) so URLs stay short and cacheable.
+export function searchParams(q: string, opts: SearchOpts, keywordOnly = false): URLSearchParams {
   const params = new URLSearchParams();
   params.set('q', q);
-  const fields = (['title', 'authors', 'abstract', 'body'] as const).filter((k) => opts[k]);
-  if (fields.length > 0 && fields.length < 4) params.set('fields', fields.join(','));
   const engines = keywordOnly
     ? ['keyword']
     : (['keyword', 'semantic'] as const).filter((k) => opts[k]);
   if (engines.length > 0 && engines.length < 2) params.set('engines', engines.join(','));
-  if (f.status !== 'all') params.set('status', f.status);
-  if (f.project && f.project !== 'all') params.set('project', f.project);
-  if (f.tag) params.set('tag', f.tag);
-  if (f.starred) params.set('starred', 'true');
   return params;
 }
 
 export async function searchPapers(
   q: string,
   opts: SearchOpts,
-  f: Filters,
   keywordOnly = false,
 ): Promise<SearchResponse> {
-  const res = await fetch(`/api/search?${searchParams(q, opts, f, keywordOnly).toString()}`);
+  const res = await fetch(`/api/search?${searchParams(q, opts, keywordOnly).toString()}`);
   if (!res.ok) throw new Error(`search failed: ${res.status}`);
   return res.json();
 }
