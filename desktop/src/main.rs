@@ -74,29 +74,25 @@ fn run() -> Result<()> {
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(move |app| {
-            let addr = tauri::async_runtime::block_on(async {
-                let pool = xuewen::db::connect(&cfg.database_url).await?;
-                let services = xuewen::server::spawn_services(&cfg, pool.clone()).await?;
-                let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-                let addr = listener.local_addr()?;
-                let server = xuewen::server::serve_on(listener, pool, &cfg, services);
-                tokio::spawn(async move {
-                    if let Err(e) = server.await {
-                        tracing::error!("server exited: {e:#}");
-                    }
-                });
-                anyhow::Ok(addr)
-            })
-            .with_context(|| format!("config file: {}", setup_cfg_path.display()))?;
-            tracing::info!("desktop backend on http://{addr}");
-
-            let url: tauri::Url = format!("http://{addr}")
-                .parse()
-                .context("building backend url")?;
-            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))
-                .title("Xuewen")
-                .inner_size(1280.0, 800.0)
-                .build()?;
+            // Tauri turns an `Err` returned from setup into a panic whose
+            // message goes only to stderr — invisible for a GUI app — so
+            // failures here show the error dialog directly (setup runs on
+            // the main thread, where rfd is safe) and exit, instead of
+            // propagating through `.run()`'s Result.
+            if let Err(e) = start_backend(app, &cfg).with_context(|| {
+                format!(
+                    "while starting backend (config: {})",
+                    setup_cfg_path.display()
+                )
+            }) {
+                tracing::error!("startup failed: {e:#}");
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Error)
+                    .set_title("Xuewen failed to start")
+                    .set_description(format!("{e:#}"))
+                    .show();
+                std::process::exit(1);
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -106,5 +102,34 @@ fn run() -> Result<()> {
                 cfg_path.display()
             )
         })?;
+    Ok(())
+}
+
+/// Backend bring-up + webview creation, called from `.setup()`: connect the
+/// db, spawn services, bind an ephemeral loopback port, spawn the server
+/// future, and open the window pointed at it.
+fn start_backend(app: &tauri::App, cfg: &xuewen::config::Config) -> Result<()> {
+    let addr = tauri::async_runtime::block_on(async {
+        let pool = xuewen::db::connect(&cfg.database_url).await?;
+        let services = xuewen::server::spawn_services(cfg, pool.clone()).await?;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let addr = listener.local_addr()?;
+        let server = xuewen::server::serve_on(listener, pool, cfg, services);
+        tokio::spawn(async move {
+            if let Err(e) = server.await {
+                tracing::error!("server exited: {e:#}");
+            }
+        });
+        anyhow::Ok(addr)
+    })?;
+    tracing::info!("desktop backend on http://{addr}");
+
+    let url: tauri::Url = format!("http://{addr}")
+        .parse()
+        .context("building backend url")?;
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))
+        .title("Xuewen")
+        .inner_size(1280.0, 800.0)
+        .build()?;
     Ok(())
 }
