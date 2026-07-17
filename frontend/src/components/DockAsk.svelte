@@ -29,7 +29,7 @@
 {#snippet toolChips(tools: { name: string; detail: string }[])}
   <div class="mb-1 flex flex-wrap gap-1">
     {#each tools as t, i (i)}
-      <span class="rounded-md bg-amber-700/10 px-1.5 py-0.5 font-mono text-[9.5px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-500">
+      <span class="rounded-md bg-amber-700/10 px-1.5 py-0.5 font-mono text-[10.5px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-500">
         {t.name}{t.detail ? ` ${t.detail}` : ''}
       </span>
     {/each}

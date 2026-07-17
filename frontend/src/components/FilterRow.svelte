@@ -339,7 +339,7 @@
     <ChevronRight size={11} class={`transition-transform ${projectsOpen ? 'rotate-90' : ''}`} />
     <span>Projects</span>
     {#if !projectsOpen && projectFilterCount > 0}
-      <span class="rounded-full bg-indigo-600/15 px-1.5 text-[9px] tabular-nums text-indigo-700 dark:text-indigo-300">
+      <span class="rounded-full bg-indigo-600/15 px-1.5 text-[10px] tabular-nums text-indigo-700 dark:text-indigo-300">
         {projectFilterCount}
       </span>
     {/if}
@@ -414,7 +414,7 @@
     <ChevronRight size={11} class={`transition-transform ${starTagsOpen ? 'rotate-90' : ''}`} />
     <span>Star &amp; tags</span>
     {#if !starTagsOpen && starTagsFilterCount > 0}
-      <span class="rounded-full bg-amber-700/15 px-1.5 text-[9px] tabular-nums text-amber-800 dark:text-amber-400">
+      <span class="rounded-full bg-amber-700/15 px-1.5 text-[10px] tabular-nums text-amber-800 dark:text-amber-400">
         {starTagsFilterCount}
       </span>
     {/if}
