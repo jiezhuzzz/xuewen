@@ -177,6 +177,10 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{id}",
             get(api::get_paper).delete(api::delete_paper),
         )
+        .route(
+            "/api/papers/{id}/restore",
+            axum::routing::post(api::restore_paper),
+        )
         .route("/api/papers/{id}/export", get(api::export_paper))
         .route("/api/stats", get(api::stats))
         .route("/api/identify/search", get(api::identify_search))

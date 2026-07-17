@@ -151,6 +151,22 @@ pub async fn delete_paper(State(app): State<AppState>, Path(id): Path<String>) -
     }
 }
 
+/// Un-trash a paper (the Undo behind the web UI's delete toast). 404 when the
+/// paper doesn't exist or isn't trashed — `db::restore` only flips trashed rows.
+pub async fn restore_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    match db::restore(&app.pool, &id).await {
+        Ok(true) => {
+            app.wake_search();
+            Json(serde_json::json!({ "restored": true })).into_response()
+        }
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("restore_paper: {e}");
+            internal_error()
+        }
+    }
+}
+
 /// Import a single uploaded PDF: validate, stage into `inbox_dir/_uploads`, and
 /// run the ingest pipeline. One PDF per request (the frontend uploads files one
 /// at a time). Returns `ingested` (with title/status), `duplicate`, or an error.

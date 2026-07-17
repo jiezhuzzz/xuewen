@@ -204,6 +204,52 @@ async fn streams_pdf_with_range_and_guards_paths() {
 }
 
 #[tokio::test]
+async fn restores_a_deleted_paper() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "First", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    server
+        .delete("/api/papers/aaaa1111")
+        .await
+        .assert_status_ok();
+    assert_eq!(
+        server
+            .get("/api/papers")
+            .await
+            .json::<Vec<serde_json::Value>>()
+            .len(),
+        0
+    );
+
+    // POST restore → back in the active list.
+    server
+        .post("/api/papers/aaaa1111/restore")
+        .await
+        .assert_status_ok();
+    assert_eq!(
+        server
+            .get("/api/papers")
+            .await
+            .json::<Vec<serde_json::Value>>()
+            .len(),
+        1
+    );
+
+    // Restoring an already-active or unknown paper → 404.
+    server
+        .post("/api/papers/aaaa1111/restore")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+    server
+        .post("/api/papers/zzzz9999/restore")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn deletes_a_paper_softly() {
     let (dir, pool) = temp_pool().await;
     db::insert_paper(&pool, &paper("aaaa1111", "First", PaperStatus::Resolved))
