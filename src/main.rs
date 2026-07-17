@@ -3,7 +3,6 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use xuewen::config::Config;
-use xuewen::daily::{self, DailyService};
 use xuewen::db;
 use xuewen::models::Identifier;
 use xuewen::pipeline::{IdentifyOutcome, IngestCtx, Libraries, Outcome};
@@ -529,58 +528,10 @@ async fn main() -> Result<()> {
                     );
                 }
             }
-            let ingest = std::sync::Arc::new(web::Ingest {
-                ctx,
-                staging_dir: cfg.inbox_dir.join("_uploads"),
-            });
-            let search = match SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    tracing::warn!("search disabled: {e}");
-                    None
-                }
-            };
-            if let Some(s) = &search {
-                tokio::spawn(indexer::run(
-                    s.clone(),
-                    cfg.library_root.clone(),
-                    std::time::Duration::from_secs(30),
-                ));
-            }
-            let daily = DailyService::from_config(&cfg, pool.clone())?;
-            if let Some(d) = &daily {
-                tokio::spawn(daily::scheduler::run(d.clone()));
-            }
-            if let Some(s) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) {
-                tokio::spawn(xuewen::summary::run(s, std::time::Duration::from_secs(60)));
-            }
-            let agent = xuewen::agent::AgentService::from_config(&cfg.ai.agent);
-            match &agent {
-                None => tracing::info!("agent ask disabled (no [ai.agent] backends)"),
-                Some(a) => {
-                    for p in a.preflight().await {
-                        tracing::warn!("agent ask: {p}");
-                    }
-                }
-            }
-            let citations = xuewen::citations::CitationsService::from_config(pool.clone(), &cfg);
-            let translate =
-                xuewen::translate::TranslateService::from_config(&cfg).map(std::sync::Arc::new);
-            web::serve(
-                &host,
-                port,
-                pool,
-                cfg.library_root.clone(),
-                ingest,
-                cfg.proxy.as_ref().map(|p| p.login_url.clone()),
-                search,
-                daily,
-                agent,
-                citations,
-                translate,
-                cfg.ui.clone(),
-            )
-            .await?;
+            let services = xuewen::server::spawn_services(&cfg, pool.clone()).await?;
+            let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
+            tracing::info!("xuewen serving on http://{host}:{port}");
+            xuewen::server::serve_on(listener, pool.clone(), &cfg, services).await?;
         }
         Command::Delete { id, yes } => {
             let paper = db::find_one(&pool, &id).await?;
