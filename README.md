@@ -24,9 +24,9 @@ the assistant that answers questions about a paper.
   arXiv id, or a title search from the UI or CLI.
 - **Search** — BM25 keyword search (always on) plus optional semantic search
   over title/abstract/body chunks, fused into one ranked list.
-- **Paper chat** — optional per-paper conversations with an LLM, grounded in the
-  extracted full text (any OpenAI-compatible endpoint; per-model
-  `reasoning_effort`).
+- **Agent Ask** — optional tool-using agent (Claude Code / Codex SDKs) in the
+  reader's Ask tab, grounded in the paper's extracted text and, when
+  attached, its code repository, inside a read-only sandbox.
 - **Daily arXiv recommendations** — a ranked, LLM-summarized feed of new papers
   scored against your library's interests (optional).
 - **Citation export** — BibTeX / BibLaTeX for a single paper, a project, or the
@@ -102,6 +102,33 @@ API keys are read from environment variables via `api_key_env` (e.g.
 `OPENAI_API_KEY`), so they never need to live in the config file. See
 `xuewen.example.toml` for the fully documented set of options.
 
+### Agent Ask setup
+
+The reader's Ask tab can run a tool-using agent — via the [Claude
+Code](https://github.com/anthropics/claude-code) or [Codex](https://github.com/openai/codex)
+SDKs — that reads a paper's extracted text and, once attached, its GitHub
+repository, inside a read-only per-paper workspace.
+
+1. **Node ≥ 20** on the machine running `xuewen serve`.
+2. Install the runner's own dependencies once: `npm --prefix agent-runner install`
+   (separate from the frontend's `npm --prefix frontend install`).
+3. Enable one or both backends in `xuewen.toml`:
+   ```toml
+   [ai.agent]
+   [ai.agent.claude_code]
+   [ai.agent.codex]
+   ```
+4. Authenticate whichever backend(s) you enabled — either your existing
+   `claude` / `codex` CLI login, or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in
+   the environment `xuewen serve` runs in. Neither key is ever written to
+   `xuewen.toml`.
+
+Attaching a repository (Details → Code, `PUT /api/papers/{id}/code`, or
+`xuewen code set`) does a **local, read-only shallow clone** into
+`<library_root>/agent/<paper_id>/repo/` for the agent to read from — it is
+never pushed, modified, or redistributed; it exists only on the machine
+running `xuewen serve`, for as long as it stays attached.
+
 ## CLI
 
 The same binary drives everything from the terminal:
@@ -120,6 +147,7 @@ The same binary drives everything from the terminal:
 | `tag` | Manage tags on papers (add/remove/rename/list) |
 | `star` / `unstar` | Star or un-star a paper |
 | `index` | Inspect or rebuild the search indexes |
+| `code` | Attach, inspect, or detach a paper's code repo for Agent Ask (`set` / `status` / `rm`) |
 | `delete` / `restore` / `purge` | Trash lifecycle |
 | `proxy-cookie` | Manage the stored EZproxy session cookie |
 
@@ -132,12 +160,19 @@ Run `xuewen --help` (or `xuewen <command> --help`) for the full flags.
 - **Container image** — a minimal OCI image is built with `nix2container`; a
   Kubernetes example lives in [`deploy/k8s/`](deploy/k8s/).
 
+Neither the NixOS module nor the OCI image currently bundles Node.js or the
+`agent-runner/` directory into the deployed closure — both are pulled in for
+the frontend *build* only. To use Agent Ask in either deployment, make sure
+the runtime environment also has Node ≥ 20 on `PATH` and `agent-runner/`
+(with `npm --prefix agent-runner install` already run) alongside the binary.
+
 ## Development
 
 ```sh
 cargo test                       # backend unit + integration tests
 npm --prefix frontend test       # frontend unit tests (Vitest)
 npm --prefix frontend run check  # svelte-check / TypeScript
+npm --prefix agent-runner test   # agent runner protocol tests (Agent Ask)
 ```
 
 `nix flake check` builds the packages and runs the checks (including a NixOS VM
