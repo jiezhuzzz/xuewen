@@ -8,6 +8,7 @@
   import LibraryPane from './components/LibraryPane.svelte';
   import PaperContextMenu from './components/PaperContextMenu.svelte';
   import ReaderDock from './components/ReaderDock.svelte';
+  import Spinner from './components/Spinner.svelte';
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
@@ -115,8 +116,8 @@
           {#if PdfViewer}
             <PdfViewer />
           {:else if viewer.activeId !== null}
-            <div class="flex flex-1 items-center justify-center text-sm text-stone-400 dark:text-stone-500">
-              Loading reader…
+            <div class="flex flex-1 items-center justify-center">
+              <Spinner label="Loading reader…" />
             </div>
           {/if}
           {#if dock.open && viewer.activeId}

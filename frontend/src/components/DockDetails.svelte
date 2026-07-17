@@ -7,6 +7,7 @@
   import PaperMeta from './PaperMeta.svelte';
   import PaperProjectEditor from './PaperProjectEditor.svelte';
   import PaperTagEditor from './PaperTagEditor.svelte';
+  import Spinner from './Spinner.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -27,7 +28,7 @@
 <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
   {#key `${id}-${detailRefresh.n}`}
     {#await loadDetail(id)}
-      <p class="text-sm text-stone-500 dark:text-stone-400">Loading…</p>
+      <Spinner />
     {:then d}
       <PaperMeta {d} />
 

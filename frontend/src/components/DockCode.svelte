@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getPaperCode, removePaperCode, setPaperCode } from '../lib/api';
   import type { PaperCodeStatus } from '../lib/types';
+  import Spinner from './Spinner.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -68,7 +69,7 @@
 <section class="mt-4 border-t border-stone-200 pt-4 dark:border-stone-800">
   <h3 class={label}>Code</h3>
   {#if !loaded && !error}
-    <p class="mt-2 text-xs text-stone-400 dark:text-stone-500">Loading…</p>
+    <Spinner class="mt-2 !text-xs" />
   {:else if code === null}
     <form
       class="mt-2 flex gap-1.5"
