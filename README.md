@@ -125,6 +125,8 @@ Qdrant instance running locally, same as the server.
 **Building locally:**
 
 ```sh
+npm --prefix frontend install && npm --prefix frontend run build   # embedded UI (else the dmg ships a placeholder page)
+npm --prefix agent-runner install --omit=dev                       # bundled as a resource, needed for Agent Ask
 bash desktop/scripts/prepare-sidecars.sh   # needs Homebrew poppler + dylibbundler
 cd desktop && npx @tauri-apps/cli build
 ```
