@@ -41,12 +41,26 @@ async fn code_endpoints_gate_validate_and_report() {
     let v: serde_json::Value = server.get("/api/papers/p1/code").await.json();
     assert_eq!(v["attached"], false);
 
-    // Bad URLs are rejected up front.
-    server
+    // Bad URLs are rejected up front with JSON error body.
+    let bad_url_resp = server
         .put("/api/papers/p1/code")
         .json(&json!({"repo_url": "git@github.com:x/y.git"}))
-        .await
-        .assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+        .await;
+    bad_url_resp.assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    let bad_url_json: serde_json::Value = bad_url_resp.json();
+    assert!(bad_url_json.get("error").is_some());
+    assert!(
+        bad_url_json["error"]
+            .as_str()
+            .map(|s| s.contains("https"))
+            .unwrap_or(false)
+            || bad_url_json["error"]
+                .as_str()
+                .map(|s| s.contains("credentials"))
+                .unwrap_or(false),
+        "error message should mention https or credentials, got: {:?}",
+        bad_url_json["error"]
+    );
 
     // A valid URL is accepted and the row enters 'cloning' (the background
     // clone then fails offline, flipping it to 'error' — poll for terminal).
@@ -77,6 +91,19 @@ async fn code_endpoints_gate_validate_and_report() {
     // Unknown paper -> 404.
     server
         .get("/api/papers/missing/code")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // Unknown paper PUT -> 404.
+    server
+        .put("/api/papers/missing/code")
+        .json(&json!({"repo_url": "https://github.com/x/y"}))
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // Unknown paper DELETE -> 404.
+    server
+        .delete("/api/papers/missing/code")
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
 }

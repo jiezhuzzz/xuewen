@@ -100,11 +100,18 @@ pub(crate) async fn run_clone(
         _ => return fail("could not resolve the cloned commit".into()).await,
     };
 
-    let size = {
+    let join_result = {
         let dst = dst.clone();
-        tokio::task::spawn_blocking(move || dir_size(&dst))
-            .await
-            .unwrap_or(0)
+        tokio::task::spawn_blocking(move || dir_size(&dst)).await
+    };
+    let size = match join_result {
+        Ok(size) => size,
+        Err(e) => {
+            return fail(format!(
+                "could not measure the cloned repository's size: {e}"
+            ))
+            .await;
+        }
     };
     if size > max_repo_mb.saturating_mul(1024 * 1024) {
         let _ = tokio::fs::remove_dir_all(&dst).await;
