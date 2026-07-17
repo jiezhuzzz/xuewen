@@ -1,0 +1,98 @@
+import { render, screen } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { chat } from '../lib/chat.svelte';
+import { appSettings, identifyState } from '../lib/state.svelte';
+import DockDetails from './DockDetails.svelte';
+
+function detail(id: string) {
+  return {
+    id, title: 'Attention', authors: ['Vaswani'], venue: 'NeurIPS', year: 2017,
+    doi: '10.1/x', arxiv_id: '1706.03762', dblp_key: null, cite_key: 'vaswani2017',
+    url: null, source: 'crossref', status: 'resolved', added_at: '2026-07-08T00:00:00Z',
+    abstract: 'The dominant sequence transduction models…',
+    starred: false, tags: [], projects: [], summary: null,
+  };
+}
+
+describe('DockDetails', () => {
+  beforeEach(() => {
+    appSettings.foldAbstract = false;
+    identifyState.open = false;
+    identifyState.paperId = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify(detail('info1')), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+  });
+
+  it('renders the title, identifier pills, and abstract', async () => {
+    render(DockDetails, { props: { id: 'info1' } });
+    expect(await screen.findByText('Attention')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /DOI/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /arXiv/ })).toBeInTheDocument();
+    expect(screen.getByText(/dominant sequence transduction/)).toBeInTheDocument();
+  });
+
+  it('collapses the abstract', async () => {
+    render(DockDetails, { props: { id: 'info1' } });
+    await screen.findByText('Attention');
+    await userEvent.click(screen.getByRole('button', { name: /Abstract/ }));
+    expect(screen.queryByText(/dominant sequence transduction/)).not.toBeInTheDocument();
+  });
+
+  it('renders the LLM summary when present', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            ...detail('info-summary'),
+            summary: { tldr: 'Short.', problem: 'P', approach: 'A', results: 'R', limitations: 'L' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+    render(DockDetails, { props: { id: 'info-summary' } });
+    expect(await screen.findByText('Short.')).toBeInTheDocument();
+    expect(screen.getByText(/Results/i)).toBeInTheDocument();
+  });
+
+  it('starts the abstract folded when fold_abstract is true', async () => {
+    appSettings.foldAbstract = true;
+    render(DockDetails, { props: { id: 'info1' } });
+    const toggle = await screen.findByRole('button', { name: /abstract/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('does not render a Chat button even when chat is available', async () => {
+    chat.available = true;
+    try {
+      render(DockDetails, { props: { id: 'info1' } });
+      await screen.findByText('Attention');
+      expect(screen.queryByRole('button', { name: /Chat/ })).not.toBeInTheDocument();
+    } finally {
+      chat.available = false;
+    }
+  });
+
+  it('launches Identify from a direct button in the pane', async () => {
+    render(DockDetails, { props: { id: 'info1' } });
+    await screen.findByText('Attention');
+    await userEvent.click(screen.getByRole('button', { name: /Identify/ }));
+    expect(identifyState.open).toBe(true);
+    expect(identifyState.paperId).toBe('info1');
+  });
+
+  it('shows a standalone Delete paper button and no overflow menu', async () => {
+    render(DockDetails, { props: { id: 'info1' } });
+    await screen.findByText('Attention');
+    expect(screen.getByRole('button', { name: /Delete paper/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /More actions/ })).not.toBeInTheDocument();
+  });
+});
