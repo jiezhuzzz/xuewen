@@ -19,7 +19,7 @@
           pname = "xuewen-frontend";
           version = "0.1.0";
           src = ./frontend;
-          npmDepsHash = "sha256-NxSVwo7RN0/GHNzqgnwrf0+pw3jUvTlOC7cJG0HqW2Y=";
+          npmDepsHash = "sha256-enRlx7yii4sBjjjB6APvqREmu3fSQrk05UlbbXnf2e0=";
           # `npm run build` is the default buildPhase; run vitest before install.
           doCheck = true;
           checkPhase = ''
