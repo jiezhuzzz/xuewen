@@ -27,6 +27,7 @@ import {
 import { invalidateLibraryTitleIndex } from './citationMatch';
 import { dur } from './motion';
 import { dropReaderState } from './readerState.svelte';
+import { toast } from './toasts.svelte';
 import type {
   BibFormat,
   Candidate,
@@ -415,18 +416,27 @@ export async function removeFromProject(paperId: string, projectId: string): Pro
   if (filters.project === projectId) await loadPapers();
 }
 
-/// Flip a paper's starred flag: call the API, then patch the row/cached
-/// detail in place so the UI reflects it immediately (no full reload) unless
-/// the starred filter is active, in which case the list itself may need to
-/// drop/gain the paper.
+/// Flip a paper's starred flag optimistically: patch the row/cached detail
+/// first so the star moves instantly, then call the API and roll back (with
+/// an error toast) if it rejects. When the starred filter is active the list
+/// itself may need to drop/gain the paper, so it reloads after the call.
 export async function toggleStar(paperId: string): Promise<void> {
   const row = library.papers.find((p) => p.id === paperId);
   const cached = detailCache.get(paperId);
-  const next = !(row?.starred ?? cached?.starred ?? false);
-  await setStar(paperId, next);
+  const prev = row?.starred ?? cached?.starred ?? false;
+  const next = !prev;
   if (row) row.starred = next;
   if (cached) cached.starred = next;
   detailRefresh.n += 1;
+  try {
+    await setStar(paperId, next);
+  } catch (e) {
+    if (row) row.starred = prev;
+    if (cached) cached.starred = prev;
+    detailRefresh.n += 1;
+    toast('error', `Couldn't update star: ${(e as Error).message}`);
+    return;
+  }
   if (filters.starred !== undefined) await loadPapers();
 }
 
