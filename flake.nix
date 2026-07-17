@@ -57,8 +57,10 @@
             cp -r ${frontend}/. frontend/dist/
           '';
           # The full test suite runs in the sandbox: wiremock binds loopback
-          # (available in Nix builds) and pdftotext comes from poppler.
-          nativeCheckInputs = [ pkgs.poppler-utils ];
+          # (available in Nix builds), pdftotext comes from poppler, the
+          # agent::code clone tests shell out to git, and the agent_test
+          # suite runs its stub runner with node.
+          nativeCheckInputs = [ pkgs.poppler-utils pkgs.git pkgs.nodejs ];
         };
         default = xuewen;
       });
