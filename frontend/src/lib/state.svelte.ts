@@ -257,11 +257,13 @@ export const ui = $state<{
   importOpen: boolean;
   zen: boolean;
   paletteOpen: boolean;
+  helpOpen: boolean;
 }>({
   sidebarOpen: true,
   importOpen: false,
   zen: false,
   paletteOpen: false,
+  helpOpen: false,
 });
 export function toggleSidebar(): void {
   ui.sidebarOpen = !ui.sidebarOpen;

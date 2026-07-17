@@ -31,6 +31,7 @@ beforeEach(() => {
   ui.paletteOpen = false;
   ui.sidebarOpen = true;
   ui.importOpen = false;
+  ui.helpOpen = false;
   identifyState.open = false;
   chat.available = false;
   localStorage.clear();
@@ -213,6 +214,22 @@ describe('handleKeydown', () => {
     expect(ui.sidebarOpen).toBe(true);
     handleKeydown(key('Escape')); // the modal owns Esc
     expect(ui.importOpen).toBe(true); // handler must not touch it
+  });
+
+  it('? opens the shortcut help overlay', () => {
+    handleKeydown(key('?', { shiftKey: true }));
+    expect(ui.helpOpen).toBe(true);
+  });
+
+  it('? is inert while focus is in a text control', () => {
+    handleKeydown(key('?', { target: document.createElement('input') }));
+    expect(ui.helpOpen).toBe(false);
+  });
+
+  it('single-key shortcuts are inert while the help overlay is open', () => {
+    ui.helpOpen = true;
+    handleKeydown(key('z'));
+    expect(ui.zen).toBe(false);
   });
 
   it('cmd+f opens the find bar for the active paper', () => {

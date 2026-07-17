@@ -8,6 +8,7 @@
   import LibraryPane from './components/LibraryPane.svelte';
   import PaperContextMenu from './components/PaperContextMenu.svelte';
   import ReaderDock from './components/ReaderDock.svelte';
+  import ShortcutHelp from './components/ShortcutHelp.svelte';
   import Spinner from './components/Spinner.svelte';
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
@@ -136,6 +137,7 @@
 {#if ui.importOpen}<ImportModal />{/if}
 {#if identifyState.open}<IdentifyModal />{/if}
 {#if ui.paletteOpen}<CommandPalette />{/if}
+{#if ui.helpOpen}<ShortcutHelp />{/if}
 <PaperContextMenu />
 <TranslatePopover />
 <Toaster />

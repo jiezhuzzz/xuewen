@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import CommandPalette from './CommandPalette.svelte';
@@ -28,6 +28,23 @@ describe('CommandPalette', () => {
     expect(screen.queryByText('Denoising Diffusion')).not.toBeInTheDocument();
     await userEvent.keyboard('{Enter}');
     expect(viewer.activeId).toBe('p1');
+    expect(ui.paletteOpen).toBe(false);
+  });
+
+  it('shows key hints beside actions that have a shortcut', () => {
+    render(CommandPalette);
+    const zen = screen.getByRole('option', { name: /toggle zen mode/i });
+    expect(within(zen).getByText('z', { selector: 'kbd' })).toBeInTheDocument();
+    const pane = screen.getByRole('option', { name: /toggle list pane/i });
+    expect(within(pane).getByText('[', { selector: 'kbd' })).toBeInTheDocument();
+  });
+
+  it('offers a Keyboard shortcuts action that opens the help overlay', async () => {
+    ui.helpOpen = false;
+    render(CommandPalette);
+    const row = screen.getByRole('option', { name: /keyboard shortcuts/i });
+    await userEvent.click(within(row).getByRole('button'));
+    expect(ui.helpOpen).toBe(true);
     expect(ui.paletteOpen).toBe(false);
   });
 

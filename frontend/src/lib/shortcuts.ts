@@ -28,7 +28,7 @@ export function isEditable(t: EventTarget | null): boolean {
 }
 
 function anyModalOpen(): boolean {
-  return ui.importOpen || identifyState.open;
+  return ui.importOpen || identifyState.open || ui.helpOpen;
 }
 
 function moveSelection(delta: number): void {
@@ -95,6 +95,10 @@ export function handleKeydown(e: KeyboardEvent): void {
     case '/':
       e.preventDefault();
       focusSearch();
+      break;
+    case '?':
+      e.preventDefault();
+      ui.helpOpen = true;
       break;
     case '[':
       toggleSidebar();
