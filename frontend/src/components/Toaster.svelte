@@ -25,6 +25,17 @@
         <Info size={16} class="shrink-0 text-stone-500 dark:text-stone-400" />
       {/if}
       <span class="min-w-0 flex-1">{t.message}</span>
+      {#if t.action}
+        {@const action = t.action}
+        <button
+          type="button"
+          onclick={() => {
+            action.run();
+            dismissToast(t.id);
+          }}
+          class="shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-amber-700 hover:bg-amber-700/10 dark:text-amber-500 dark:hover:bg-amber-500/15"
+        >{action.label}</button>
+      {/if}
       <button
         type="button"
         aria-label="Dismiss"

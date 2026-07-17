@@ -3,6 +3,7 @@ import {
   addTag,
   createProject,
   deletePaper,
+  restorePaper,
   deleteProject,
   exportPaper,
   getPaper,
@@ -542,7 +543,9 @@ export async function loadDetail(id: string): Promise<PaperDetail> {
 }
 
 /// Soft-delete a paper on the server, then drop it from the UI: close its tab,
-/// remove it from the list, and refresh the counts.
+/// remove it from the list, and refresh the counts. The success toast carries
+/// an Undo action (deletes are soft — POST /restore un-trashes) with a longer
+/// timeout so there's time to reach for it.
 export async function removePaper(id: string): Promise<void> {
   await deletePaper(id);
   closeTab(id);
@@ -551,6 +554,19 @@ export async function removePaper(id: string): Promise<void> {
   invalidateLibraryTitleIndex();
   if (selection.id === id) selection.id = null;
   await loadStats();
+  toast('success', 'Paper deleted', 8000, { label: 'Undo', run: () => void undoDelete(id) });
+}
+
+async function undoDelete(id: string): Promise<void> {
+  try {
+    await restorePaper(id);
+    invalidateLibraryTitleIndex();
+    await loadPapers();
+    await loadStats();
+    toast('success', 'Paper restored');
+  } catch (e) {
+    toast('error', `Couldn't restore: ${(e as Error).message}`);
+  }
 }
 
 const darkQuery = (): MediaQueryList => window.matchMedia('(prefers-color-scheme: dark)');

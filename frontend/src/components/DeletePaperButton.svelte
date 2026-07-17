@@ -2,7 +2,6 @@
   import { Trash2 } from 'lucide-svelte';
   import ConfirmButtons from './ConfirmButtons.svelte';
   import { removePaper } from '../lib/state.svelte';
-  import { toast } from '../lib/toasts.svelte';
 
   let { id }: { id: string } = $props();
 
@@ -14,8 +13,7 @@
     deleting = true;
     error = null;
     try {
-      await removePaper(id);
-      toast('success', 'Paper deleted');
+      await removePaper(id); // shows the Deleted/Undo toast itself
       // On success the surrounding panel unmounts (its tab closes).
     } catch (e) {
       error = (e as Error).message;

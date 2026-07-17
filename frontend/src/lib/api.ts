@@ -69,6 +69,12 @@ export async function deletePaper(id: string): Promise<void> {
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
 }
 
+/// Un-trash a soft-deleted paper (the delete toast's Undo).
+export async function restorePaper(id: string): Promise<void> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+  if (!res.ok) throw new Error(`restore failed: ${res.status}`);
+}
+
 export async function importPaper(file: File): Promise<ImportResult> {
   const body = new FormData();
   body.append('file', file, file.name);

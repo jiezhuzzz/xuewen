@@ -98,8 +98,7 @@
     if (!paper) return;
     busy = true;
     try {
-      await removePaper(paper.id);
-      toast('success', 'Paper deleted');
+      await removePaper(paper.id); // shows the Deleted/Undo toast itself
       closeContextMenu();
     } catch (e) {
       toast('error', `Delete failed: ${(e as Error).message}`);
