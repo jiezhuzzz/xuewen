@@ -176,7 +176,7 @@ pub async fn send(
         }
         // Client disconnects drop this stream before we get here, so
         // nothing is persisted for aborted generations.
-        match store::insert_exchange(&pool, &paper_id, &user_msg, &full, &label).await {
+        match store::insert_exchange(&pool, &paper_id, &user_msg, &full, &label, None).await {
             Ok(assistant_id) => yield sse_event("done", json!({ "id": assistant_id })),
             Err(e) => yield sse_event("error", json!({ "message": format!("saving the exchange failed: {e}") })),
         }

@@ -125,7 +125,7 @@ async fn send_validates_model_message_paper_and_config() {
 #[tokio::test]
 async fn history_roundtrip_and_clear() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    xuewen::chat::store::insert_exchange(&pool, "p1", "q", "a", "M")
+    xuewen::chat::store::insert_exchange(&pool, "p1", "q", "a", "M", None)
         .await
         .unwrap();
     let chat = xuewen::chat::ChatService::from_config(&chat_cfg("http://example.invalid")).unwrap();

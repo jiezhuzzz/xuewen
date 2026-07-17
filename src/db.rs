@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use crate::models::{Paper, Project, ProjectSummary, Tag, TagSummary};
+use crate::models::{Paper, PaperCode, Project, ProjectSummary, Tag, TagSummary};
 
 /// Open (creating if needed) the SQLite database and run migrations.
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
@@ -226,15 +226,13 @@ pub async fn delete_row(pool: &SqlitePool, id: &str) -> Result<()> {
 
 /// Set (or clear) a paper's starred flag. Returns true if a row was updated.
 pub async fn set_paper_starred(pool: &SqlitePool, paper_id: &str, starred: bool) -> Result<bool> {
-    Ok(
-        sqlx::query("UPDATE papers SET starred = ? WHERE id = ?")
-            .bind(starred as i64)
-            .bind(paper_id)
-            .execute(pool)
-            .await?
-            .rows_affected()
-            > 0,
-    )
+    Ok(sqlx::query("UPDATE papers SET starred = ? WHERE id = ?")
+        .bind(starred as i64)
+        .bind(paper_id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        > 0)
 }
 
 /// Find a paper by exact id, else by unique id prefix (active or trashed).
@@ -351,11 +349,12 @@ pub async fn projects_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec
 }
 
 pub async fn project_ids_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec<String>> {
-    let rows: Vec<(String,)> =
-        sqlx::query_as("SELECT project_id FROM paper_projects WHERE paper_id = ? ORDER BY added_at")
-            .bind(paper_id)
-            .fetch_all(pool)
-            .await?;
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT project_id FROM paper_projects WHERE paper_id = ? ORDER BY added_at",
+    )
+    .bind(paper_id)
+    .fetch_all(pool)
+    .await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
@@ -563,12 +562,14 @@ pub async fn list_papers(
     if let Some(tag) = tag.map(str::trim).filter(|s| !s.is_empty()) {
         // NOTE: a tag name containing a literal `%`/`_` would over-match under
         // LIKE (no escaping applied) — same known caveat as the search filter.
-        qb.push(" AND id IN (SELECT pt.paper_id FROM paper_tags pt \
-                 JOIN tags t ON t.id = pt.tag_id WHERE t.name = ")
-            .push_bind(tag.to_string())
-            .push(" OR t.name LIKE ")
-            .push_bind(format!("{tag}/%"))
-            .push(")");
+        qb.push(
+            " AND id IN (SELECT pt.paper_id FROM paper_tags pt \
+                 JOIN tags t ON t.id = pt.tag_id WHERE t.name = ",
+        )
+        .push_bind(tag.to_string())
+        .push(" OR t.name LIKE ")
+        .push_bind(format!("{tag}/%"))
+        .push(")");
     }
     if starred == Some(true) {
         qb.push(" AND starred = 1");
@@ -641,6 +642,70 @@ pub async fn delete_setting(pool: &SqlitePool, key: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn get_paper_code(pool: &SqlitePool, paper_id: &str) -> Result<Option<PaperCode>> {
+    Ok(sqlx::query_as::<_, PaperCode>(
+        "SELECT paper_id, repo_url, commit_sha, status, error, cloned_at, size_bytes
+         FROM paper_code WHERE paper_id = ?",
+    )
+    .bind(paper_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Attach (or re-attach) a repo: the row enters 'cloning' with outcome
+/// fields cleared; the background job resolves it to ready/error.
+pub async fn upsert_paper_code_cloning(
+    pool: &SqlitePool,
+    paper_id: &str,
+    repo_url: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO paper_code (paper_id, repo_url, status) VALUES (?, ?, 'cloning')
+         ON CONFLICT(paper_id) DO UPDATE SET repo_url = excluded.repo_url, status = 'cloning',
+           commit_sha = NULL, error = NULL, cloned_at = NULL, size_bytes = NULL",
+    )
+    .bind(paper_id)
+    .bind(repo_url)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_paper_code_ready(
+    pool: &SqlitePool,
+    paper_id: &str,
+    commit_sha: &str,
+    size_bytes: i64,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE paper_code SET status = 'ready', commit_sha = ?, size_bytes = ?,
+           cloned_at = datetime('now'), error = NULL WHERE paper_id = ?",
+    )
+    .bind(commit_sha)
+    .bind(size_bytes)
+    .bind(paper_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_paper_code_error(pool: &SqlitePool, paper_id: &str, error: &str) -> Result<()> {
+    sqlx::query("UPDATE paper_code SET status = 'error', error = ? WHERE paper_id = ?")
+        .bind(error)
+        .bind(paper_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_paper_code(pool: &SqlitePool, paper_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM paper_code WHERE paper_id = ?")
+        .bind(paper_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +742,13 @@ mod tests {
         let url = format!("sqlite:{}", db_path.display());
         let pool = connect(&url).await.unwrap();
         (dir, pool)
+    }
+
+    async fn test_pool_with_paper(paper_id: &str) -> SqlitePool {
+        let (_dir, pool) = temp_pool().await;
+        let p = sample_paper(paper_id, "hash");
+        insert_paper(&pool, &p).await.unwrap();
+        pool
     }
 
     #[test]
@@ -893,14 +965,30 @@ mod tests {
         assert_eq!(resolved[0].id, a.id);
 
         // q + status together (covers the AND branch).
-        let combined = list_papers(&pool, Some("attention"), Some("needs_review"), None, None, None, None)
-            .await
-            .unwrap();
+        let combined = list_papers(
+            &pool,
+            Some("attention"),
+            Some("needs_review"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(combined.len(), 1);
         assert_eq!(combined[0].id, b.id);
-        let none = list_papers(&pool, Some("attention"), Some("resolved"), None, None, None, None)
-            .await
-            .unwrap();
+        let none = list_papers(
+            &pool,
+            Some("attention"),
+            Some("resolved"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(none.is_empty());
 
         // year_asc sort.
@@ -1146,12 +1234,18 @@ mod tests {
     #[tokio::test]
     async fn membership_add_remove_and_filter_and_cascade() {
         let (_dir, pool) = temp_pool().await;
-        insert_paper(&pool, &sample_paper("01890000-0000-7000-8000-0000000000a1", "ha"))
-            .await
-            .unwrap();
-        insert_paper(&pool, &sample_paper("01890000-0000-7000-8000-0000000000a2", "hb"))
-            .await
-            .unwrap();
+        insert_paper(
+            &pool,
+            &sample_paper("01890000-0000-7000-8000-0000000000a1", "ha"),
+        )
+        .await
+        .unwrap();
+        insert_paper(
+            &pool,
+            &sample_paper("01890000-0000-7000-8000-0000000000a2", "hb"),
+        )
+        .await
+        .unwrap();
         let proj = create_project(&pool, "P").await.unwrap();
 
         // Add is idempotent.
@@ -1197,18 +1291,26 @@ mod tests {
         assert_eq!(filtered[0].id, "01890000-0000-7000-8000-0000000000a1");
 
         // Remove.
-        assert!(remove_paper_from_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
-            .await
-            .unwrap());
-        assert!(!remove_paper_from_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
-            .await
-            .unwrap());
+        assert!(
+            remove_paper_from_project(&pool, "01890000-0000-7000-8000-0000000000a1", &proj.id)
+                .await
+                .unwrap()
+        );
+        assert!(!remove_paper_from_project(
+            &pool,
+            "01890000-0000-7000-8000-0000000000a1",
+            &proj.id
+        )
+        .await
+        .unwrap());
 
         // FK cascade: hard-purging a paper drops its memberships.
         add_paper_to_project(&pool, "01890000-0000-7000-8000-0000000000a2", &proj.id)
             .await
             .unwrap();
-        delete_row(&pool, "01890000-0000-7000-8000-0000000000a2").await.unwrap();
+        delete_row(&pool, "01890000-0000-7000-8000-0000000000a2")
+            .await
+            .unwrap();
         assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 0);
 
         // FK cascade: deleting a project drops memberships (no orphan rows).
@@ -1216,10 +1318,12 @@ mod tests {
             .await
             .unwrap();
         delete_project(&pool, &proj.id).await.unwrap();
-        assert!(project_ids_for_paper(&pool, "01890000-0000-7000-8000-0000000000a1")
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            project_ids_for_paper(&pool, "01890000-0000-7000-8000-0000000000a1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1314,8 +1418,12 @@ mod tests {
     async fn add_tag_creates_then_reuses_case_insensitively() {
         let (_dir, pool) = temp_pool().await;
         let pid = insert_test_paper(&pool).await;
-        let a = add_paper_tag(&pool, &pid, "Security/Fuzzing").await.unwrap();
-        let b = add_paper_tag(&pool, &pid, "security/fuzzing").await.unwrap();
+        let a = add_paper_tag(&pool, &pid, "Security/Fuzzing")
+            .await
+            .unwrap();
+        let b = add_paper_tag(&pool, &pid, "security/fuzzing")
+            .await
+            .unwrap();
         assert_eq!(a.id, b.id, "same tag reused case-insensitively");
         assert_eq!(list_tags_with_counts(&pool).await.unwrap().len(), 1);
     }
@@ -1342,7 +1450,9 @@ mod tests {
         add_paper_tag(&pool, &child_paper, "security/fuzzing")
             .await
             .unwrap();
-        add_paper_tag(&pool, &parent_paper, "security").await.unwrap();
+        add_paper_tag(&pool, &parent_paper, "security")
+            .await
+            .unwrap();
 
         let counts = list_tags_with_counts(&pool).await.unwrap();
         let by_name = |n: &str| counts.iter().find(|s| s.tag.name == n).unwrap().paper_count;
@@ -1350,5 +1460,48 @@ mod tests {
         assert_eq!(by_name("security"), 2);
         // The leaf child is unaffected: its rollup equals its direct count.
         assert_eq!(by_name("security/fuzzing"), 1);
+    }
+
+    #[tokio::test]
+    async fn paper_code_lifecycle() {
+        let pool = test_pool_with_paper("p1").await;
+        assert!(get_paper_code(&pool, "p1").await.unwrap().is_none());
+
+        upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+            .await
+            .unwrap();
+        let c = get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, "cloning");
+        assert_eq!(c.repo_url, "https://github.com/x/y");
+
+        set_paper_code_ready(&pool, "p1", "abc1234", 42_000)
+            .await
+            .unwrap();
+        let c = get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, "ready");
+        assert_eq!(c.commit_sha.as_deref(), Some("abc1234"));
+        assert!(c.cloned_at.is_some());
+
+        // Re-attach resets to cloning and clears the old outcome fields.
+        upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/z")
+            .await
+            .unwrap();
+        let c = get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, "cloning");
+        assert_eq!(c.commit_sha, None);
+
+        set_paper_code_error(&pool, "p1", "boom").await.unwrap();
+        assert_eq!(
+            get_paper_code(&pool, "p1")
+                .await
+                .unwrap()
+                .unwrap()
+                .error
+                .as_deref(),
+            Some("boom")
+        );
+
+        delete_paper_code(&pool, "p1").await.unwrap();
+        assert!(get_paper_code(&pool, "p1").await.unwrap().is_none());
     }
 }

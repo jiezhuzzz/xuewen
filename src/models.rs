@@ -124,6 +124,18 @@ pub struct TagSummary {
     pub paper_count: i64,
 }
 
+/// A paper's attached code repository (`paper_code` row).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PaperCode {
+    pub paper_id: String,
+    pub repo_url: String,
+    pub commit_sha: Option<String>,
+    pub status: String, // 'cloning' | 'ready' | 'error'
+    pub error: Option<String>,
+    pub cloned_at: Option<String>,
+    pub size_bytes: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
