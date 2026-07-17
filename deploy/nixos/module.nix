@@ -148,8 +148,10 @@ in
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       # pdftotext (poppler-utils) is required for PDF text extraction, which the
-      # ingest pipeline and paper chat both depend on.
-      path = [ pkgs.poppler-utils ];
+      # ingest pipeline and paper chat both depend on. git backs the repo-attach
+      # endpoint (PUT /api/papers/{id}/code shallow-clones into the agent
+      # workspace).
+      path = [ pkgs.poppler-utils pkgs.git ];
       environment = {
         RUST_LOG = lib.mkDefault "info";
         # reqwest talks HTTPS to arXiv/Crossref/OpenAI; give it a CA bundle
