@@ -965,7 +965,9 @@ mod tests {
     #[tokio::test]
     async fn author_terms_without_text_degrade_semantic_with_reason() {
         let pool = pool().await;
-        crate::db::insert_paper(&pool, &paper("a", "T")).await.unwrap();
+        crate::db::insert_paper(&pool, &paper("a", "T"))
+            .await
+            .unwrap();
         let server = MockServer::start().await;
         // No embeddings mock: reaching the embedder would 404 loudly.
         let dir = tempfile::tempdir().unwrap();

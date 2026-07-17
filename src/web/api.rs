@@ -1017,7 +1017,11 @@ pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchPa
         status: parsed.status.or(p.status),
         project,
         tag: parsed.tag.or(p.tag),
-        starred: if parsed.starred { Some(true) } else { p.starred },
+        starred: if parsed.starred {
+            Some(true)
+        } else {
+            p.starred
+        },
     };
     match svc.search(&req).await {
         Ok(out) => {

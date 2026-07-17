@@ -1529,7 +1529,9 @@ mod search_api {
         db::add_paper_tag(&pool, "b", "systems").await.unwrap();
         db::set_paper_starred(&pool, "a", true).await.unwrap();
         let proj = db::create_project(&pool, "Thesis").await.unwrap();
-        db::add_paper_to_project(&pool, "a", &proj.id).await.unwrap();
+        db::add_paper_to_project(&pool, "a", &proj.id)
+            .await
+            .unwrap();
 
         let idx = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(idx.path()).unwrap();
@@ -1609,7 +1611,10 @@ mod search_api {
         let body: serde_json::Value = resp.json();
         let results = body["results"].as_array().unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0]["paper"]["id"], "a", "tag: qualifier must beat ?tag=");
+        assert_eq!(
+            results[0]["paper"]["id"], "a",
+            "tag: qualifier must beat ?tag="
+        );
     }
 
     #[tokio::test]

@@ -184,7 +184,10 @@ mod tests {
 
     #[test]
     fn quoted_phrases_pass_through() {
-        assert_eq!(parse(r#""exact phrase" more"#).text, r#""exact phrase" more"#);
+        assert_eq!(
+            parse(r#""exact phrase" more"#).text,
+            r#""exact phrase" more"#
+        );
     }
 
     #[test]
