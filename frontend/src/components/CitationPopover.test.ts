@@ -1,11 +1,29 @@
 import { render } from '@testing-library/svelte';
-import { describe, expect, it, afterEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, afterEach, vi } from 'vitest';
+
+vi.mock('../lib/api', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../lib/api')>();
+  return {
+    ...mod,
+    importUrl: vi.fn(async (): Promise<import('../lib/types').ImportResult> => ({
+      outcome: 'ingested', id: 'p-new', title: 'Fuzzgen', status: 'resolved',
+    })),
+    listPapers: vi.fn(async () => []),
+    getStats: vi.fn(async () => ({ total: 0, resolved: 0, needs_review: 0 })),
+  };
+});
+
 import CitationPopover from './CitationPopover.svelte';
 import { citationHover } from '../lib/citationState.svelte';
+import { importState, ui } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
 
 afterEach(() => {
   citationHover.current = null;
+  importState.items = [];
+  importState.cancelled = false;
+  ui.importOpen = false;
 });
 
 const paper: PaperSummary = {
@@ -99,5 +117,25 @@ describe('CitationPopover', () => {
     const { queryByRole, findByRole } = render(CitationPopover);
     await findByRole('button', { name: /open in library/i });
     expect(queryByRole('button', { name: /^import$/i })).not.toBeInTheDocument();
+  });
+
+  it('clicking Import enqueues the identifier into the freshly opened modal', async () => {
+    show(
+      {
+        structured: {
+          authors: [], title: 'Fuzzgen', venue: 'USENIX Security', year: 2020,
+          doi: '10.1234/fuzzgen', arxiv_id: null, url: null,
+        },
+      },
+      null,
+    );
+    const { findByRole } = render(CitationPopover);
+    await userEvent.click(await findByRole('button', { name: /^import$/i }));
+    // openImport() resets importState.items — the enqueue must come AFTER it,
+    // or the just-queued item is wiped and the modal opens empty.
+    expect(ui.importOpen).toBe(true);
+    expect(importState.items).toHaveLength(1);
+    expect(importState.items[0].name).toBe('10.1234/fuzzgen');
+    expect(citationHover.current).toBeNull();
   });
 });

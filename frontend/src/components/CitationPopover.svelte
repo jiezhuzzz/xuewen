@@ -30,8 +30,8 @@
 
   function importRef() {
     if (!importable) return;
+    openImport(); // reset/open first, so the enqueue lands in the fresh session
     void enqueueUrl(importable);
-    openImport(); // surface queue progress
     citationHover.current = null;
   }
 </script>
