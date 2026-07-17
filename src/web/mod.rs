@@ -249,6 +249,7 @@ fn router_with(state: AppState) -> Router {
 }
 
 /// Bind `host:port` and serve the router until the process is stopped.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     host: &str,
     port: u16,
@@ -263,21 +264,34 @@ pub async fn serve(
     translate: Option<Arc<crate::translate::TranslateService>>,
     ui: crate::config::UiConfig,
 ) -> Result<()> {
-    let app = router_with(AppState {
-        pool,
-        library_root,
-        ingest: Some(ingest),
-        proxy_login_url,
-        search,
-        daily,
-        agent,
-        citations,
-        translate,
-        ui,
-    });
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("xuewen serving on http://{addr}");
+    serve_on(
+        listener,
+        AppState {
+            pool,
+            library_root,
+            ingest: Some(ingest),
+            proxy_login_url,
+            search,
+            daily,
+            agent,
+            citations,
+            translate,
+            ui,
+        },
+    )
+    .await
+}
+
+/// Serve the full router on a listener the caller has already bound —
+/// lets the caller bind port 0 and learn the real port from
+/// `listener.local_addr()` before starting the server. Shuts down
+/// gracefully on SIGINT/SIGTERM (see `shutdown_signal`) — the container
+/// runs this as PID 1, where an unhandled signal means a hung stop.
+pub async fn serve_on(listener: tokio::net::TcpListener, state: AppState) -> Result<()> {
+    let app = router_with(state);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
