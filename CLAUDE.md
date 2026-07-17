@@ -19,6 +19,8 @@ npm --prefix agent-runner install      # once, only needed for Agent Ask ([ai.ag
 cargo run -- serve                     # web UI at http://127.0.0.1:8080 (loopback; --allow-remote to bind publicly)
 nix build                              # ./result/bin/xuewen with the frontend baked in
 
+cargo run -p xuewen-desktop            # macOS desktop app (dev; opens a window)
+
 # Frontend hot-reload dev: run both; Vite (:5173) proxies /api and /papers to the backend (:8080).
 cargo run -- serve
 npm --prefix frontend run dev
@@ -28,6 +30,7 @@ Tests & checks:
 
 ```sh
 cargo test                             # backend unit + integration tests
+cargo test -p xuewen-desktop           # desktop crate unit tests
 cargo test <name_substring>            # a single backend test
 cargo clippy                           # lint
 cargo fmt
@@ -43,7 +46,11 @@ nix flake check                        # builds packages + checks (a NixOS VM te
 
 Semantic search and the daily feed need a running **Qdrant** (`http://localhost:6333`) plus `[ai.embedding]` configured; keyword search, chat, and everything else do not.
 
+Desktop crate builds (`cargo build`/`test -p xuewen-desktop`) link against macOS system frameworks (WebKit, AppKit) through Tauri; if that fails inside the Nix shell, fall back to running the same command outside it (plain `cargo`, via a rustup toolchain) rather than fighting the sandboxed linker. To produce the `.dmg`: `bash desktop/scripts/prepare-sidecars.sh` (bundles Node + `pdftotext` as sidecars; needs Homebrew `poppler` and `dylibbundler`), then `cd desktop && npx @tauri-apps/cli build`.
+
 ## Architecture
+
+**Workspace: server crate + desktop crate.** The repo is a Cargo workspace (`[workspace] members = [".", "desktop"]`): the root `xuewen` crate is the CLI/server; `desktop/` (`xuewen-desktop`) is a Tauri v2 crate that boots the *same* Axum stack in-process — `xuewen::server::spawn_services` builds every service from a `Config`, then `xuewen::server::serve_on`/`web::serve_on` serve them on a listener the desktop crate binds itself (`127.0.0.1:0`, so it never collides with a `cargo run -- serve` on `:8080`) — and opens a webview at that address instead of mounting routes for a terminal user to hit. Bundled `pdftotext`/`node` sidecars are found by prepending their directory (`Contents/MacOS` inside the `.app`) onto `PATH` before the backend starts, so `src/pdf.rs` and `src/agent`'s plain `Command::new("pdftotext"/"node")` resolve them without any desktop-specific code path. Desktop config bootstraps into `~/Library/Application Support/Xuewen/` on first launch (`desktop/src/bootstrap.rs`) and is otherwise the same `xuewen.toml` the server reads.
 
 **Single binary, embedded SPA.** `src/main.rs` is the CLI; `serve` starts the web server. The Svelte frontend is built to `frontend/dist` and embedded via `rust-embed` (`src/web/assets.rs`). `build.rs` writes a placeholder `index.html` when `frontend/dist` is missing so `cargo build`/tests work without a frontend build. In **debug** builds `rust-embed` reads `frontend/dist` from disk at request time — a frontend rebuild is served live with no Rust recompile; **release** (`nix build`) bakes it in.
 
