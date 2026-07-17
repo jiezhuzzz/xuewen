@@ -175,10 +175,9 @@ export interface Tab {
 /// The content pane's tab strip. `activeId === null` means the permanent
 /// "Library" home tab is active (shows the Welcome panel); a string means
 /// that PDF tab is active. Tabs persist while home is active.
-export const viewer = $state<{ tabs: Tab[]; activeId: string | null; infoOpen: boolean }>({
+export const viewer = $state<{ tabs: Tab[]; activeId: string | null }>({
   tabs: [],
   activeId: null,
-  infoOpen: false,
 });
 
 /// The browsing highlight for the Library list (moved by j/k). Distinct from viewer.activeId: the highlight is the list cursor; opening a paper reads it.
@@ -186,23 +185,6 @@ export const selection = $state<{ id: string | null }>({ id: null });
 
 export function selectPaper(id: string | null): void {
   selection.id = id;
-}
-
-const INFO_KEY = 'xuewen-info-open';
-
-/// Load the remembered info-panel state (default closed). Call once at startup.
-export function initInfo(): void {
-  viewer.infoOpen = localStorage.getItem(INFO_KEY) === '1';
-}
-
-/// Set the info panel open/closed and remember the choice.
-export function setInfoOpen(open: boolean): void {
-  viewer.infoOpen = open;
-  localStorage.setItem(INFO_KEY, open ? '1' : '0');
-}
-
-export function toggleInfo(): void {
-  setInfoOpen(!viewer.infoOpen);
 }
 
 export type DockTab = 'details' | 'ask';

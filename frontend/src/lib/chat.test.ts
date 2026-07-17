@@ -7,7 +7,6 @@ import {
   sendChatMessage,
   setChatModel,
   stopChatStream,
-  toggleChat,
 } from './chat.svelte';
 import { viewer } from './state.svelte';
 
@@ -35,7 +34,6 @@ beforeEach(() => {
   chat.available = false;
   chat.models = [];
   chat.modelId = null;
-  chat.open = false;
   chat.paperId = null;
   chat.messages = [];
   chat.pending = null;
@@ -63,18 +61,6 @@ describe('models', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ available: false, models: [] })));
     await loadChatModels();
     expect(chat.available).toBe(false);
-  });
-});
-
-describe('toggleChat', () => {
-  it('only opens with an active tab and available chat', () => {
-    toggleChat();
-    expect(chat.open).toBe(false);
-    chat.available = true;
-    viewer.tabs = [{ id: 'p1', title: 'T' }];
-    viewer.activeId = 'p1';
-    toggleChat();
-    expect(chat.open).toBe(true);
   });
 });
 

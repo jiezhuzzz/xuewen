@@ -3,13 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import TranslatePopover from './TranslatePopover.svelte';
 import { translateBox, closeTranslate } from '../lib/translate.svelte';
-import { appSettings } from '../lib/state.svelte';
+import { appSettings, dock } from '../lib/state.svelte';
 import { chat } from '../lib/chat.svelte';
 
 beforeEach(() => {
   closeTranslate();
   appSettings.translate = { enabled: true, providers: ['llm', 'deepl'], default_provider: 'llm', target_lang: 'zh', trigger: 'auto' };
-  chat.open = false;
+  dock.open = false;
+  dock.tab = 'details';
   chat.draft = '';
   chat.available = true;
   vi.unstubAllGlobals();
@@ -43,11 +44,12 @@ describe('TranslatePopover', () => {
     expect((navigator.clipboard.writeText as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('你好世界');
   });
 
-  it('Ask about this prefills the chat draft and opens chat', async () => {
+  it('Ask about this prefills the chat draft and opens the dock on Ask', async () => {
     openBox();
     render(TranslatePopover);
     await userEvent.click(screen.getByRole('button', { name: /ask about this/i }));
-    expect(chat.open).toBe(true);
+    expect(dock.open).toBe(true);
+    expect(dock.tab).toBe('ask');
     expect(chat.draft).toContain('hello world');
   });
 

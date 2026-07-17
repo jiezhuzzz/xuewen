@@ -1,6 +1,5 @@
 import { deleteChatThread, getChatModels, getChatThread, postChatMessage } from './api';
 import { readSse } from './sse';
-import { viewer } from './state.svelte';
 
 export interface ChatModelInfo {
   id: string;
@@ -21,7 +20,6 @@ export const chat = $state<{
   available: boolean;
   models: ChatModelInfo[];
   modelId: string | null;
-  open: boolean;
   paperId: string | null;
   messages: ChatTurn[];
   pending: string | null;
@@ -33,7 +31,6 @@ export const chat = $state<{
   available: false,
   models: [],
   modelId: null,
-  open: false,
   paperId: null,
   messages: [],
   pending: null,
@@ -69,12 +66,6 @@ export async function loadChatModels(): Promise<void> {
 export function setChatModel(id: string): void {
   chat.modelId = id;
   localStorage.setItem('xuewen-chat-model', id);
-}
-
-/// The bubble/`c` toggle: chat only exists over an open PDF.
-export function toggleChat(): void {
-  if (!chat.available || viewer.activeId === null) return;
-  chat.open = !chat.open;
 }
 
 export async function loadThread(paperId: string): Promise<void> {

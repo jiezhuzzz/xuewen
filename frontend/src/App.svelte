@@ -2,25 +2,25 @@
   import { onMount, type Component } from 'svelte';
   import { Spring } from 'svelte/motion';
   import { fly, slide } from 'svelte/transition';
-  import ChatPanel from './components/ChatPanel.svelte';
   import CommandPalette from './components/CommandPalette.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
-  import InfoPanel from './components/InfoPanel.svelte';
   import LibraryPane from './components/LibraryPane.svelte';
   import PaperContextMenu from './components/PaperContextMenu.svelte';
+  import ReaderDock from './components/ReaderDock.svelte';
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
   import TranslatePopover from './components/TranslatePopover.svelte';
   import Welcome from './components/Welcome.svelte';
-  import { chat, loadChatModels, loadThread } from './lib/chat.svelte';
+  import { loadChatModels, loadThread } from './lib/chat.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
   import { syncTranslateModeFromSettings } from './lib/translate.svelte';
   import {
+    dock,
     identifyState,
-    initInfo,
+    initDock,
     initTheme,
     loadPapers,
     loadProjects,
@@ -33,7 +33,7 @@
 
   onMount(() => {
     initTheme();
-    initInfo();
+    initDock();
     loadStats();
     loadProjects();
     loadPapers();
@@ -57,9 +57,9 @@
   $effect(() => {
     if (!paneHidden) peek = false;
   });
-  // The chat thread follows the active paper while the panel is open.
+  // The chat thread follows the active paper while the Ask tab is open.
   $effect(() => {
-    if (chat.open && viewer.activeId) void loadThread(viewer.activeId);
+    if (dock.open && dock.tab === 'ask' && viewer.activeId) void loadThread(viewer.activeId);
   });
 
   // The PDF reader pulls in the entire @embedpdf/PDFium subtree — by far the
@@ -120,14 +120,11 @@
               Loading reader…
             </div>
           {/if}
-          {#if viewer.infoOpen && viewer.activeId}
+          {#if dock.open && viewer.activeId}
             <!-- Non-interactive recede veil: the PDF stays scrollable underneath. -->
             <div class="pointer-events-none absolute inset-0 z-10 bg-ink/5 dark:bg-black/25" aria-hidden="true"></div>
-            {#key viewer.activeId}
-              <InfoPanel id={viewer.activeId} />
-            {/key}
+            <ReaderDock id={viewer.activeId} />
           {/if}
-          {#if chat.open}<ChatPanel />{/if}
         </div>
         {#if viewer.activeId === null}
           <Welcome />
