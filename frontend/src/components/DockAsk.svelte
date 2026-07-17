@@ -29,7 +29,7 @@
 {#snippet toolChips(tools: { name: string; detail: string }[])}
   <div class="mb-1 flex flex-wrap gap-1">
     {#each tools as t, i (i)}
-      <span class="rounded-md bg-amber-700/10 px-1.5 py-0.5 font-mono text-[10.5px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-500">
+      <span class="rounded-md bg-amber-700/10 px-1.5 py-0.5 font-mono text-chip text-amber-700 dark:bg-amber-500/15 dark:text-amber-500">
         {t.name}{t.detail ? ` ${t.detail}` : ''}
       </span>
     {/each}
@@ -86,11 +86,11 @@
       {:else}
         <div class="mr-2">
           {#if m.tools?.length}{@render toolChips(m.tools)}{/if}
-          <div class="whitespace-pre-wrap font-serif text-[15px] leading-relaxed text-stone-700 dark:text-stone-300">
+          <div class="whitespace-pre-wrap font-serif text-lead leading-relaxed text-stone-700 dark:text-stone-300">
             {m.content}
           </div>
           {#if m.model}
-            <p class="mt-1 font-mono text-[10px] uppercase tracking-wide text-stone-400 dark:text-stone-500">
+            <p class="mt-1 font-mono text-chip uppercase tracking-wide text-stone-400 dark:text-stone-500">
               {m.model}
             </p>
           {/if}
@@ -103,7 +103,7 @@
       </div>
       <div class="mr-2">
         {#if chat.streamTools.length}{@render toolChips(chat.streamTools)}{/if}
-        <div class="whitespace-pre-wrap font-serif text-[15px] leading-relaxed text-stone-700 dark:text-stone-300">
+        <div class="whitespace-pre-wrap font-serif text-lead leading-relaxed text-stone-700 dark:text-stone-300">
           {chat.streaming}<span class="animate-pulse">▍</span>
         </div>
       </div>

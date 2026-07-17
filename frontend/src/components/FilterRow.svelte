@@ -32,7 +32,7 @@
     'min-w-0 flex-1 rounded-lg border border-stone-200 bg-parchment px-2 py-1.5 text-xs dark:border-stone-700 dark:bg-stone-800';
 
   const zoneLabelClasses =
-    'flex w-full items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400 hover:text-stone-500 dark:hover:text-stone-300';
+    'flex w-full items-center gap-1 text-chip font-semibold uppercase tracking-wide text-stone-400 hover:text-stone-500 dark:hover:text-stone-300';
 
   // Projects and Star & tags start folded — the pill bars can grow long, so
   // the sidebar opens compact and the user expands what they need. A small
@@ -310,7 +310,7 @@
       </div>
     {/if}
     {#if menuError}
-      <p class="mt-1 px-1 text-[10px] text-red-600 dark:text-red-400">{menuError}</p>
+      <p class="mt-1 px-1 text-chip text-red-600 dark:text-red-400">{menuError}</p>
     {/if}
   </div>
 {/snippet}
@@ -339,7 +339,7 @@
     <ChevronRight size={11} class={`transition-transform ${projectsOpen ? 'rotate-90' : ''}`} />
     <span>Projects</span>
     {#if !projectsOpen && projectFilterCount > 0}
-      <span class="rounded-full bg-indigo-600/15 px-1.5 text-[10px] tabular-nums text-indigo-700 dark:text-indigo-300">
+      <span class="rounded-full bg-indigo-600/15 px-1.5 text-chip tabular-nums text-indigo-700 dark:text-indigo-300">
         {projectFilterCount}
       </span>
     {/if}
@@ -414,7 +414,7 @@
     <ChevronRight size={11} class={`transition-transform ${starTagsOpen ? 'rotate-90' : ''}`} />
     <span>Star &amp; tags</span>
     {#if !starTagsOpen && starTagsFilterCount > 0}
-      <span class="rounded-full bg-amber-700/15 px-1.5 text-[10px] tabular-nums text-amber-800 dark:text-amber-400">
+      <span class="rounded-full bg-amber-700/15 px-1.5 text-chip tabular-nums text-amber-800 dark:text-amber-400">
         {starTagsFilterCount}
       </span>
     {/if}

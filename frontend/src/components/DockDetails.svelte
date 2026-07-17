@@ -21,7 +21,7 @@
       : dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   }
 
-  const label = 'text-[11px] font-semibold uppercase tracking-[.08em] text-stone-500 dark:text-stone-400';
+  const label = 'text-caption font-semibold uppercase tracking-[.08em] text-stone-500 dark:text-stone-400';
   const divider = 'mt-4 border-t border-stone-200 pt-4 dark:border-stone-800';
 </script>
 
@@ -35,13 +35,13 @@
       {#if d.summary}
         <section class={divider}>
           <h3 class={label}>Summary</h3>
-          <p class="mt-2 font-serif text-[13.5px] font-medium leading-relaxed text-ink dark:text-stone-100">
+          <p class="mt-2 font-serif text-reading font-medium leading-relaxed text-ink dark:text-stone-100">
             {d.summary.tldr}
           </p>
-          <dl class="mt-2 space-y-1.5 text-[12.5px]">
+          <dl class="mt-2 space-y-1.5 text-detail">
             {#each [['Problem', d.summary.problem], ['Approach', d.summary.approach], ['Results', d.summary.results], ['Limitations', d.summary.limitations]] as [k, v]}
               <div>
-                <dt class="text-[11px] font-semibold uppercase tracking-[.08em] text-stone-500 dark:text-stone-400">{k}</dt>
+                <dt class="text-caption font-semibold uppercase tracking-[.08em] text-stone-500 dark:text-stone-400">{k}</dt>
                 <dd class="text-stone-700 dark:text-stone-300">{v}</dd>
               </div>
             {/each}
@@ -60,7 +60,7 @@
             ><path d="m6 9 6 6 6-6" /></svg>
           </button>
           {#if abstractOpen}
-            <p class="mt-2 max-w-[42ch] font-serif text-[13.5px] leading-relaxed text-stone-700 dark:text-stone-300">
+            <p class="mt-2 max-w-[42ch] font-serif text-reading leading-relaxed text-stone-700 dark:text-stone-300">
               {d.abstract}
             </p>
           {/if}
@@ -69,10 +69,10 @@
 
       <section class={divider}>
         <h3 class={label}>Record</h3>
-        <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
+        <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-detail">
           {#if d.cite_key}
             <dt class="text-stone-500 dark:text-stone-400">Cite key</dt>
-            <dd class="font-mono text-[11.5px] text-ink dark:text-stone-200">{d.cite_key}</dd>
+            <dd class="font-mono text-caption text-ink dark:text-stone-200">{d.cite_key}</dd>
           {/if}
           {#if d.source}
             <dt class="text-stone-500 dark:text-stone-400">Source</dt>

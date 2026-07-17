@@ -66,7 +66,7 @@
     }
   }
 
-  const label = 'text-[11px] font-semibold uppercase tracking-[.08em] text-stone-500 dark:text-stone-400';
+  const label = 'text-caption font-semibold uppercase tracking-[.08em] text-stone-500 dark:text-stone-400';
 </script>
 
 <section class="mt-4 border-t border-stone-200 pt-4 dark:border-stone-800">
@@ -93,18 +93,18 @@
         class="rounded-lg bg-amber-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-50 dark:bg-amber-600 dark:hover:bg-amber-500"
       >Attach</button>
     </form>
-    <p class="mt-1.5 text-[11px] leading-snug text-stone-400 dark:text-stone-500">
+    <p class="mt-1.5 text-caption leading-snug text-stone-400 dark:text-stone-500">
       Attach the paper's repository so Ask can ground answers in the code.
     </p>
   {:else}
     <p class="mt-2 break-all text-xs text-stone-700 dark:text-stone-300">{code.repo_url}</p>
     <div class="mt-1.5 flex items-center gap-2">
       {#if code.status === 'cloning'}
-        <span class="rounded-md bg-stone-200/70 px-1.5 py-0.5 text-[10px] font-medium text-stone-600 dark:bg-stone-800 dark:text-stone-300">cloning…</span>
+        <span class="rounded-md bg-stone-200/70 px-1.5 py-0.5 text-chip font-medium text-stone-600 dark:bg-stone-800 dark:text-stone-300">cloning…</span>
       {:else if code.status === 'ready'}
-        <span class="rounded-md bg-amber-700/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-500">ready · {code.commit_sha}</span>
+        <span class="rounded-md bg-amber-700/10 px-1.5 py-0.5 font-mono text-chip text-amber-700 dark:bg-amber-500/15 dark:text-amber-500">ready · {code.commit_sha}</span>
       {:else}
-        <span class="rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400">{code.error ?? 'clone failed'}</span>
+        <span class="rounded-md bg-red-500/10 px-1.5 py-0.5 text-chip font-medium text-red-700 dark:text-red-400">{code.error ?? 'clone failed'}</span>
       {/if}
       {#if confirmingDetach}
         <ConfirmButtons
@@ -117,12 +117,12 @@
           type="button"
           onclick={() => (confirmingDetach = true)}
           disabled={busy}
-          class="text-[11px] text-stone-500 underline-offset-2 hover:underline dark:text-stone-400"
+          class="text-caption text-stone-500 underline-offset-2 hover:underline dark:text-stone-400"
         >Remove</button>
       {/if}
     </div>
   {/if}
   {#if error}
-    <p class="mt-1.5 text-[11px] text-red-700 dark:text-red-400">{error}</p>
+    <p class="mt-1.5 text-caption text-red-700 dark:text-red-400">{error}</p>
   {/if}
 </section>
