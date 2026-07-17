@@ -1,9 +1,8 @@
 <script lang="ts">
   import { Monitor, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
   import {
-    filters,
-    loadPapers,
     openImport,
+    setStatusFilter,
     stats,
     theme,
     toggleSidebar,
@@ -39,10 +38,7 @@
           <button
             type="button"
             title="Show papers that need review"
-            onclick={() => {
-              filters.status = 'needs_review';
-              void loadPapers();
-            }}
+            onclick={() => void setStatusFilter('needs_review')}
             class="rounded text-yellow-700 underline-offset-2 hover:underline dark:text-yellow-400"
           >{stats.value.needs_review} to review</button>
         {/if}

@@ -54,7 +54,7 @@
     data-search-input
     type="search"
     aria-label="Search papers"
-    placeholder="Search library…"
+    placeholder={'Search…  tag:nlp author:smith "phrase"'}
     value={filters.q}
     oninput={(e) => setSearch((e.currentTarget as HTMLInputElement).value)}
     class="w-full rounded-lg border border-stone-200 bg-paper py-2 pl-9 pr-9 text-sm outline-none focus:border-amber-700 focus:ring-2 focus:ring-amber-700/15 dark:border-stone-700 dark:bg-stone-800 dark:focus:border-amber-500"
@@ -125,6 +125,10 @@
           indexing {searchMeta.pending} paper{searchMeta.pending === 1 ? '' : 's'}…
         </p>
       {/if}
+      <p class="text-[10px] text-stone-400 dark:text-stone-500">
+        Query syntax: <code>tag:</code> <code>project:</code> <code>is:starred</code>
+        <code>status:</code> <code>in:title</code> <code>author:</code> <code>"phrase"</code>
+      </p>
     </div>
   {/if}
 </div>

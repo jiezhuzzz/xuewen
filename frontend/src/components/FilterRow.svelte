@@ -14,14 +14,14 @@
     renameTag,
     setProjectFilter,
     setStarFilter,
+    setStatusFilter,
     setTagFilter,
     tags,
   } from '../lib/state.svelte';
   import type { Sort, StatusFilter } from '../lib/types';
 
   function onStatus(e: Event) {
-    filters.status = (e.currentTarget as HTMLSelectElement).value as StatusFilter;
-    loadPapers();
+    void setStatusFilter((e.currentTarget as HTMLSelectElement).value as StatusFilter);
   }
   function onSort(e: Event) {
     filters.sort = (e.currentTarget as HTMLSelectElement).value as Sort;
