@@ -14,6 +14,7 @@
   import PdfFindBar from './PdfFindBar.svelte';
   import PdfSidePanel from './PdfSidePanel.svelte';
   import TranslateBubble from './TranslateBubble.svelte';
+  import Spinner from './Spinner.svelte';
   import { SearchLayer } from '@embedpdf/plugin-search/svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
@@ -281,7 +282,11 @@
     {:else if doc.isError}
       <p class="p-4 text-sm text-red-600 dark:text-red-400">Failed to load document.</p>
     {:else}
-      <p class="p-4 text-sm text-stone-500 dark:text-stone-400">Loading document…</p>
+      <!-- Centered, not a corner note: the blank page area otherwise reads
+           as broken during the multi-second worker boot + first parse. -->
+      <div class="flex h-full items-center justify-center">
+        <Spinner label="Loading document…" />
+      </div>
     {/if}
   {/snippet}
 </DocumentContent>

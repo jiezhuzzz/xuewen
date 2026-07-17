@@ -3,6 +3,7 @@
   import { usePdfiumEngine } from '@embedpdf/engines/svelte';
   import { ENGINE_OPTIONS, viewerPlugins } from '../lib/pdfEngine';
   import PdfDeck from './PdfDeck.svelte';
+  import Spinner from './Spinner.svelte';
 
   // ONE app-level engine + <EmbedPDF>. @embedpdf/core's Svelte bindings use a
   // module-level singleton context, so only a single <EmbedPDF> can exist per
@@ -13,7 +14,9 @@
 
 <div class="relative min-h-0 flex-1 bg-stone-100 dark:bg-stone-950">
   {#if engine.isLoading}
-    <p class="p-4 text-sm text-stone-500 dark:text-stone-400">Loading PDF engine…</p>
+    <div class="flex h-full items-center justify-center">
+      <Spinner label="Loading PDF engine…" />
+    </div>
   {:else if engine.error}
     <p class="p-4 text-sm text-red-600 dark:text-red-400">Engine failed: {engine.error.message}</p>
   {:else if engine.engine}
