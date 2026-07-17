@@ -1004,11 +1004,23 @@ pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchPa
     };
     match svc.search(&req).await {
         Ok(out) => {
-            let results: Vec<SearchResult> = out
+            // Same enrichment as list_papers: without it, search rows
+            // serialize empty tags/projects and the table's chips vanish
+            // whenever a query is active.
+            let mut summaries: Vec<PaperSummary> = out
                 .results
                 .iter()
-                .map(|(paper, m)| SearchResult {
-                    paper: PaperSummary::from(paper),
+                .map(|(paper, _)| PaperSummary::from(paper))
+                .collect();
+            if let Err(e) = attach_row_extras(&app.pool, &mut summaries).await {
+                tracing::error!("search row extras: {e}");
+                return internal_error();
+            }
+            let results: Vec<SearchResult> = summaries
+                .into_iter()
+                .zip(out.results.iter())
+                .map(|(paper, (_, m))| SearchResult {
+                    paper,
                     match_info: SearchMatch {
                         engine: m.engine.clone(),
                         field: m.field.clone(),

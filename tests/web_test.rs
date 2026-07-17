@@ -1521,6 +1521,28 @@ mod search_api {
     }
 
     #[tokio::test]
+    async fn search_results_include_tags_and_projects() {
+        let pool = test_pool().await;
+        insert_sample_paper(&pool, "p1", "Fuzzing Firmware").await;
+        db::add_paper_tag(&pool, "p1", "security/fuzzing")
+            .await
+            .unwrap();
+        let pr = db::create_project(&pool, "TP3").await.unwrap();
+        db::add_paper_to_project(&pool, "p1", &pr.id).await.unwrap();
+        let server = server_with_search(pool).await;
+
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        let paper = &body["results"][0]["paper"];
+        assert_eq!(paper["tags"][0]["name"], "security/fuzzing");
+        assert_eq!(paper["projects"][0]["name"], "TP3");
+    }
+
+    #[tokio::test]
     async fn search_without_service_is_503() {
         let pool = test_pool().await;
         let router = xuewen::web::build_router(pool, std::path::PathBuf::from("/nonexistent"));
