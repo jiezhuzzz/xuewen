@@ -142,6 +142,8 @@ pub struct AiConfig {
     pub citations: Option<AiDefaults>,
     /// LLM provider for translate-on-selection. Absent ⇒ LLM translate off.
     pub translate: Option<AiDefaults>,
+    /// Agent Ask. No backend subsections ⇒ off.
+    pub agent: AgentConfig,
 }
 
 impl AiConfig {
@@ -223,6 +225,53 @@ pub struct ChatModelConfig {
     pub label: String,
     #[serde(flatten)]
     pub endpoint: AiDefaults,
+}
+
+/// Agent Ask (`[ai.agent]`): the tool-using agent behind the reader's Ask
+/// tab. Off unless at least one backend subsection is present. Auth is the
+/// SDKs' own (CLI logins or ANTHROPIC_API_KEY / OPENAI_API_KEY) — never this
+/// file. Backends do not inherit `[ai]` defaults: base_url/api_key_env are
+/// meaningless to them, only their own `model` applies.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    /// Claude Code backend. Presence enables it.
+    pub claude_code: Option<AgentBackendConfig>,
+    /// Codex backend. Presence enables it.
+    pub codex: Option<AgentBackendConfig>,
+    /// Attached-repo clone size guard, in MB.
+    pub max_repo_mb: u64,
+    /// Per-turn wall-clock timeout.
+    pub timeout_secs: u64,
+    /// Runner script override (default: agent-runner/src/runner.mjs,
+    /// resolved from the server's working directory).
+    pub runner: Option<PathBuf>,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            claude_code: None,
+            codex: None,
+            max_repo_mb: 500,
+            timeout_secs: 300,
+            runner: None,
+        }
+    }
+}
+
+impl AgentConfig {
+    pub fn enabled(&self) -> bool {
+        self.claude_code.is_some() || self.codex.is_some()
+    }
+}
+
+/// One agent backend (`[ai.agent.claude_code]` / `[ai.agent.codex]`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentBackendConfig {
+    /// Optional model override passed through to the SDK.
+    pub model: Option<String>,
 }
 
 /// UI preferences (`[ui]`), surfaced to the frontend via `/api/settings`.
@@ -836,5 +885,35 @@ database_url = "sqlite::memory:"
 "#;
         let cfg: Config = toml::from_str(toml).unwrap();
         assert!(cfg.translate.is_none());
+    }
+
+    #[test]
+    fn ai_agent_absent_means_disabled_with_defaults() {
+        let ai: crate::config::AiConfig = toml::from_str("").unwrap();
+        assert!(!ai.agent.enabled());
+        assert_eq!(ai.agent.max_repo_mb, 500);
+        assert_eq!(ai.agent.timeout_secs, 300);
+        assert!(ai.agent.runner.is_none());
+    }
+
+    #[test]
+    fn ai_agent_backends_toggle_independently() {
+        let ai: crate::config::AiConfig = toml::from_str(
+            "[agent]\nmax_repo_mb = 100\n[agent.claude_code]\nmodel = \"claude-sonnet-5\"\n",
+        )
+        .unwrap();
+        assert!(ai.agent.enabled());
+        assert_eq!(ai.agent.max_repo_mb, 100);
+        assert_eq!(
+            ai.agent.claude_code.as_ref().unwrap().model.as_deref(),
+            Some("claude-sonnet-5")
+        );
+        assert!(ai.agent.codex.is_none());
+
+        let both: crate::config::AiConfig =
+            toml::from_str("[agent.claude_code]\n[agent.codex]\n").unwrap();
+        assert!(both.agent.claude_code.is_some());
+        assert!(both.agent.codex.is_some());
+        assert!(both.agent.codex.as_ref().unwrap().model.is_none());
     }
 }
