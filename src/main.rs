@@ -537,9 +537,14 @@ async fn main() -> Result<()> {
             if let Some(s) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) {
                 tokio::spawn(xuewen::summary::run(s, std::time::Duration::from_secs(60)));
             }
-            let chat = xuewen::chat::ChatService::from_config(&cfg.ai);
-            if chat.is_none() {
-                tracing::info!("paper chat disabled (no usable [[ai.chat.models]])");
+            let agent = xuewen::agent::AgentService::from_config(&cfg.ai.agent);
+            match &agent {
+                None => tracing::info!("agent ask disabled (no [ai.agent] backends)"),
+                Some(a) => {
+                    for p in a.preflight().await {
+                        tracing::warn!("agent ask: {p}");
+                    }
+                }
             }
             let citations = xuewen::citations::CitationsService::from_config(pool.clone(), &cfg);
             let translate =
@@ -553,7 +558,7 @@ async fn main() -> Result<()> {
                 cfg.proxy.as_ref().map(|p| p.login_url.clone()),
                 search,
                 daily,
-                chat,
+                agent,
                 citations,
                 translate,
                 cfg.ui.clone(),
@@ -721,8 +726,8 @@ async fn main() -> Result<()> {
                 println!("deleted tag {}", tag.name);
             }
             TagCmd::Show { name } => {
-                let papers = db::list_papers(&pool, None, None, None, None, Some(&name), None)
-                    .await?;
+                let papers =
+                    db::list_papers(&pool, None, None, None, None, Some(&name), None).await?;
                 println!("{name} — {} paper(s)", papers.len());
                 for p in papers {
                     println!(

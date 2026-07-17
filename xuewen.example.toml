@@ -37,7 +37,7 @@ database_url  = "sqlite:./library.db"
 #[ai]
 #base_url         = "https://api.openai.com/v1"  # default; any OpenAI-compatible endpoint
 #api_key_env      = "OPENAI_API_KEY"             # default; or: api_key = "sk-..."
-#model            = "gpt-4o-mini"                # default model for chat/summary/daily
+#model            = "gpt-4o-mini"                # default model for summary/daily/citations
 #reasoning_effort = "high"                       # optional (reasoning models)
 
 # Semantic search (needs Qdrant). Embeddings use their own model.
@@ -45,12 +45,22 @@ database_url  = "sqlite:./library.db"
 #model = "text-embedding-3-small"
 #dims  = 1536
 
-# Paper chat (one entry per selectable model).
-#[ai.chat]
-#max_context_chars = 60000
-#[[ai.chat.models]]
-#label = "GPT-4o mini"
-#model = "gpt-4o-mini"
+# Agent Ask — the reader's Ask tab. A tool-using agent (via the Claude Code /
+# Codex CLIs' SDKs) reads the paper's extracted text, and the paper's attached
+# code repository when one is set, inside a read-only sandbox. Requires Node
+# >= 20 and `npm --prefix agent-runner install`. Auth comes from your existing
+# `claude` / `codex` logins or ANTHROPIC_API_KEY / OPENAI_API_KEY.
+# Enable a backend by uncommenting its section; either may be omitted.
+#
+# [ai.agent]
+# max_repo_mb = 500      # attached-repo clone size guard
+# timeout_secs = 300     # per-turn wall clock
+#
+# [ai.agent.claude_code]
+# model = "claude-sonnet-5"     # optional
+#
+# [ai.agent.codex]
+# model = "gpt-5.2-codex"       # optional
 
 # Per-paper library summaries. Empty ⇒ inherits [ai] model + reasoning_effort.
 #[ai.summary]
