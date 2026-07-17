@@ -12,7 +12,7 @@ vi.mock('./api', async (importOriginal) => {
 });
 
 import * as api from './api';
-import { library, removePaper } from './state.svelte';
+import { library, removePaper, removePapers } from './state.svelte';
 import { toasts } from './toasts.svelte';
 import type { PaperSummary } from './types';
 
@@ -36,6 +36,19 @@ describe('paper delete undo', () => {
     const t = toasts.items.find((x) => x.action);
     expect(t?.message).toMatch(/deleted/i);
     expect(t?.action?.label).toBe('Undo');
+  });
+
+  it('removePapers deletes each id and shows ONE combined Undo toast', async () => {
+    library.papers = [paper('p1'), paper('p2')];
+    await removePapers(['p1', 'p2']);
+    expect((api.deletePaper as Mock).mock.calls.map(([id]) => id)).toEqual(['p1', 'p2']);
+    const undoToasts = toasts.items.filter((x) => x.action);
+    expect(undoToasts).toHaveLength(1);
+    expect(undoToasts[0].message).toMatch(/2 papers deleted/i);
+    undoToasts[0].action!.run();
+    await vi.waitFor(() => {
+      expect((api.restorePaper as Mock).mock.calls.map(([id]) => id)).toEqual(['p1', 'p2']);
+    });
   });
 
   it('running Undo restores the paper and reloads the list', async () => {

@@ -613,28 +613,39 @@ export async function loadDetail(id: string): Promise<PaperDetail> {
   return d;
 }
 
-/// Soft-delete a paper on the server, then drop it from the UI: close its tab,
-/// remove it from the list, and refresh the counts. The success toast carries
-/// an Undo action (deletes are soft — POST /restore un-trashes) with a longer
-/// timeout so there's time to reach for it.
-export async function removePaper(id: string): Promise<void> {
+/// Soft-delete one paper on the server and drop it from the UI: close its
+/// tab, remove it from the list, forget its cached detail.
+async function dropPaper(id: string): Promise<void> {
   await deletePaper(id);
   closeTab(id);
   library.papers = library.papers.filter((p) => p.id !== id);
   detailCache.delete(id);
   invalidateLibraryTitleIndex();
   if (selection.id === id) selection.id = null;
-  await loadStats();
-  toast('success', 'Paper deleted', 8000, { label: 'Undo', run: () => void undoDelete(id) });
 }
 
-async function undoDelete(id: string): Promise<void> {
+/// Delete a paper with an Undo toast (deletes are soft — POST /restore
+/// un-trashes) on a longer timeout so there's time to reach for it.
+export async function removePaper(id: string): Promise<void> {
+  await removePapers([id]);
+}
+
+/// Bulk delete: every id is dropped, then ONE combined toast carries the
+/// Undo for the whole batch — per-paper toasts would stack unusably.
+export async function removePapers(ids: string[]): Promise<void> {
+  for (const id of ids) await dropPaper(id);
+  await loadStats();
+  const message = ids.length === 1 ? 'Paper deleted' : `${ids.length} papers deleted`;
+  toast('success', message, 8000, { label: 'Undo', run: () => void undoDelete(ids) });
+}
+
+async function undoDelete(ids: string[]): Promise<void> {
   try {
-    await restorePaper(id);
+    for (const id of ids) await restorePaper(id);
     invalidateLibraryTitleIndex();
     await loadPapers();
     await loadStats();
-    toast('success', 'Paper restored');
+    toast('success', ids.length === 1 ? 'Paper restored' : `${ids.length} papers restored`);
   } catch (e) {
     toast('error', `Couldn't restore: ${(e as Error).message}`);
   }

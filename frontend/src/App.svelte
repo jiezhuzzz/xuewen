@@ -6,6 +6,7 @@
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
   import LibraryPane from './components/LibraryPane.svelte';
+  import LibraryTable from './components/LibraryTable.svelte';
   import PaperContextMenu from './components/PaperContextMenu.svelte';
   import ReaderDock from './components/ReaderDock.svelte';
   import ShortcutHelp from './components/ShortcutHelp.svelte';
@@ -24,6 +25,7 @@
     initDock,
     initTabs,
     initTheme,
+    library,
     loadPapers,
     loadProjects,
     loadSearchStatus,
@@ -130,7 +132,13 @@
           {/if}
         </div>
         {#if viewer.activeId === null}
-          <Welcome />
+          <!-- Papers → the real library table; empty (or all filtered away) →
+               the Welcome hero, which explains which of the two it is. -->
+          {#if library.papers.length > 0}
+            <LibraryTable />
+          {:else}
+            <Welcome />
+          {/if}
         {/if}
       </div>
     </main>
