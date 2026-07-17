@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ReaderDock from './ReaderDock.svelte';
 import { chat } from '../lib/chat.svelte';
+import { handleKeydown } from '../lib/shortcuts';
 import { appSettings, dock, ui, viewer } from '../lib/state.svelte';
 
 const detail = {
@@ -70,6 +71,23 @@ describe('ReaderDock', () => {
     await userEvent.keyboard('{Escape}');
     expect(dock.open).toBe(false);
     expect(ui.zen).toBe(true);
+  });
+
+  it('Escape inside the dock never reaches the global shortcut handler', async () => {
+    ui.zen = true;
+    dock.tab = 'ask';
+    // Mount the real app-level keydown handler: without the dock's
+    // stopPropagation it would see the dock already closed and exit zen.
+    window.addEventListener('keydown', handleKeydown);
+    try {
+      render(ReaderDock, { props: { id: 'p1' } });
+      await userEvent.click(screen.getByPlaceholderText('Ask about this paper…'));
+      await userEvent.keyboard('{Escape}');
+      expect(dock.open).toBe(false);
+      expect(ui.zen).toBe(true);
+    } finally {
+      window.removeEventListener('keydown', handleKeydown);
+    }
   });
 
   it('the zen button toggles zen', async () => {
