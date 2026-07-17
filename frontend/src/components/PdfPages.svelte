@@ -148,8 +148,9 @@
   // which the user must click (see TranslateBubble.svelte). onEndSelection's
   // event carries no text — getSelectedText() is fetched separately per the
   // plugin's PdfTask API (same .toPromise() pattern as loadCitations.ts).
-  // Anchored at the last pointer-up (see onpointerup below), not page-space
-  // math, per the brief's simpler/more robust approach. useSelectionCapability()
+  // Anchored at the window-level capture-phase pointerup (svelte:window handler
+  // above), not page-space math — the selection plugin can stop bubbling, so
+  // a div-level handler would leave lastPointer stale. useSelectionCapability()
   // is a registry-wide SINGLETON, not per-document — every open tab keeps its
   // own (hidden) PdfPages mounted and running this effect, so every tab's
   // listener fires on ANY tab's selection. Guard on documentId (both the
@@ -219,15 +220,15 @@
   </div>
 {/snippet}
 
-<svelte:window onpointermove={(e) => pill.onWindowMove(e)} />
+<svelte:window
+  onpointermove={(e) => pill.onWindowMove(e)}
+  onpointerupcapture={(e) => (lastPointer = { x: e.clientX, y: e.clientY })}
+/>
 
 <DocumentContent {documentId}>
   {#snippet children(doc)}
     {#if doc.isLoaded}
-      <!-- svelte-ignore a11y_no_static_element_interactions -- pointerup here only
-           records the last click position for anchoring the translate bubble;
-           it doesn't add interactive semantics to this layout div. -->
-      <div class="flex h-full" onpointerup={(e) => (lastPointer = { x: e.clientX, y: e.clientY })}>
+      <div class="flex h-full">
         {#if reader.panel || panelW.current > 1}
           <!-- Kept mounted while the spring settles so closing slides the
                panel away instead of blanking it; inert once logically closed.
