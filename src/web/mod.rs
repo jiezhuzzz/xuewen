@@ -233,6 +233,12 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{id}/citations",
             axum::routing::post(api::parse_citations),
         )
+        .route(
+            "/api/papers/{id}/code",
+            get(api::get_paper_code)
+                .put(api::set_paper_code)
+                .delete(api::delete_paper_code),
+        )
         .route("/api/translate", axum::routing::post(api::translate))
         .fallback(assets::static_handler)
         .with_state(state)
