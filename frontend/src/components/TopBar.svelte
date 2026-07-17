@@ -13,8 +13,11 @@
   } from '../lib/state.svelte';
   import SealMark from './SealMark.svelte';
 
-  const themeLabel = $derived(
-    theme.mode === 'light' ? 'Light' : theme.mode === 'dark' ? 'Dark' : 'System',
+  const THEME_ORDER = ['light', 'dark', 'system'] as const;
+  const THEME_NAMES = { light: 'Light', dark: 'Dark', system: 'System' } as const;
+  const themeLabel = $derived(THEME_NAMES[theme.mode]);
+  const nextThemeLabel = $derived(
+    THEME_NAMES[THEME_ORDER[(THEME_ORDER.indexOf(theme.mode) + 1) % THEME_ORDER.length]],
   );
 
   // While searching, library.papers holds relevance-ranked search results
@@ -76,8 +79,8 @@
     <button
       type="button"
       onclick={toggleTheme}
-      aria-label={`Theme: ${themeLabel} (click to change)`}
-      title={`Theme: ${themeLabel}`}
+      aria-label={`Theme: ${themeLabel} — click for ${nextThemeLabel}`}
+      title={`Theme: ${themeLabel} — click for ${nextThemeLabel}`}
       class="rounded-lg p-2 text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
     >
       {#if theme.mode === 'light'}<Sun size={18} />{:else if theme.mode === 'dark'}<Moon size={18} />{:else}<Monitor size={18} />{/if}

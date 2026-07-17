@@ -47,3 +47,13 @@ describe('TopBar counts', () => {
     expect(screen.queryByText('9 papers')).not.toBeInTheDocument();
   });
 });
+
+describe('TopBar theme toggle', () => {
+  it('theme button names current and next mode', async () => {
+    const { theme } = await import('../lib/state.svelte');
+    theme.mode = 'light';
+    render(TopBar);
+    expect(screen.getByRole('button', { name: /theme: light/i }).title)
+      .toMatch(/click for dark/i);
+  });
+});
