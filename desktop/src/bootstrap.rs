@@ -32,15 +32,14 @@ impl AppDirs {
     }
 }
 
-/// TOML basic-string quoting for a path (escapes `\` and `"`).
+/// TOML basic-string quoting (escapes `\` and `"`).
+fn toml_quote_str(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// TOML basic-string quoting for a path.
 fn toml_quote(p: &Path) -> String {
-    format!(
-        "\"{}\"",
-        p.display()
-            .to_string()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-    )
+    toml_quote_str(&p.display().to_string())
 }
 
 /// Config for a fresh install: every path absolute under `data`, because a
@@ -54,13 +53,13 @@ pub fn default_config_toml(data: &Path) -> String {
          \n\
          inbox_dir    = {inbox}\n\
          library_root = {library}\n\
-         database_url = \"sqlite:{db}\"\n\
+         database_url = {db}\n\
          \n\
          [search]\n\
          index_dir = {index}\n",
         inbox = toml_quote(&data.join("inbox")),
         library = toml_quote(&data.join("library")),
-        db = data.join("xuewen.db").display(),
+        db = toml_quote_str(&format!("sqlite:{}", data.join("xuewen.db").display())),
         index = toml_quote(&data.join("search-index")),
     )
 }
