@@ -42,4 +42,4 @@ wiremock = "0.6"
 axum-test = "17"
 
 [workspace]
-members = ["."]
+members = [".", "desktop"]
