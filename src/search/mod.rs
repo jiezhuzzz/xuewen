@@ -23,6 +23,9 @@ const SEMANTIC_SNIPPET_CHARS: usize = 200;
 
 pub struct SearchRequest {
     pub q: String,
+    /// `author:` qualifier terms — each compiled to a Tantivy
+    /// `authors:"…"`-scoped phrase, ANDed with the free text in `q`.
+    pub author_terms: Vec<String>,
     pub fields: fts::FieldSel,
     pub keyword: bool,
     pub semantic: bool,
@@ -163,8 +166,16 @@ impl SearchService {
             };
         }
 
+        if q.is_empty() && !req.author_terms.is_empty() && semantic.available {
+            semantic = SemanticState {
+                available: false,
+                reason: Some("semantic search does not apply to an authors-only query".into()),
+            };
+        }
+
         let keyword_hits = if req.keyword {
-            self.fts.search(q, &req.fields, KEYWORD_LIMIT)?
+            let keyword_q = query::compose_keyword_query(&req.author_terms, q);
+            self.fts.search(&keyword_q, &req.fields, KEYWORD_LIMIT)?
         } else {
             Vec::new()
         };
@@ -436,6 +447,7 @@ mod tests {
         let out = svc
             .search(&SearchRequest {
                 q: "fuzzing".into(),
+                author_terms: Vec::new(),
                 fields: fts::FieldSel::all(),
                 keyword: true,
                 semantic: true,
@@ -476,6 +488,7 @@ mod tests {
         let out = svc
             .search(&SearchRequest {
                 q: "fuzzing".into(),
+                author_terms: Vec::new(),
                 fields: fts::FieldSel::all(),
                 keyword: true,
                 semantic: false,
@@ -548,6 +561,7 @@ mod tests {
         let out = svc
             .search(&SearchRequest {
                 q: "fuzzing".into(),
+                author_terms: Vec::new(),
                 fields: fts::FieldSel::all(),
                 keyword: true,
                 semantic: true,
@@ -612,6 +626,7 @@ mod tests {
         let out = svc
             .search(&SearchRequest {
                 q: "different words entirely".into(),
+                author_terms: Vec::new(),
                 fields: fts::FieldSel::all(),
                 keyword: true,
                 semantic: true,
@@ -662,6 +677,7 @@ mod tests {
         let out = svc
             .search(&SearchRequest {
                 q: "fuzzing".into(),
+                author_terms: Vec::new(),
                 fields: fts::FieldSel::all(),
                 keyword: true,
                 semantic: true,
@@ -685,6 +701,7 @@ mod tests {
         let out = svc
             .search(&SearchRequest {
                 q: "lovelace".into(),
+                author_terms: Vec::new(),
                 fields: fts::FieldSel {
                     title: false,
                     authors: true,
@@ -763,6 +780,7 @@ mod tests {
         let out = svc
             .search(&SearchRequest {
                 q: "ada".into(),
+                author_terms: Vec::new(),
                 fields: fts::FieldSel {
                     title: false,
                     authors: true,
@@ -863,6 +881,7 @@ mod tests {
         let out = svc
             .search(&SearchRequest {
                 q: "different words entirely".into(),
+                author_terms: Vec::new(),
                 fields: fts::FieldSel::all(),
                 keyword: true,
                 semantic: true,
@@ -887,6 +906,93 @@ mod tests {
             text_before_ellipsis.chars().count(),
             200,
             "text before ellipsis should be exactly 200 chars"
+        );
+    }
+
+    #[tokio::test]
+    async fn author_terms_scope_only_that_term_to_authors() {
+        let pool = pool().await;
+        for (id, title) in [("a", "Fuzzing Firmware"), ("b", "Sorting Networks")] {
+            crate::db::insert_paper(&pool, &paper(id, title))
+                .await
+                .unwrap();
+        }
+        let svc = keyword_only_service(pool).await;
+        // "a" by Lovelace mentions smith in the body; "b" is BY smith.
+        svc.fts
+            .upsert(&fts::PaperDoc {
+                id: "a".into(),
+                title: "Fuzzing Firmware".into(),
+                authors: "Ada Lovelace".into(),
+                venue: String::new(),
+                abstract_text: String::new(),
+                body: "thanks to smith for fuzzing help".into(),
+            })
+            .unwrap();
+        svc.fts
+            .upsert(&fts::PaperDoc {
+                id: "b".into(),
+                title: "Sorting Networks".into(),
+                authors: "Jane Smith".into(),
+                venue: String::new(),
+                abstract_text: String::new(),
+                body: "batcher merge".into(),
+            })
+            .unwrap();
+
+        let out = svc
+            .search(&SearchRequest {
+                q: String::new(),
+                author_terms: vec!["smith".into()],
+                fields: fts::FieldSel::all(),
+                keyword: true,
+                semantic: false,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            out.results.len(),
+            1,
+            "smith-in-body must not match author:smith"
+        );
+        assert_eq!(out.results[0].0.id, "b");
+    }
+
+    #[tokio::test]
+    async fn author_terms_without_text_degrade_semantic_with_reason() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("a", "T")).await.unwrap();
+        let server = MockServer::start().await;
+        // No embeddings mock: reaching the embedder would 404 loudly.
+        let dir = tempfile::tempdir().unwrap();
+        let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
+        let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
+        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+
+        let out = svc
+            .search(&SearchRequest {
+                q: String::new(),
+                author_terms: vec!["smith".into()],
+                fields: fts::FieldSel::all(),
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
+        assert!(!out.semantic.available);
+        assert_eq!(
+            out.semantic.reason.as_deref(),
+            Some("semantic search does not apply to an authors-only query")
         );
     }
 

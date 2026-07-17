@@ -892,6 +892,7 @@ async fn main() -> Result<()> {
             let svc = SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await?;
             let req = xuewen::search::SearchRequest {
                 q: query,
+                author_terms: Vec::new(),
                 fields: FieldSel::parse(fields.as_deref()),
                 keyword: !semantic_only,
                 semantic: !keyword_only,

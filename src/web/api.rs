@@ -994,6 +994,7 @@ pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchPa
     let (keyword, semantic) = parse_engines(p.engines.as_deref());
     let req = crate::search::SearchRequest {
         q: p.q.unwrap_or_default(),
+        author_terms: Vec::new(),
         fields: FieldSel::parse(p.fields.as_deref()),
         keyword,
         semantic,
