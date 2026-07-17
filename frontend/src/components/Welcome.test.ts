@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 import Welcome from './Welcome.svelte';
-import { library } from '../lib/state.svelte';
+import { filters, library } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
 
 const paper: PaperSummary = {
@@ -12,12 +12,27 @@ const paper: PaperSummary = {
 
 beforeEach(() => {
   library.papers = [];
+  Object.assign(filters, {
+    q: '',
+    status: 'all',
+    sort: 'year_desc',
+    project: 'all',
+    tag: undefined,
+    starred: undefined,
+  });
 });
 
 describe('Welcome', () => {
   it('prompts to import when the library is empty', () => {
     render(Welcome);
     expect(screen.getByText(/library is empty/i)).toBeInTheDocument();
+  });
+
+  it('does not claim the library is empty when a filter is the cause', () => {
+    filters.tag = 'os/rtos';
+    render(Welcome);
+    expect(screen.queryByText(/library is empty/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/click a paper to read/i)).toBeInTheDocument();
   });
 
   it('tells you to click a paper to read once the library has items', () => {

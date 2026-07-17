@@ -353,6 +353,29 @@ export async function setStarFilter(on: boolean): Promise<void> {
   await loadPapers();
 }
 
+/// Whether any list filter deviates from the default view — i.e. whether an
+/// empty list means "nothing matches" rather than "the library is empty".
+export function anyFilterActive(): boolean {
+  return (
+    filters.q.trim() !== '' ||
+    filters.status !== 'all' ||
+    filters.project !== 'all' ||
+    filters.tag !== undefined ||
+    filters.starred !== undefined
+  );
+}
+
+/// Reset every list filter (search, status, project/tag/star) to the default
+/// view and reload — the escape hatch offered by the list's empty state.
+export async function clearFilters(): Promise<void> {
+  filters.q = '';
+  filters.status = 'all';
+  filters.project = 'all';
+  filters.tag = undefined;
+  filters.starred = undefined;
+  await loadPapers();
+}
+
 export async function createNewProject(name: string): Promise<Project> {
   const p = await createProject(name);
   await loadProjects();

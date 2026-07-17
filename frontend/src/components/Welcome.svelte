@@ -1,13 +1,13 @@
 <script lang="ts">
   import { Upload } from 'lucide-svelte';
-  import { library, openImport } from '../lib/state.svelte';
+  import { anyFilterActive, library, openImport } from '../lib/state.svelte';
   import SealMark from './SealMark.svelte';
 </script>
 
 <div class="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
   <SealMark size={48} />
   <h2 class="font-serif text-2xl font-semibold text-ink dark:text-stone-100">Xuewen</h2>
-  {#if library.papers.length === 0}
+  {#if library.papers.length === 0 && !anyFilterActive()}
     <p class="max-w-sm text-sm text-stone-500 dark:text-stone-400">
       Your library is empty. Import a PDF, a DOI, or an arXiv link to begin.
     </p>
