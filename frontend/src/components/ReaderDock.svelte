@@ -44,7 +44,32 @@
   onkeydown={onKeydown}
   class="absolute inset-y-3 right-3 z-40 flex w-96 max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-paper shadow-2xl dark:border-stone-800 dark:bg-soot"
 >
+  <!-- Close/zen sit on the LEFT, tabs on the RIGHT: the quick-action rail
+       (禪詳問, top-right of the reader) hides when the dock opens, and a
+       follow-up click at 詳/問's old position must land on the matching
+       Details/Ask tab — not on close, which used to sit there and instantly
+       dismissed the dock (the classic misclick this ordering fixes). -->
   <div class="flex shrink-0 items-center justify-between gap-2 border-b border-stone-200 px-2.5 py-2 dark:border-stone-800">
+    <div class="flex items-center gap-0.5">
+      <button
+        type="button"
+        class={iconBtn}
+        aria-label="Close panel"
+        title="Close — Esc"
+        onclick={closeDock}
+      >
+        <X size={15} />
+      </button>
+      <button
+        type="button"
+        class={iconBtn}
+        aria-label="Zen mode"
+        title="Zen — z"
+        onclick={toggleZen}
+      >
+        {#if ui.zen}<Minimize2 size={15} />{:else}<Maximize2 size={15} />{/if}
+      </button>
+    </div>
     <div role="tablist" aria-label="Panel tabs" class="flex items-center gap-1">
       <button
         type="button"
@@ -66,26 +91,6 @@
           onclick={() => openDock('ask')}
         >Ask 問</button>
       {/if}
-    </div>
-    <div class="flex items-center gap-0.5">
-      <button
-        type="button"
-        class={iconBtn}
-        aria-label="Zen mode"
-        title="Zen — z"
-        onclick={toggleZen}
-      >
-        {#if ui.zen}<Minimize2 size={15} />{:else}<Maximize2 size={15} />{/if}
-      </button>
-      <button
-        type="button"
-        class={iconBtn}
-        aria-label="Close panel"
-        title="Close — Esc"
-        onclick={closeDock}
-      >
-        <X size={15} />
-      </button>
     </div>
   </div>
 
