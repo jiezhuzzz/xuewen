@@ -1,0 +1,50 @@
+name: Desktop release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  dmg:
+    runs-on: macos-14 # arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build frontend (embedded into the binary by rust-embed)
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+
+      - name: Install agent-runner production deps (bundled as resources)
+        run: npm --prefix agent-runner ci --omit=dev
+
+      - name: Prepare sidecars (node + pdftotext with relocated dylibs)
+        run: |
+          brew install poppler dylibbundler
+          bash desktop/scripts/prepare-sidecars.sh
+
+      - name: Build .app and .dmg
+        run: npx --yes @tauri-apps/cli@^2 build
+        working-directory: desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xuewen-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/dmg/*.dmg
