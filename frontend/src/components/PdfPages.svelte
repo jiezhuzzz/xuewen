@@ -208,6 +208,7 @@
         activeHighlightColor="rgba(180, 83, 9, 0.55)"
       />
       <CitationLayer
+        {documentId}
         pageIndex={page.pageIndex}
         pageWidthPt={pageSizes[page.pageIndex]?.width ?? page.width}
         pageHeightPt={pageSizes[page.pageIndex]?.height ?? page.height}
