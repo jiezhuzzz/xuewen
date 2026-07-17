@@ -633,6 +633,12 @@ async fn main() -> Result<()> {
                         Err(e) => tracing::warn!("could not remove {}: {e}", path.display()),
                     }
                     xuewen::chat::store::clear(&pool, &p.id).await?;
+                    xuewen::db::delete_paper_code(&pool, &p.id).await?;
+                    let _ = tokio::fs::remove_dir_all(xuewen::agent::workspace_dir(
+                        &cfg.library_root,
+                        &p.id,
+                    ))
+                    .await;
                     db::delete_row(&pool, &p.id).await?;
                 }
                 println!("purged {} paper(s)", targets.len());

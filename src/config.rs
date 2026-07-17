@@ -342,7 +342,8 @@ impl Config {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         cfg.inbox_dir = expand_tilde(cfg.inbox_dir, home.clone());
         cfg.library_root = expand_tilde(cfg.library_root, home.clone());
-        cfg.search.index_dir = expand_tilde(cfg.search.index_dir, home);
+        cfg.search.index_dir = expand_tilde(cfg.search.index_dir, home.clone());
+        cfg.ai.agent.runner = cfg.ai.agent.runner.map(|p| expand_tilde(p, home));
         Ok(cfg)
     }
 }

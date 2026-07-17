@@ -107,3 +107,77 @@ async fn code_endpoints_gate_validate_and_report() {
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
 }
+
+/// Regression for the whole-branch-review purge bug: `paper_code` had no
+/// `ON DELETE CASCADE` on its `paper_id` FK, so purging a paper with an
+/// attached repo hit `FOREIGN KEY constraint failed` after the PDF was
+/// already removed. This exercises the same sequence `xuewen purge` runs at
+/// the db/fs level (chat clear, explicit `delete_paper_code`, agent
+/// workspace removal, then `delete_row`) and asserts everything is gone
+/// afterward — both belt-and-braces (explicit delete) and the migration's
+/// cascade are covered, since the explicit `delete_paper_code` call would
+/// mask a cascade regression on its own.
+#[tokio::test]
+async fn purge_clears_paper_code_and_agent_workspace() {
+    let (pool, root) = common::pool_and_root_with_paper("p1").await;
+
+    xuewen::db::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+        .await
+        .unwrap();
+    assert!(xuewen::db::get_paper_code(&pool, "p1")
+        .await
+        .unwrap()
+        .is_some());
+
+    let ws = xuewen::agent::workspace_dir(&root, "p1");
+    let repo_dir = ws.join("repo");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    std::fs::write(repo_dir.join("dummy.txt"), b"hello").unwrap();
+    assert!(ws.exists());
+
+    // Mirror `Command::Purge`'s per-paper cleanup sequence in src/main.rs.
+    xuewen::chat::store::clear(&pool, "p1").await.unwrap();
+    xuewen::db::delete_paper_code(&pool, "p1").await.unwrap();
+    tokio::fs::remove_dir_all(&ws).await.unwrap();
+    xuewen::db::delete_row(&pool, "p1").await.unwrap();
+
+    assert!(xuewen::db::get_paper_code(&pool, "p1")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!ws.exists());
+    let row: Option<(String,)> = sqlx::query_as("SELECT id FROM papers WHERE id = ?")
+        .bind("p1")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert!(row.is_none());
+}
+
+/// Isolates the migration's `ON DELETE CASCADE` itself: deletes the papers
+/// row directly (no explicit `delete_paper_code` first) and asserts the FK
+/// cascade alone removes the attached `paper_code` row, rather than failing
+/// with `FOREIGN KEY constraint failed`.
+#[tokio::test]
+async fn deleting_paper_cascades_to_paper_code() {
+    let (pool, _root) = common::pool_and_root_with_paper("p1").await;
+
+    xuewen::db::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+        .await
+        .unwrap();
+    assert!(xuewen::db::get_paper_code(&pool, "p1")
+        .await
+        .unwrap()
+        .is_some());
+
+    sqlx::query("DELETE FROM papers WHERE id = ?")
+        .bind("p1")
+        .execute(&pool)
+        .await
+        .expect("delete should succeed under the ON DELETE CASCADE fix");
+
+    assert!(xuewen::db::get_paper_code(&pool, "p1")
+        .await
+        .unwrap()
+        .is_none());
+}

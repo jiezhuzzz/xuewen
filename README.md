@@ -129,6 +129,17 @@ Attaching a repository (Details → Code, `PUT /api/papers/{id}/code`, or
 never pushed, modified, or redistributed; it exists only on the machine
 running `xuewen serve`, for as long as it stays attached.
 
+**Sandbox boundary, honestly.** "Read-only" describes what the agent can't do
+— it can't write files, run shell commands (Claude Code backend), or reach
+the network — not what it can read. The Claude Code backend's tool
+pre-approval (`allowedTools: ['Read', 'Grep', 'Glob']`) is not scoped to the
+paper's workspace, and Codex's read-only sandbox likewise blocks writes and
+network access but not reads; either backend can read any file on disk that
+the `xuewen serve` process's user can read, not just
+`<library_root>/agent/<paper_id>/`. Don't attach repositories you don't
+trust, and treat Agent Ask like the rest of the web UI: single-user and
+loopback-only unless you understand the exposure of `--allow-remote`.
+
 ## CLI
 
 The same binary drives everything from the terminal:
@@ -164,7 +175,10 @@ Neither the NixOS module nor the OCI image currently bundles Node.js or the
 `agent-runner/` directory into the deployed closure — both are pulled in for
 the frontend *build* only. To use Agent Ask in either deployment, make sure
 the runtime environment also has Node ≥ 20 on `PATH` and `agent-runner/`
-(with `npm --prefix agent-runner install` already run) alongside the binary.
+(with `npm --prefix agent-runner install` already run) relative to the
+server's working directory — see `[ai.agent].runner` in
+`xuewen.example.toml` to point at it explicitly if it isn't alongside the
+binary.
 
 ## Development
 

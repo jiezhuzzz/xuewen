@@ -55,6 +55,7 @@ database_url  = "sqlite:./library.db"
 # [ai.agent]
 # max_repo_mb = 500      # attached-repo clone size guard
 # timeout_secs = 300     # per-turn wall clock
+# runner = "agent-runner/src/runner.mjs"  # default; resolved (with ~ expansion) relative to the server's working directory, not the binary's location
 #
 # [ai.agent.claude_code]
 # model = "claude-sonnet-5"     # optional

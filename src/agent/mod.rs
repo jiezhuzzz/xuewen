@@ -226,9 +226,12 @@ impl AgentService {
                 let _ = se.read_to_string(&mut err).await;
             }
             let code = child.wait().await.ok().and_then(|s| s.code());
+            let code_str = code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "none".into());
             let tail: String = err.chars().take(400).collect();
             yield AgentEvent::Error {
-                message: format!("the agent runner exited unexpectedly (code {code:?}): {tail}"),
+                message: format!("the agent runner exited unexpectedly (code {code_str}): {tail}"),
             };
         }
     }
