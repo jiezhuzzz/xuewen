@@ -23,7 +23,21 @@ the assistant that answers questions about a paper.
 - **Manual identify** — when auto-resolution is unsure, match a paper to a DOI,
   arXiv id, or a title search from the UI or CLI.
 - **Search** — BM25 keyword search (always on) plus optional semantic search
-  over title/abstract/body chunks, fused into one ranked list.
+  over title/abstract/body chunks, fused into one ranked list. Queries accept
+  GitHub-style qualifiers in the web UI and the CLI alike:
+
+  | Qualifier | Meaning |
+  |---|---|
+  | `tag:nlp`, `tag:"deep learning"` | filter by tag (nested prefix: also matches `nlp/eval`) |
+  | `project:thesis`, `project:"my thesis"` | filter by project name |
+  | `is:starred` | starred papers only |
+  | `status:resolved` / `status:needs-review` | resolution status |
+  | `in:title` `in:authors` `in:abstract` `in:body` | restrict search fields (union of `in:` tokens) |
+  | `author:smith`, `author:"ada lovelace"` | author-scoped search term (repeatable, ANDed) |
+  | `"exact phrase"` | phrase query |
+
+  Anything else — including malformed qualifiers — is plain free text; parsing
+  never errors.
 - **Agent Ask** — optional tool-using agent (Claude Code / Codex SDKs) in the
   reader's Ask tab, grounded in the paper's extracted text and, when
   attached, its code repository, inside a read-only sandbox.
@@ -152,7 +166,7 @@ The same binary drives everything from the terminal:
 | `watch` | Auto-ingest new PDFs dropped in the inbox |
 | `identify <id>` | Manually match a paper (`--doi` / `--arxiv` / `--title`) |
 | `refresh` | Re-resolve failed records and re-file to cite-key paths |
-| `search <query>` | Search from the terminal (`--keyword-only` / `--semantic-only`) |
+| `search <query>` | Search from the terminal (`--keyword-only` / `--semantic-only`); accepts the same `tag:`/`project:`/`is:starred`/`status:`/`in:`/`author:` qualifiers as the web UI |
 | `export` | Emit BibTeX / BibLaTeX (single, project, or whole library) |
 | `project` | Manage projects (named groups of papers) |
 | `tag` | Manage tags on papers (add/remove/rename/list) |
