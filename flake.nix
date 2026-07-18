@@ -19,7 +19,7 @@
           pname = "xuewen-frontend";
           version = "0.1.0";
           src = ./frontend;
-          npmDepsHash = "sha256-NxSVwo7RN0/GHNzqgnwrf0+pw3jUvTlOC7cJG0HqW2Y=";
+          npmDepsHash = "sha256-enRlx7yii4sBjjjB6APvqREmu3fSQrk05UlbbXnf2e0=";
           # `npm run build` is the default buildPhase; run vitest before install.
           doCheck = true;
           checkPhase = ''
@@ -57,8 +57,10 @@
             cp -r ${frontend}/. frontend/dist/
           '';
           # The full test suite runs in the sandbox: wiremock binds loopback
-          # (available in Nix builds) and pdftotext comes from poppler.
-          nativeCheckInputs = [ pkgs.poppler-utils ];
+          # (available in Nix builds), pdftotext comes from poppler, the
+          # agent::code clone tests shell out to git, and the agent_test
+          # suite runs its stub runner with node.
+          nativeCheckInputs = [ pkgs.poppler-utils pkgs.git pkgs.nodejs ];
         };
         default = xuewen;
       });
