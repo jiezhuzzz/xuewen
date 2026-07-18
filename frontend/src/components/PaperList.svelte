@@ -2,22 +2,12 @@
   import { flip } from 'svelte/animate';
   import { fade } from 'svelte/transition';
   import { DUR, dur } from '../lib/motion';
-  import { clearFilters, filters, library, projects } from '../lib/state.svelte';
+  import { activeFilterLabels, clearFilters, library } from '../lib/state.svelte';
   import PaperRow from './PaperRow.svelte';
   import Spinner from './Spinner.svelte';
 
   // What the empty state should blame: every non-default filter, by name.
-  const activeFilters = $derived.by(() => {
-    const labels: string[] = [];
-    if (filters.q.trim()) labels.push(`“${filters.q.trim()}”`);
-    if (filters.project !== 'all')
-      labels.push(projects.items.find((p) => p.id === filters.project)?.name ?? 'the selected project');
-    if (filters.tag) labels.push(filters.tag);
-    if (filters.starred !== undefined) labels.push('starred');
-    if (filters.status !== 'all')
-      labels.push(filters.status === 'needs_review' ? 'needs review' : filters.status);
-    return labels;
-  });
+  const activeFilters = $derived(activeFilterLabels());
 </script>
 
 <div class="min-h-0 flex-1 divide-y divide-stone-200/60 overflow-y-auto dark:divide-stone-800/60">

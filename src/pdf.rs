@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use regex::Regex;
 use std::path::Path;
 use std::process::Command;
 
@@ -28,6 +29,30 @@ pub fn extract_text(path: &Path, last_page: u32) -> Result<String> {
 /// form feeds (`\f`), using the `pdftotext` binary.
 pub fn extract_text_all(path: &Path) -> Result<String> {
     run_pdftotext(path, &[])
+}
+
+/// Repair pdftotext's small-caps artifact for a paper's own name: a word
+/// rendered in small caps (e.g. "RTCᴏɴ") extracts as an uppercase pair
+/// ("RTC ON"), which then pollutes anything derived from the text (LLM
+/// summaries parrot "RTC ON"). For every distinctive token of the resolved
+/// title (≥4 chars, ≥2 uppercase), rejoin two-piece uppercase splits of that
+/// token — both pieces ≥2 chars so ordinary words are never glued together.
+pub fn repair_smallcaps(text: &str, title: &str) -> String {
+    let mut out = text.to_string();
+    for token in title.split(|c: char| !c.is_ascii_alphanumeric()) {
+        if token.len() < 4 || token.chars().filter(|c| c.is_ascii_uppercase()).count() < 2 {
+            continue;
+        }
+        let upper = token.to_ascii_uppercase();
+        for i in 2..=upper.len() - 2 {
+            let split = format!("{} {}", &upper[..i], &upper[i..]);
+            // \b on both ends: only whole-word pairs, never inside words.
+            let re = Regex::new(&format!(r"\b{}\b", regex::escape(&split)))
+                .expect("escaped literal is a valid regex");
+            out = re.replace_all(&out, token).into_owned();
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -84,5 +109,41 @@ mod tests {
         assert!(text.contains("First Page Words"));
         assert!(text.contains("Second Page Words"));
         assert!(text.contains('\u{0c}'), "pdftotext page separator expected");
+    }
+
+    #[test]
+    fn repairs_smallcaps_splits_of_title_tokens() {
+        let title = "RTCON: Context-Adaptive Function-Level Fuzzing for RTOS Kernels";
+        let text = "we present RTC ON , a fuzzer. RTC ON employs classification.";
+        assert_eq!(
+            super::repair_smallcaps(text, title),
+            "we present RTCON , a fuzzer. RTCON employs classification."
+        );
+    }
+
+    #[test]
+    fn repair_smallcaps_leaves_unrelated_text_alone() {
+        let title = "RTCON: Context-Adaptive Fuzzing";
+        let text = "THE CAT sat on RTOS mats"; // no split of any title token
+        assert_eq!(super::repair_smallcaps(text, title), text);
+    }
+
+    #[test]
+    fn repair_smallcaps_requires_two_chars_per_piece() {
+        // "B ERT"/"BER T" (1-char piece) must NOT be rejoined; "BE RT" is.
+        let title = "BERT: Pre-training of Deep Bidirectional Transformers";
+        assert_eq!(
+            super::repair_smallcaps("uses BE RT daily", title),
+            "uses BERT daily"
+        );
+        assert_eq!(
+            super::repair_smallcaps("plan B ERT now", title),
+            "plan B ERT now"
+        );
+    }
+
+    #[test]
+    fn repair_smallcaps_with_empty_title_is_identity() {
+        assert_eq!(super::repair_smallcaps("any text", ""), "any text");
     }
 }

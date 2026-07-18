@@ -1,8 +1,14 @@
 import { render, screen } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Welcome from './Welcome.svelte';
-import { filters, library } from '../lib/state.svelte';
+import { filters, library, projects } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
+
+vi.mock('../lib/api', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../lib/api')>();
+  return { ...mod, listPapers: vi.fn(async () => []) };
+});
 
 const paper: PaperSummary = {
   id: 'p1', title: 't', authors: [], venue: null, year: null, doi: null, arxiv_id: null,
@@ -11,7 +17,9 @@ const paper: PaperSummary = {
 };
 
 beforeEach(() => {
+  vi.clearAllMocks();
   library.papers = [];
+  projects.items = [];
   Object.assign(filters, {
     q: '',
     status: 'all',
@@ -32,12 +40,30 @@ describe('Welcome', () => {
     filters.tag = 'os/rtos';
     render(Welcome);
     expect(screen.queryByText(/library is empty/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/click a paper to read/i)).toBeInTheDocument();
+    expect(screen.getByText(/No papers match/)).toBeInTheDocument();
   });
 
   it('tells you to click a paper to read once the library has items', () => {
     library.papers = [paper];
     render(Welcome);
     expect(screen.getByText(/click a paper to read/i)).toBeInTheDocument();
+  });
+
+  it('explains which filters matched nothing and offers Clear filters', async () => {
+    library.papers = [];
+    filters.q = 'quantum';
+    render(Welcome);
+    expect(screen.getByText(/No papers match/)).toBeInTheDocument();
+    expect(screen.getByText(/“quantum”/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /clear filters/i }));
+    expect(filters.q).toBe('');
+  });
+
+  it('shows an add-papers tip when an empty project is selected', () => {
+    library.papers = [];
+    projects.items = [{ id: 'pr1', name: 'RTOS Fuzzing', paper_count: 0 }];
+    filters.project = 'pr1';
+    render(Welcome);
+    expect(screen.getByText(/This project is empty/)).toBeInTheDocument();
   });
 });

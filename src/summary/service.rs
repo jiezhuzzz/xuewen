@@ -79,13 +79,16 @@ impl SummaryService {
         let Some(paper) = crate::db::get_by_id(&self.pool, id).await? else {
             return Ok(false); // purged since selection ran
         };
+        let title = paper.meta.title.as_deref().unwrap_or_default();
         let pdf_path = self.library_root.join(&paper.rel_path);
         let full_text = match tokio::task::spawn_blocking(move || {
             crate::pdf::extract_text_all(&pdf_path)
         })
         .await
         {
-            Ok(Ok(t)) => Some(t),
+            // Small-caps splits of the paper's own name would otherwise leak
+            // into the generated summary ("RTC ON" for "RTCON").
+            Ok(Ok(t)) => Some(crate::pdf::repair_smallcaps(&t, title)),
             Ok(Err(e)) => {
                 tracing::warn!(
                     "pdf extraction failed for {id}: {e}; summarizing from abstract only"
@@ -99,7 +102,6 @@ impl SummaryService {
                 None
             }
         };
-        let title = paper.meta.title.as_deref().unwrap_or_default();
         let abstract_text = paper.meta.abstract_text.as_deref().unwrap_or_default();
         match generate_summary(&self.summarizer, title, abstract_text, full_text.as_deref()).await {
             Some(summary) => {

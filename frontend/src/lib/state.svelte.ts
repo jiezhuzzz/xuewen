@@ -439,6 +439,21 @@ export function anyFilterActive(): boolean {
   );
 }
 
+/// Human-readable names for every non-default list filter — what an empty
+/// state should blame ("No papers match X · Y"). Shared by the list pane
+/// and the main-area empty state.
+export function activeFilterLabels(): string[] {
+  const labels: string[] = [];
+  if (filters.q.trim()) labels.push(`“${filters.q.trim()}”`);
+  if (filters.project !== 'all')
+    labels.push(projects.items.find((p) => p.id === filters.project)?.name ?? 'the selected project');
+  if (filters.tag) labels.push(filters.tag);
+  if (filters.starred !== undefined) labels.push('starred');
+  if (filters.status !== 'all')
+    labels.push(filters.status === 'needs_review' ? 'needs review' : filters.status);
+  return labels;
+}
+
 /// Reset every list filter (search, status, project/tag/star) to the default
 /// view and reload — the escape hatch offered by the list's empty state.
 export async function clearFilters(): Promise<void> {

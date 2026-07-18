@@ -32,3 +32,28 @@ describe('TopBar review count', () => {
     expect(screen.queryByText(/to review/)).not.toBeInTheDocument();
   });
 });
+
+describe('TopBar counts', () => {
+  it('shows the match count instead of library total while searching', async () => {
+    const { library } = await import('../lib/state.svelte');
+    filters.q = 'fuzzing';
+    library.papers = [
+      { id: 'p1', title: 'A', authors: [], venue: null, year: null, doi: null,
+        arxiv_id: null, dblp_key: null, cite_key: null, url: null, source: null,
+        status: 'resolved', added_at: '2026-01-01', starred: false, tags: [], projects: [] },
+    ];
+    render(TopBar);
+    expect(screen.getByText('1 match')).toBeInTheDocument();
+    expect(screen.queryByText('9 papers')).not.toBeInTheDocument();
+  });
+});
+
+describe('TopBar theme toggle', () => {
+  it('theme button names current and next mode', async () => {
+    const { theme } = await import('../lib/state.svelte');
+    theme.mode = 'light';
+    render(TopBar);
+    expect(screen.getByRole('button', { name: /theme: light/i }).title)
+      .toMatch(/click for dark/i);
+  });
+});

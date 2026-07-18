@@ -36,4 +36,11 @@ describe('PdfToolbar', () => {
       expect(screen.getByRole('button', { name })).toHaveAttribute('title');
     }
   });
+
+  it('page appearance button names current and next state', () => {
+    pdfAppearance.mode = 'dim';
+    render(PdfToolbar, { props: { documentId: 'd1', pill } });
+    const btn = screen.getByRole('button', { name: /page appearance/i });
+    expect(btn.title).toMatch(/dimmed — click for inverted/i);
+  });
 });

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, ChevronLeft, ChevronRight, Contrast, PanelLeft, Search, ZoomIn, ZoomOut } from 'lucide-svelte';
+  import { ChevronDown, ChevronLeft, ChevronRight, Contrast, Eclipse, PanelLeft, Search, SunDim, ZoomIn, ZoomOut } from 'lucide-svelte';
   import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { DUR, dur, EASE } from '../lib/motion';
@@ -50,6 +50,15 @@
   const btn =
     'rounded-lg p-1.5 text-stone-600 hover:bg-parchment hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent dark:text-stone-300 dark:hover:bg-stone-800';
   const activeBtn = 'rounded-lg p-1.5 bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500';
+
+  const APPEARANCE_ORDER = ['normal', 'dim', 'invert'] as const;
+  const APPEARANCE_NAMES = { normal: 'Normal', dim: 'Dimmed', invert: 'Inverted' } as const;
+  const appearanceLabel = $derived(APPEARANCE_NAMES[pdfAppearance.mode]);
+  const nextAppearanceLabel = $derived(
+    APPEARANCE_NAMES[
+      APPEARANCE_ORDER[(APPEARANCE_ORDER.indexOf(pdfAppearance.mode) + 1) % APPEARANCE_ORDER.length]
+    ],
+  );
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
@@ -196,11 +205,11 @@
   <button
     type="button"
     class={`${pdfAppearance.mode !== 'normal' ? activeBtn : btn} !hidden dark:!inline-flex`}
-    aria-label={`Page appearance: ${pdfAppearance.mode}`}
-    title={`Page appearance: ${pdfAppearance.mode} (click to cycle)`}
+    aria-label={`Page appearance: ${appearanceLabel}`}
+    title={`Page appearance: ${appearanceLabel} — click for ${nextAppearanceLabel}`}
     onclick={cyclePdfAppearance}
   >
-    <Contrast size={16} />
+    {#if pdfAppearance.mode === 'dim'}<SunDim size={16} />{:else if pdfAppearance.mode === 'invert'}<Eclipse size={16} />{:else}<Contrast size={16} />{/if}
   </button>
 
   <button
