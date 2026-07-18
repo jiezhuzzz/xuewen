@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time", "sync", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time", "sync", "process", "signal"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
 uuid = { version = "1", features = ["v7", "v5"] }
 sha2 = "0.10"

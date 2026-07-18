@@ -23,6 +23,15 @@
   --color-seal: #9e2b25;
 
   --ease-fluent: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Type scale below/around Tailwind's named sizes, for the dense dock &
+     filter UI. Font-size only — line-height stays inherited or explicit,
+     exactly like the arbitrary text-[Npx] values these replace. */
+  --text-chip: 0.65625rem; /* 10.5px — count badges, status chips */
+  --text-caption: 0.6875rem; /* 11px — uppercase section labels, hints */
+  --text-detail: 0.78125rem; /* 12.5px — metadata lists */
+  --text-reading: 0.84375rem; /* 13.5px — serif reading text (summary, abstract) */
+  --text-lead: 0.9375rem; /* 15px — chat message body */
 }
 
 /* Keep the browser's UA color scheme in sync with the class-based theme
@@ -48,6 +57,19 @@ body,
 
 body {
   font-family: var(--font-sans);
+}
+
+/* Dark-mode PDF page appearance (reader toolbar cycles it): dim eases the
+   glare of the white page; invert flips it dark (0.93 keeps blacks as dark
+   gray, and hue-rotate restores color hues). Scoped to .dark so the
+   preference is inert in light mode, and applied only to the raster
+   render/tiling layers so selection, search, and citation overlays keep
+   their colors and positioning. */
+.dark [data-pdf-appearance='dim'] {
+  filter: brightness(0.85);
+}
+.dark [data-pdf-appearance='invert'] {
+  filter: invert(0.93) hue-rotate(180deg);
 }
 
 /* Theme toggles use the View Transitions API for a soft crossfade; kill it

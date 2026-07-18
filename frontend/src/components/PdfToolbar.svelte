@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { ChevronDown, ChevronLeft, ChevronRight, PanelLeft, Search, ZoomIn, ZoomOut } from 'lucide-svelte';
+  import { ChevronDown, ChevronLeft, ChevronRight, Contrast, Eclipse, PanelLeft, Search, SunDim, ZoomIn, ZoomOut } from 'lucide-svelte';
   import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { DUR, dur, EASE } from '../lib/motion';
-  import { ui, viewer } from '../lib/state.svelte';
+  import { cyclePdfAppearance, pdfAppearance, ui, viewer } from '../lib/state.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
   import { clampPage } from '../lib/pageNav';
   import { formatScale, isActivePreset, ZOOM_PRESETS } from '../lib/zoomPresets';
@@ -50,6 +50,15 @@
   const btn =
     'rounded-lg p-1.5 text-stone-600 hover:bg-parchment hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent dark:text-stone-300 dark:hover:bg-stone-800';
   const activeBtn = 'rounded-lg p-1.5 bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500';
+
+  const APPEARANCE_ORDER = ['normal', 'dim', 'invert'] as const;
+  const APPEARANCE_NAMES = { normal: 'Normal', dim: 'Dimmed', invert: 'Inverted' } as const;
+  const appearanceLabel = $derived(APPEARANCE_NAMES[pdfAppearance.mode]);
+  const nextAppearanceLabel = $derived(
+    APPEARANCE_NAMES[
+      APPEARANCE_ORDER[(APPEARANCE_ORDER.indexOf(pdfAppearance.mode) + 1) % APPEARANCE_ORDER.length]
+    ],
+  );
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
@@ -93,6 +102,7 @@
     type="button"
     class={btn}
     aria-label="Previous page"
+    title="Previous page"
     disabled={scroll.state.currentPage <= 1}
     onclick={() => scroll.provides?.scrollToPreviousPage()}
   >
@@ -121,6 +131,7 @@
     type="button"
     class={btn}
     aria-label="Next page"
+    title="Next page"
     disabled={scroll.state.currentPage >= scroll.state.totalPages}
     onclick={() => scroll.provides?.scrollToNextPage()}
   >
@@ -129,7 +140,7 @@
 
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
 
-  <button type="button" class={btn} aria-label="Zoom out" onclick={() => zoom.provides?.zoomOut()}>
+  <button type="button" class={btn} aria-label="Zoom out" title="Zoom out" onclick={() => zoom.provides?.zoomOut()}>
     <ZoomOut size={16} />
   </button>
   <!-- svelte-ignore a11y_no_static_element_interactions -- the keydown only
@@ -183,11 +194,23 @@
       </div>
     {/if}
   </div>
-  <button type="button" class={btn} aria-label="Zoom in" onclick={() => zoom.provides?.zoomIn()}>
+  <button type="button" class={btn} aria-label="Zoom in" title="Zoom in" onclick={() => zoom.provides?.zoomIn()}>
     <ZoomIn size={16} />
   </button>
 
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
+
+  <!-- Only offered in dark mode (hidden dark:inline-flex): the dim/invert
+       CSS is .dark-scoped, so in light mode the button would do nothing. -->
+  <button
+    type="button"
+    class={`${pdfAppearance.mode !== 'normal' ? activeBtn : btn} !hidden dark:!inline-flex`}
+    aria-label={`Page appearance: ${appearanceLabel}`}
+    title={`Page appearance: ${appearanceLabel} — click for ${nextAppearanceLabel}`}
+    onclick={cyclePdfAppearance}
+  >
+    {#if pdfAppearance.mode === 'dim'}<SunDim size={16} />{:else if pdfAppearance.mode === 'invert'}<Eclipse size={16} />{:else}<Contrast size={16} />{/if}
+  </button>
 
   <button
     type="button"

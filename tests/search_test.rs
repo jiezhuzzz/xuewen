@@ -72,6 +72,7 @@ async fn imported_pdf_becomes_keyword_searchable_by_body_text() {
     let out = svc
         .search(&SearchRequest {
             q: "zanzibar".into(),
+            author_terms: Vec::new(),
             fields: fts::FieldSel::all(),
             keyword: true,
             semantic: true,

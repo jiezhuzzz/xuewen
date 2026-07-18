@@ -204,6 +204,52 @@ async fn streams_pdf_with_range_and_guards_paths() {
 }
 
 #[tokio::test]
+async fn restores_a_deleted_paper() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "First", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    server
+        .delete("/api/papers/aaaa1111")
+        .await
+        .assert_status_ok();
+    assert_eq!(
+        server
+            .get("/api/papers")
+            .await
+            .json::<Vec<serde_json::Value>>()
+            .len(),
+        0
+    );
+
+    // POST restore → back in the active list.
+    server
+        .post("/api/papers/aaaa1111/restore")
+        .await
+        .assert_status_ok();
+    assert_eq!(
+        server
+            .get("/api/papers")
+            .await
+            .json::<Vec<serde_json::Value>>()
+            .len(),
+        1
+    );
+
+    // Restoring an already-active or unknown paper → 404.
+    server
+        .post("/api/papers/aaaa1111/restore")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+    server
+        .post("/api/papers/zzzz9999/restore")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn deletes_a_paper_softly() {
     let (dir, pool) = temp_pool().await;
     db::insert_paper(&pool, &paper("aaaa1111", "First", PaperStatus::Resolved))
@@ -1472,6 +1518,125 @@ mod search_api {
         let body: serde_json::Value = resp.json();
         assert!(body["fts"]["pending"].as_i64().unwrap() >= 1);
         assert_eq!(body["semantic_available"], false);
+    }
+
+    /// Two papers both matching "fuzzing" in FTS: "a" (tag nlp, starred, in
+    /// project "Thesis"), "b" (tag systems, no star, no project).
+    async fn server_with_qualifier_fixtures(pool: sqlx::SqlitePool) -> axum_test::TestServer {
+        insert_sample_paper(&pool, "a", "Fuzzing Firmware").await;
+        insert_sample_paper(&pool, "b", "Fuzzing Kernels").await;
+        db::add_paper_tag(&pool, "a", "nlp").await.unwrap();
+        db::add_paper_tag(&pool, "b", "systems").await.unwrap();
+        db::set_paper_starred(&pool, "a", true).await.unwrap();
+        let proj = db::create_project(&pool, "Thesis").await.unwrap();
+        db::add_paper_to_project(&pool, "a", &proj.id)
+            .await
+            .unwrap();
+
+        let idx = tempfile::tempdir().unwrap();
+        let (fts_idx, _) = fts::FtsIndex::open(idx.path()).unwrap();
+        std::mem::forget(idx);
+        let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
+        let svc = SearchService::open_with(pool.clone(), fts_idx, vectors, None);
+        for (id, title) in [("a", "Fuzzing Firmware"), ("b", "Fuzzing Kernels")] {
+            svc.fts
+                .upsert(&fts::PaperDoc {
+                    id: id.into(),
+                    title: title.into(),
+                    authors: "Ada Lovelace".into(),
+                    venue: String::new(),
+                    abstract_text: String::new(),
+                    body: String::new(),
+                })
+                .unwrap();
+        }
+        let router = xuewen::web::build_router_with_search(
+            pool,
+            std::path::PathBuf::from("/nonexistent"),
+            svc,
+        );
+        axum_test::TestServer::new(router).unwrap()
+    }
+
+    #[tokio::test]
+    async fn search_query_syntax_filters_by_tag_and_star() {
+        let pool = test_pool().await;
+        let server = server_with_qualifier_fixtures(pool).await;
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing tag:nlp is:starred")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["paper"]["id"], "a");
+    }
+
+    #[tokio::test]
+    async fn search_project_qualifier_resolves_name_case_insensitively() {
+        let pool = test_pool().await;
+        let server = server_with_qualifier_fixtures(pool).await;
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing project:thesis")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["paper"]["id"], "a");
+
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing project:nosuch")
+            .await;
+        let body: serde_json::Value = resp.json();
+        assert!(
+            body["results"].as_array().unwrap().is_empty(),
+            "unknown project name → empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_qualifiers_override_explicit_params() {
+        let pool = test_pool().await;
+        let server = server_with_qualifier_fixtures(pool).await;
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing tag:nlp")
+            .add_query_param("tag", "systems")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0]["paper"]["id"], "a",
+            "tag: qualifier must beat ?tag="
+        );
+    }
+
+    #[tokio::test]
+    async fn search_results_include_tags_and_projects() {
+        let pool = test_pool().await;
+        insert_sample_paper(&pool, "p1", "Fuzzing Firmware").await;
+        db::add_paper_tag(&pool, "p1", "security/fuzzing")
+            .await
+            .unwrap();
+        let pr = db::create_project(&pool, "TP3").await.unwrap();
+        db::add_paper_to_project(&pool, "p1", &pr.id).await.unwrap();
+        let server = server_with_search(pool).await;
+
+        let resp = server
+            .get("/api/search")
+            .add_query_param("q", "fuzzing")
+            .await;
+        resp.assert_status_ok();
+        let body: serde_json::Value = resp.json();
+        let paper = &body["results"][0]["paper"];
+        assert_eq!(paper["tags"][0]["name"], "security/fuzzing");
+        assert_eq!(paper["projects"][0]["name"], "TP3");
     }
 
     #[tokio::test]

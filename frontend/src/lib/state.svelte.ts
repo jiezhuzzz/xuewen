@@ -3,6 +3,7 @@ import {
   addTag,
   createProject,
   deletePaper,
+  restorePaper,
   deleteProject,
   exportPaper,
   getPaper,
@@ -26,7 +27,16 @@ import {
 } from './api';
 import { invalidateLibraryTitleIndex } from './citationMatch';
 import { dur } from './motion';
+import {
+  type FieldKey,
+  hasSearchTerms,
+  parseQuery,
+  setFieldQualifiers,
+  setQualifier,
+  setStarredQualifier,
+} from './searchQuery';
 import { dropReaderState } from './readerState.svelte';
+import { toast } from './toasts.svelte';
 import type {
   BibFormat,
   Candidate,
@@ -38,6 +48,7 @@ import type {
   SearchMatch,
   SearchOpts,
   Stats,
+  StatusFilter,
   TagSummary,
   TranslateSettings,
 } from './types';
@@ -50,6 +61,24 @@ export const filters = $state<Filters>({
   tag: undefined,
   starred: undefined,
 });
+
+/// The search box string is the single source of truth; project/tag/starred/
+/// status on `filters` (and the field toggles on `searchOpts`) are a cache of
+/// its parse — `project:` names resolve to ids via the loaded projects list
+/// (unresolved names pass through verbatim and simply match nothing).
+function syncFiltersFromQuery(): void {
+  const p = parseQuery(filters.q);
+  filters.tag = p.tag ?? undefined;
+  filters.starred = p.starred || undefined;
+  filters.status = p.status ?? 'all';
+  filters.project = p.project
+    ? (projects.items.find((pr) => pr.name.toLowerCase() === p.project!.toLowerCase())?.id ??
+      p.project)
+    : 'all';
+  for (const k of ['title', 'authors', 'abstract', 'body'] as const) {
+    searchOpts[k] = p.fields === null || p.fields.includes(k);
+  }
+}
 
 export const searchOpts = $state<SearchOpts>({
   title: true,
@@ -77,13 +106,13 @@ export function semanticBlocked(): boolean {
   return authorsOnly || !searchMeta.semantic.available;
 }
 
-export function toggleSearchField(k: 'title' | 'authors' | 'abstract' | 'body'): void {
-  const on = ['title', 'authors', 'abstract', 'body'].filter(
-    (f) => searchOpts[f as keyof SearchOpts],
-  );
+export function toggleSearchField(k: FieldKey): void {
+  const on = (['title', 'authors', 'abstract', 'body'] as const).filter((f) => searchOpts[f]);
   if (searchOpts[k] && on.length === 1) return; // keep at least one field
-  searchOpts[k] = !searchOpts[k];
-  if (filters.q.trim()) void loadPapers();
+  const next = searchOpts[k] ? on.filter((f) => f !== k) : [...on, k];
+  filters.q = setFieldQualifiers(filters.q, next.length === 4 ? null : next);
+  syncFiltersFromQuery();
+  if (hasSearchTerms(parseQuery(filters.q))) void loadPapers();
 }
 
 export function toggleSearchEngine(k: 'keyword' | 'semantic'): void {
@@ -241,6 +270,7 @@ export function toggleDock(tab: DockTab): void {
 export function goHome(): void {
   viewer.activeId = null;
   ui.zen = false;
+  saveTabs();
 }
 
 /// Zen requires an active PDF tab; toggling from home is a no-op.
@@ -256,14 +286,51 @@ export const ui = $state<{
   importOpen: boolean;
   zen: boolean;
   paletteOpen: boolean;
+  helpOpen: boolean;
 }>({
   sidebarOpen: true,
   importOpen: false,
   zen: false,
   paletteOpen: false,
+  helpOpen: false,
 });
 export function toggleSidebar(): void {
   ui.sidebarOpen = !ui.sidebarOpen;
+}
+
+/// Dark-mode page appearance for the PDF reader: dim eases the glare of the
+/// white page, invert flips it dark. Applied via dark-scoped CSS (app.css)
+/// on the raster layers only, so the preference is inert in light mode.
+export type PdfAppearance = 'normal' | 'dim' | 'invert';
+export const pdfAppearance = $state<{ mode: PdfAppearance }>({ mode: 'normal' });
+const PDF_APPEARANCE_KEY = 'xuewen-pdf-appearance';
+const PDF_APPEARANCE_CYCLE: PdfAppearance[] = ['normal', 'dim', 'invert'];
+
+export function initPdfAppearance(): void {
+  const saved = localStorage.getItem(PDF_APPEARANCE_KEY);
+  if (saved === 'normal' || saved === 'dim' || saved === 'invert') pdfAppearance.mode = saved;
+}
+
+export function cyclePdfAppearance(): void {
+  const idx = PDF_APPEARANCE_CYCLE.indexOf(pdfAppearance.mode);
+  pdfAppearance.mode = PDF_APPEARANCE_CYCLE[(idx + 1) % PDF_APPEARANCE_CYCLE.length];
+  try {
+    localStorage.setItem(PDF_APPEARANCE_KEY, pdfAppearance.mode);
+  } catch {
+    /* no localStorage — the mode still applies, only persistence is lost */
+  }
+}
+
+/// Below ~lg the fixed 304px list pane crushes the reader, so it starts
+/// collapsed there and follows live crossings of the breakpoint. `[`, the
+/// edge-peek button, and the TopBar toggle still override at any width —
+/// this only sets the default on load/resize, it doesn't lock anything.
+export function initResponsiveSidebar(): void {
+  const q = window.matchMedia('(max-width: 1023px)');
+  if (q.matches) ui.sidebarOpen = false;
+  q.addEventListener('change', (e) => {
+    ui.sidebarOpen = !e.matches;
+  });
 }
 export function openImport(): void {
   importSession++;
@@ -293,15 +360,17 @@ export async function loadPapers(opts?: { keywordOnly?: boolean }): Promise<void
   library.loading = true;
   library.error = null;
   try {
-    const q = filters.q.trim();
-    if (!q) {
-      const papers = await listPapers({ ...filters });
+    const parsed = parseQuery(filters.q);
+    if (!hasSearchTerms(parsed)) {
+      // Qualifier-only (or empty) query → plain filtered list. The parsed
+      // filters are already cached on `filters`; q itself must not leak in.
+      const papers = await listPapers({ ...filters, q: '' });
       if (my !== seq) return; // a newer request superseded this one
       library.papers = papers;
       searchMeta.byId = {};
     } else {
       const keywordOnly = Boolean(opts?.keywordOnly) || !searchOpts.semantic;
-      const resp = await searchPapers(q, { ...searchOpts }, { ...filters }, keywordOnly);
+      const resp = await searchPapers(filters.q, { ...searchOpts }, keywordOnly);
       if (my !== seq) return;
       library.papers = resp.results.map((r) => r.paper);
       searchMeta.byId = Object.fromEntries(resp.results.map((r) => [r.paper.id, r.match]));
@@ -330,26 +399,66 @@ export async function loadTags(): Promise<void> {
   }
 }
 
-/// The three list filters (project/tag/starred) are mutually exclusive in the
-/// UI: setting one clears the other two so exactly one is ever active.
-export async function setProjectFilter(id: string): Promise<void> {
-  filters.project = id;
-  filters.tag = undefined;
-  filters.starred = undefined;
+/// Pill clicks and the status control edit the query string; the parse then
+/// round-trips into the cached filters. Filters combine (AND) — the old
+/// project/tag/star mutual exclusivity is gone by design.
+async function applyQueryEdit(q: string): Promise<void> {
+  clearTimeout(kwDebounce);
+  clearTimeout(fullDebounce);
+  filters.q = q;
+  syncFiltersFromQuery();
   await loadPapers();
+}
+
+export async function setProjectFilter(id: string): Promise<void> {
+  const name = id === 'all' ? null : (projects.items.find((p) => p.id === id)?.name ?? id);
+  await applyQueryEdit(setQualifier(filters.q, 'project', name));
 }
 
 export async function setTagFilter(tag: string | undefined): Promise<void> {
-  filters.tag = tag;
-  filters.project = 'all';
-  filters.starred = undefined;
-  await loadPapers();
+  await applyQueryEdit(setQualifier(filters.q, 'tag', tag ?? null));
 }
 
 export async function setStarFilter(on: boolean): Promise<void> {
-  filters.starred = on || undefined;
-  filters.project = 'all';
-  filters.tag = undefined;
+  await applyQueryEdit(setStarredQualifier(filters.q, on));
+}
+
+export async function setStatusFilter(status: StatusFilter): Promise<void> {
+  await applyQueryEdit(setQualifier(filters.q, 'status', status === 'all' ? null : status));
+}
+
+/// Whether any list filter deviates from the default view — i.e. whether an
+/// empty list means "nothing matches" rather than "the library is empty".
+export function anyFilterActive(): boolean {
+  return (
+    filters.q.trim() !== '' ||
+    filters.status !== 'all' ||
+    filters.project !== 'all' ||
+    filters.tag !== undefined ||
+    filters.starred !== undefined
+  );
+}
+
+/// Human-readable names for every non-default list filter — what an empty
+/// state should blame ("No papers match X · Y"). Shared by the list pane
+/// and the main-area empty state.
+export function activeFilterLabels(): string[] {
+  const labels: string[] = [];
+  if (filters.q.trim()) labels.push(`“${filters.q.trim()}”`);
+  if (filters.project !== 'all')
+    labels.push(projects.items.find((p) => p.id === filters.project)?.name ?? 'the selected project');
+  if (filters.tag) labels.push(filters.tag);
+  if (filters.starred !== undefined) labels.push('starred');
+  if (filters.status !== 'all')
+    labels.push(filters.status === 'needs_review' ? 'needs review' : filters.status);
+  return labels;
+}
+
+/// Reset every list filter (search, status, project/tag/star) to the default
+/// view and reload — the escape hatch offered by the list's empty state.
+export async function clearFilters(): Promise<void> {
+  filters.q = '';
+  syncFiltersFromQuery(); // empty q → all filters default, all fields on
   await loadPapers();
 }
 
@@ -392,18 +501,27 @@ export async function removeFromProject(paperId: string, projectId: string): Pro
   if (filters.project === projectId) await loadPapers();
 }
 
-/// Flip a paper's starred flag: call the API, then patch the row/cached
-/// detail in place so the UI reflects it immediately (no full reload) unless
-/// the starred filter is active, in which case the list itself may need to
-/// drop/gain the paper.
+/// Flip a paper's starred flag optimistically: patch the row/cached detail
+/// first so the star moves instantly, then call the API and roll back (with
+/// an error toast) if it rejects. When the starred filter is active the list
+/// itself may need to drop/gain the paper, so it reloads after the call.
 export async function toggleStar(paperId: string): Promise<void> {
   const row = library.papers.find((p) => p.id === paperId);
   const cached = detailCache.get(paperId);
-  const next = !(row?.starred ?? cached?.starred ?? false);
-  await setStar(paperId, next);
+  const prev = row?.starred ?? cached?.starred ?? false;
+  const next = !prev;
   if (row) row.starred = next;
   if (cached) cached.starred = next;
   detailRefresh.n += 1;
+  try {
+    await setStar(paperId, next);
+  } catch (e) {
+    if (row) row.starred = prev;
+    if (cached) cached.starred = prev;
+    detailRefresh.n += 1;
+    toast('error', `Couldn't update star: ${(e as Error).message}`);
+    return;
+  }
   if (filters.starred !== undefined) await loadPapers();
 }
 
@@ -462,10 +580,13 @@ let kwDebounce: ReturnType<typeof setTimeout> | undefined;
 let fullDebounce: ReturnType<typeof setTimeout> | undefined;
 export function setSearch(q: string): void {
   filters.q = q;
+  syncFiltersFromQuery();
   clearTimeout(kwDebounce);
   clearTimeout(fullDebounce);
-  if (!q.trim()) {
-    void loadPapers();
+  if (!hasSearchTerms(parseQuery(q))) {
+    // Qualifier-only (or empty) → plain list; small debounce so typing a
+    // qualifier character-by-character doesn't fire a request per keystroke.
+    kwDebounce = setTimeout(() => void loadPapers(), 150);
     return;
   }
   // Fast keyword-only pass while typing; the full (semantic) pass once settled.
@@ -485,6 +606,7 @@ export function openTab(p: PaperSummary): void {
   }
   viewer.activeId = p.id;
   selection.id = p.id;
+  saveTabs();
 }
 
 export function closeTab(id: string): void {
@@ -496,6 +618,75 @@ export function closeTab(id: string): void {
     viewer.activeId = viewer.tabs[Math.max(0, idx - 1)]?.id ?? null;
   }
   if (viewer.tabs.length === 0) ui.zen = false;
+  saveTabs();
+}
+
+/// Switch the reader to an already-open tab (the tab strip's click target).
+export function activateTab(id: string | null): void {
+  viewer.activeId = id;
+  saveTabs();
+}
+
+const TABS_KEY = 'xuewen-tabs';
+
+function saveTabs(): void {
+  try {
+    localStorage.setItem(
+      TABS_KEY,
+      JSON.stringify({
+        tabs: viewer.tabs.map((t) => ({ id: t.id, title: t.title })),
+        activeId: viewer.activeId,
+      }),
+    );
+  } catch {
+    /* no localStorage — tabs still work, only persistence is lost */
+  }
+}
+
+/// Restore the remembered tab set (and active tab) at startup, then prune
+/// ids the server no longer knows — a paper deleted or purged since the last
+/// session must not resurrect as a dead tab. Restore is immediate (titles
+/// come from storage); the validation round-trip only removes losers after.
+export async function initTabs(): Promise<void> {
+  let parsed: { tabs?: unknown; activeId?: unknown };
+  try {
+    const raw = localStorage.getItem(TABS_KEY);
+    if (!raw) return;
+    parsed = JSON.parse(raw) as { tabs?: unknown; activeId?: unknown };
+  } catch {
+    return; // corrupted value — start with no tabs
+  }
+  const tabs = Array.isArray(parsed.tabs)
+    ? (parsed.tabs as unknown[]).filter(
+        (t): t is Tab =>
+          !!t && typeof (t as Tab).id === 'string' && typeof (t as Tab).title === 'string',
+      )
+    : [];
+  if (tabs.length === 0) return;
+  viewer.tabs = tabs;
+  viewer.activeId =
+    typeof parsed.activeId === 'string' && tabs.some((t) => t.id === parsed.activeId)
+      ? parsed.activeId
+      : null;
+  const alive = new Set(
+    (
+      await Promise.all(
+        tabs.map(async (t) => {
+          try {
+            await getPaper(t.id);
+            return t.id;
+          } catch {
+            return null;
+          }
+        }),
+      )
+    ).filter((id): id is string => id !== null),
+  );
+  if (alive.size !== tabs.length) {
+    viewer.tabs = viewer.tabs.filter((t) => alive.has(t.id));
+    if (viewer.activeId !== null && !alive.has(viewer.activeId)) viewer.activeId = null;
+    saveTabs();
+  }
 }
 
 export async function loadDetail(id: string): Promise<PaperDetail> {
@@ -506,16 +697,42 @@ export async function loadDetail(id: string): Promise<PaperDetail> {
   return d;
 }
 
-/// Soft-delete a paper on the server, then drop it from the UI: close its tab,
-/// remove it from the list, and refresh the counts.
-export async function removePaper(id: string): Promise<void> {
+/// Soft-delete one paper on the server and drop it from the UI: close its
+/// tab, remove it from the list, forget its cached detail.
+async function dropPaper(id: string): Promise<void> {
   await deletePaper(id);
   closeTab(id);
   library.papers = library.papers.filter((p) => p.id !== id);
   detailCache.delete(id);
   invalidateLibraryTitleIndex();
   if (selection.id === id) selection.id = null;
+}
+
+/// Delete a paper with an Undo toast (deletes are soft — POST /restore
+/// un-trashes) on a longer timeout so there's time to reach for it.
+export async function removePaper(id: string): Promise<void> {
+  await removePapers([id]);
+}
+
+/// Bulk delete: every id is dropped, then ONE combined toast carries the
+/// Undo for the whole batch — per-paper toasts would stack unusably.
+export async function removePapers(ids: string[]): Promise<void> {
+  for (const id of ids) await dropPaper(id);
   await loadStats();
+  const message = ids.length === 1 ? 'Paper deleted' : `${ids.length} papers deleted`;
+  toast('success', message, 8000, { label: 'Undo', run: () => void undoDelete(ids) });
+}
+
+async function undoDelete(ids: string[]): Promise<void> {
+  try {
+    for (const id of ids) await restorePaper(id);
+    invalidateLibraryTitleIndex();
+    await loadPapers();
+    await loadStats();
+    toast('success', ids.length === 1 ? 'Paper restored' : `${ids.length} papers restored`);
+  } catch (e) {
+    toast('error', `Couldn't restore: ${(e as Error).message}`);
+  }
 }
 
 const darkQuery = (): MediaQueryList => window.matchMedia('(prefers-color-scheme: dark)');

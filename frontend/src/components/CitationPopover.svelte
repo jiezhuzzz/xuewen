@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { ExternalLink, BookOpen } from 'lucide-svelte';
+  import { Download, ExternalLink, BookOpen } from 'lucide-svelte';
   import { citationHover, cancelHideCitation, hideCitationSoon } from '../lib/citationState.svelte';
-  import { openTab } from '../lib/state.svelte';
+  import { enqueueUrl, openImport, openTab } from '../lib/state.svelte';
   import { abbreviateVenue } from '../lib/venue';
   import { authorLine, refLinks, titleCase } from '../lib/refFormat';
 
@@ -21,6 +21,17 @@
 
   function open() {
     if (c?.matchedPaper) openTab(c.matchedPaper);
+    citationHover.current = null;
+  }
+
+  // A reference we can fetch but don't have: offer one-click import. The
+  // import queue accepts a bare DOI or arXiv id (same as the Import dialog).
+  const importable = $derived(!c?.matchedPaper && (s?.doi || s?.arxiv_id) ? (s?.doi ?? s?.arxiv_id) : null);
+
+  function importRef() {
+    if (!importable) return;
+    openImport(); // reset/open first, so the enqueue lands in the fresh session
+    void enqueueUrl(importable);
     citationHover.current = null;
   }
 </script>
@@ -56,6 +67,15 @@
           class="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-700/10 dark:border-stone-700 dark:text-amber-500"
         >
           <BookOpen size={13} /> Open in library
+        </button>
+      {/if}
+      {#if importable}
+        <button
+          type="button"
+          onclick={importRef}
+          class="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-700/10 dark:border-stone-700 dark:text-amber-500"
+        >
+          <Download size={13} /> Import
         </button>
       {/if}
       {#each links as l (l.href)}

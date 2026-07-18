@@ -16,6 +16,14 @@ describe('toast store', () => {
     expect(toasts.items).toHaveLength(0);
   });
 
+  it('carries an optional action', () => {
+    const run = vi.fn();
+    toast('success', 'Paper deleted', 0, { label: 'Undo', run });
+    expect(toasts.items[0].action?.label).toBe('Undo');
+    toasts.items[0].action?.run();
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it('timeoutMs 0 sticks until dismissed by hand', () => {
     const id = toast('error', 'Import failed', 0);
     vi.advanceTimersByTime(60_000);

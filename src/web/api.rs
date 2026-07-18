@@ -151,6 +151,22 @@ pub async fn delete_paper(State(app): State<AppState>, Path(id): Path<String>) -
     }
 }
 
+/// Un-trash a paper (the Undo behind the web UI's delete toast). 404 when the
+/// paper doesn't exist or isn't trashed — `db::restore` only flips trashed rows.
+pub async fn restore_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    match db::restore(&app.pool, &id).await {
+        Ok(true) => {
+            app.wake_search();
+            Json(serde_json::json!({ "restored": true })).into_response()
+        }
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("restore_paper: {e}");
+            internal_error()
+        }
+    }
+}
+
 /// Import a single uploaded PDF: validate, stage into `inbox_dir/_uploads`, and
 /// run the ingest pipeline. One PDF per request (the frontend uploads files one
 /// at a time). Returns `ingested` (with title/status), `duplicate`, or an error.
@@ -976,23 +992,56 @@ pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchPa
             .into_response();
     };
     let (keyword, semantic) = parse_engines(p.engines.as_deref());
+    let parsed = crate::search::query::parse(p.q.as_deref().unwrap_or(""));
+    // `project:` carries a NAME; resolve to an id. An unknown name filters to
+    // zero results (bind the name itself — it can never equal a project id).
+    let project = match parsed.project {
+        Some(name) => Some(
+            crate::db::find_project_by_name(&app.pool, &name)
+                .await
+                .ok()
+                .flatten()
+                .map(|pr| pr.id)
+                .unwrap_or(name),
+        ),
+        None => p.project,
+    };
     let req = crate::search::SearchRequest {
-        q: p.q.unwrap_or_default(),
-        fields: FieldSel::parse(p.fields.as_deref()),
+        q: parsed.text,
+        author_terms: parsed.authors,
+        fields: parsed
+            .fields
+            .unwrap_or_else(|| FieldSel::parse(p.fields.as_deref())),
         keyword,
         semantic,
-        status: p.status,
-        project: p.project,
-        tag: p.tag,
-        starred: p.starred,
+        status: parsed.status.or(p.status),
+        project,
+        tag: parsed.tag.or(p.tag),
+        starred: if parsed.starred {
+            Some(true)
+        } else {
+            p.starred
+        },
     };
     match svc.search(&req).await {
         Ok(out) => {
-            let results: Vec<SearchResult> = out
+            // Same enrichment as list_papers: without it, search rows
+            // serialize empty tags/projects and the table's chips vanish
+            // whenever a query is active.
+            let mut summaries: Vec<PaperSummary> = out
                 .results
                 .iter()
-                .map(|(paper, m)| SearchResult {
-                    paper: PaperSummary::from(paper),
+                .map(|(paper, _)| PaperSummary::from(paper))
+                .collect();
+            if let Err(e) = attach_row_extras(&app.pool, &mut summaries).await {
+                tracing::error!("search row extras: {e}");
+                return internal_error();
+            }
+            let results: Vec<SearchResult> = summaries
+                .into_iter()
+                .zip(out.results.iter())
+                .map(|(paper, (_, m))| SearchResult {
+                    paper,
                     match_info: SearchMatch {
                         engine: m.engine.clone(),
                         field: m.field.clone(),

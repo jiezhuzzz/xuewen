@@ -58,6 +58,24 @@ describe('ReaderDock', () => {
     expect(dock.tab).toBe('details');
   });
 
+  it('wires each tab to its panel for assistive tech', async () => {
+    render(ReaderDock, { props: { id: 'p1' } });
+    const panel = await screen.findByRole('tabpanel');
+    expect(panel.id).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Details' })).toHaveAttribute('aria-controls', panel.id);
+    expect(screen.getByRole('tab', { name: /Ask/ })).toHaveAttribute('aria-controls');
+  });
+
+  it('renders close/zen before the tabs so rail muscle-memory lands on tabs, not close', () => {
+    render(ReaderDock, { props: { id: 'p1' } });
+    const close = screen.getByRole('button', { name: 'Close panel' });
+    const tablist = screen.getByRole('tablist');
+    // The quick-action rail (禪詳問) hides when the dock opens; whatever sits
+    // at its old top-right position gets follow-up clicks. That must be the
+    // Details/Ask tabs, not the close button — tabs right, close/zen left.
+    expect(close.compareDocumentPosition(tablist) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('the close button closes the dock', async () => {
     render(ReaderDock, { props: { id: 'p1' } });
     await userEvent.click(screen.getByRole('button', { name: 'Close panel' }));

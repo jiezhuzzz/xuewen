@@ -3,7 +3,7 @@
   import { flip } from 'svelte/animate';
   import { crossfade, fade } from 'svelte/transition';
   import { DUR, dur } from '../lib/motion';
-  import { closeTab, goHome, viewer } from '../lib/state.svelte';
+  import { activateTab, closeTab, goHome, viewer } from '../lib/state.svelte';
 
   // The active-tab underline crossfades between tabs — a real sliding
   // indicator with no measurement code.
@@ -47,7 +47,8 @@
       >
         <button
           type="button"
-          onclick={() => (viewer.activeId = tab.id)}
+          title={tab.title}
+          onclick={() => activateTab(tab.id)}
           class="min-w-0 truncate font-serif text-sm text-stone-700 dark:text-stone-200"
         >
           {tab.title}
@@ -56,7 +57,7 @@
           type="button"
           aria-label="Close tab"
           onclick={() => closeTab(tab.id)}
-          class="rounded p-0.5 text-stone-500 opacity-0 hover:bg-stone-200 group-hover:opacity-100 dark:text-stone-400 dark:hover:bg-stone-700"
+          class="rounded p-0.5 text-stone-500 opacity-0 hover:bg-stone-200 focus-visible:opacity-100 group-hover:opacity-100 dark:text-stone-400 dark:hover:bg-stone-700"
         >
           <X size={14} />
         </button>

@@ -177,6 +177,10 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{id}",
             get(api::get_paper).delete(api::delete_paper),
         )
+        .route(
+            "/api/papers/{id}/restore",
+            axum::routing::post(api::restore_paper),
+        )
         .route("/api/papers/{id}/export", get(api::export_paper))
         .route("/api/stats", get(api::stats))
         .route("/api/identify/search", get(api::identify_search))
@@ -246,11 +250,40 @@ fn router_with(state: AppState) -> Router {
 
 /// Serve the full router on a listener the caller has already bound —
 /// lets the caller bind port 0 and learn the real port from
-/// `listener.local_addr()` before starting the server.
+/// `listener.local_addr()` before starting the server. Shuts down
+/// gracefully on SIGINT/SIGTERM (see `shutdown_signal`) — the container
+/// runs this as PID 1, where an unhandled signal means a hung stop.
 pub async fn serve_on(listener: tokio::net::TcpListener, state: AppState) -> Result<()> {
     let app = router_with(state);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
+}
+
+/// Resolve on SIGINT or SIGTERM. The container runs the server as PID 1,
+/// which gets no default signal disposition — without an explicit handler
+/// `docker stop` and Kubernetes rollouts hang the full grace period and
+/// end in SIGKILL.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install the Ctrl-C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install the SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
 }
 
 /// Whether `host` is a loopback bind (safe to serve without auth). Non-IP

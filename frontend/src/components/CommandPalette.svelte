@@ -30,14 +30,17 @@
 
   type Item =
     | { kind: 'paper'; id: string; label: string; paper: PaperSummary; score: number }
-    | { kind: 'action'; id: string; label: string; run: () => void; score: number };
+    | { kind: 'action'; id: string; label: string; keys?: string; run: () => void; score: number };
 
-  const ACTIONS: Array<{ id: string; label: string; run: () => void }> = [
+  // `keys` mirrors the single-key map in shortcuts.ts (see lib/keymap.ts) so
+  // the palette doubles as shortcut discovery.
+  const ACTIONS: Array<{ id: string; label: string; keys?: string; run: () => void }> = [
     { id: 'import', label: 'Import papers…', run: () => openImport() },
     { id: 'home', label: 'Go to library', run: () => goHome() },
     { id: 'theme', label: 'Cycle theme', run: () => toggleTheme() },
-    { id: 'pane', label: 'Toggle list pane', run: () => toggleSidebar() },
-    { id: 'zen', label: 'Toggle zen mode', run: () => toggleZen() },
+    { id: 'pane', label: 'Toggle list pane', keys: '[', run: () => toggleSidebar() },
+    { id: 'zen', label: 'Toggle zen mode', keys: 'z', run: () => toggleZen() },
+    { id: 'help', label: 'Keyboard shortcuts…', keys: '?', run: () => (ui.helpOpen = true) },
   ];
 
   const items = $derived.by((): Item[] => {
@@ -154,6 +157,9 @@
             {:else}
               <ArrowRight size={14} class="shrink-0 text-stone-400" />
               <span class="min-w-0 flex-1 truncate">{item.label}</span>
+              {#if item.keys}
+                <kbd class="shrink-0 rounded border border-stone-300 px-1 font-mono text-caption text-stone-400 dark:border-stone-700 dark:text-stone-500">{item.keys}</kbd>
+              {/if}
             {/if}
           </button>
         </li>

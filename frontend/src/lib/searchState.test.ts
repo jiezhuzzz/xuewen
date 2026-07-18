@@ -27,13 +27,16 @@ vi.mock('./api', async (importOriginal) => {
 
 import * as api from './api';
 import {
-  filters, library, loadPapers, loadSearchStatus, searchMeta, searchOpts,
-  semanticBlocked, setSearch, toggleSearchEngine, toggleSearchField,
+  filters, library, loadPapers, loadSearchStatus, projects, searchMeta, searchOpts,
+  semanticBlocked, setProjectFilter, setSearch, setStarFilter, setTagFilter,
+  toggleSearchEngine, toggleSearchField,
 } from './state.svelte';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  filters.q = '';
+  Object.assign(filters, {
+    q: '', status: 'all', project: 'all', tag: undefined, starred: undefined,
+  });
   Object.assign(searchOpts, {
     title: true, authors: true, abstract: true, body: true, keyword: true, semantic: true,
   });
@@ -64,10 +67,68 @@ describe('search state', () => {
     expect(api.searchPapers).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(200);
     expect(api.searchPapers).toHaveBeenCalledTimes(1);
-    expect((api.searchPapers as ReturnType<typeof vi.fn>).mock.calls[0][3]).toBe(true); // keywordOnly
+    expect((api.searchPapers as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe(true); // keywordOnly
     await vi.advanceTimersByTimeAsync(600);
     expect(api.searchPapers).toHaveBeenCalledTimes(2);
-    expect((api.searchPapers as ReturnType<typeof vi.fn>).mock.calls[1][3]).toBe(false);
+    expect((api.searchPapers as ReturnType<typeof vi.fn>).mock.calls[1][2]).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('setSearch syncs parsed qualifiers into the filter cache', () => {
+    vi.useFakeTimers();
+    projects.items = [{ id: 'p1', name: 'Thesis', paper_count: 0 }];
+    setSearch('tag:nlp project:thesis is:starred status:resolved attention');
+    expect(filters.tag).toBe('nlp');
+    expect(filters.project).toBe('p1'); // name resolved case-insensitively
+    expect(filters.starred).toBe(true);
+    expect(filters.status).toBe('resolved');
+    projects.items = [];
+    vi.useRealTimers();
+  });
+
+  it('setSearch clears stale cached filters when qualifiers are removed', () => {
+    vi.useFakeTimers();
+    setSearch('tag:nlp');
+    setSearch('');
+    expect(filters.tag).toBeUndefined();
+    expect(filters.starred).toBeUndefined();
+    expect(filters.status).toBe('all');
+    expect(filters.project).toBe('all');
+    vi.useRealTimers();
+  });
+
+  it('pill setters edit the query string and combine (no mutual exclusion)', () => {
+    projects.items = [{ id: 'p1', name: 'My Thesis', paper_count: 0 }];
+    void setTagFilter('nlp');
+    void setStarFilter(true);
+    void setProjectFilter('p1');
+    expect(filters.q).toContain('tag:nlp');
+    expect(filters.q).toContain('is:starred');
+    expect(filters.q).toContain('project:"My Thesis"');
+    void setTagFilter(undefined);
+    expect(filters.q).not.toContain('tag:nlp');
+    expect(filters.q).toContain('is:starred'); // no more mutual exclusion
+    projects.items = [];
+  });
+
+  it('in: qualifiers sync the field toggles', () => {
+    vi.useFakeTimers();
+    setSearch('in:title attention');
+    expect(searchOpts.title).toBe(true);
+    expect(searchOpts.body).toBe(false);
+    setSearch('attention');
+    expect(searchOpts.body).toBe(true); // no in: tokens = all fields
+    vi.useRealTimers();
+  });
+
+  it('toggleSearchField writes in: tokens into the query', () => {
+    vi.useFakeTimers();
+    setSearch('attention');
+    toggleSearchField('body'); // turn body off
+    expect(filters.q).toContain('in:title');
+    expect(filters.q).toContain('in:abstract');
+    expect(filters.q).toContain('in:authors');
+    expect(filters.q).not.toContain('in:body');
     vi.useRealTimers();
   });
 

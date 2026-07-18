@@ -6,8 +6,11 @@
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
   import LibraryPane from './components/LibraryPane.svelte';
+  import LibraryTable from './components/LibraryTable.svelte';
   import PaperContextMenu from './components/PaperContextMenu.svelte';
   import ReaderDock from './components/ReaderDock.svelte';
+  import ShortcutHelp from './components/ShortcutHelp.svelte';
+  import Spinner from './components/Spinner.svelte';
   import TabBar from './components/TabBar.svelte';
   import Toaster from './components/Toaster.svelte';
   import TopBar from './components/TopBar.svelte';
@@ -20,7 +23,11 @@
     dock,
     identifyState,
     initDock,
+    initPdfAppearance,
+    initResponsiveSidebar,
+    initTabs,
     initTheme,
+    library,
     loadPapers,
     loadProjects,
     loadSearchStatus,
@@ -33,6 +40,9 @@
   onMount(() => {
     initTheme();
     initDock();
+    initResponsiveSidebar();
+    initPdfAppearance();
+    void initTabs();
     loadStats();
     loadProjects();
     loadPapers();
@@ -88,8 +98,17 @@
       <div class="absolute inset-y-0 left-0 w-[304px]"><LibraryPane /></div>
     </div>
     {#if paneHidden}
-      <!-- Edge peek: hover the left edge to overlay the list without expanding it. -->
-      <div class="absolute inset-y-0 left-0 z-30 w-2" onmouseenter={() => (peek = true)} role="presentation"></div>
+      <!-- Edge peek: hovering the left edge overlays the list without
+           expanding it; as a real button it also gives keyboard and touch
+           users a path — activating it pins the pane open instead. -->
+      <button
+        type="button"
+        aria-label="Open library list"
+        title="Open library list ([)"
+        onmouseenter={() => (peek = true)}
+        onclick={() => (ui.sidebarOpen = true)}
+        class="absolute inset-y-0 left-0 z-30 w-2 focus-visible:bg-amber-700/20"
+      ></button>
       {#if peek}
         <div
           transition:fly={{ x: -24, duration: dur(DUR.base) }}
@@ -115,8 +134,8 @@
           {#if PdfViewer}
             <PdfViewer />
           {:else if viewer.activeId !== null}
-            <div class="flex flex-1 items-center justify-center text-sm text-stone-400 dark:text-stone-500">
-              Loading reader…
+            <div class="flex flex-1 items-center justify-center">
+              <Spinner label="Loading reader…" />
             </div>
           {/if}
           {#if dock.open && viewer.activeId}
@@ -126,7 +145,13 @@
           {/if}
         </div>
         {#if viewer.activeId === null}
-          <Welcome />
+          <!-- Papers → the real library table; empty (or all filtered away) →
+               the Welcome hero, which explains which of the two it is. -->
+          {#if library.papers.length > 0}
+            <LibraryTable />
+          {:else}
+            <Welcome />
+          {/if}
         {/if}
       </div>
     </main>
@@ -135,6 +160,7 @@
 {#if ui.importOpen}<ImportModal />{/if}
 {#if identifyState.open}<IdentifyModal />{/if}
 {#if ui.paletteOpen}<CommandPalette />{/if}
+{#if ui.helpOpen}<ShortcutHelp />{/if}
 <PaperContextMenu />
 <TranslatePopover />
 <Toaster />
