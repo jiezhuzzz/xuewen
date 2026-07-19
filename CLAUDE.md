@@ -84,3 +84,17 @@ The reader is hand-rolled from EmbedPDF's primitives (not the ready-made `@embed
 ## Deployment
 
 NixOS module (`deploy/nixos/`, `nixosModules.default`) and an OCI image built with `nix2container` (`deploy/k8s/`). See `README.md` for the container/registry details.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `jiezhuzzz/xuewen`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/domain-modeling`). See `docs/agents/domain.md`.
