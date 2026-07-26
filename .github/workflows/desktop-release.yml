@@ -42,14 +42,15 @@ jobs:
         run: npx --yes @tauri-apps/cli@^2 build
         working-directory: desktop
 
+      # The dmg is published as a build artifact only. This repo enforces
+      # immutable releases — assets cannot be added to a release after it is
+      # created, and a tag whose release was created can never get another one.
+      # So the release is created atomically WITH the dmg outside CI, once the
+      # build here succeeds:
+      #   gh run download <run-id> -n xuewen-dmg
+      #   gh release create <tag> *.dmg --notes-file <notes>
       - uses: actions/upload-artifact@v4
         with:
           name: xuewen-dmg
           path: target/release/bundle/dmg/*.dmg
           if-no-files-found: error
-
-      - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: target/release/bundle/dmg/*.dmg
