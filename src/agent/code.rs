@@ -105,7 +105,8 @@ pub async fn run_clone(
         let paper_id = paper_id.clone();
         async move {
             // Ok(false) = a newer attach superseded this job; drop the outcome.
-            if let Err(db) = crate::db::set_paper_code_error(&pool, &paper_id, &e, clone_gen).await {
+            if let Err(db) = crate::db::set_paper_code_error(&pool, &paper_id, &e, clone_gen).await
+            {
                 tracing::error!("paper_code error write failed: {db}");
             }
         }
@@ -199,9 +200,11 @@ pub async fn run_clone(
     match crate::db::set_paper_code_ready(&pool, &paper_id, &sha, size as i64, clone_gen).await {
         Ok(true) => {}
         Ok(false) => {
-            // Raced a newer attach between the generation check and here; the
-            // newer job owns the row, so leave our just-placed checkout for it
-            // to replace and do not report ready.
+            // Raced a newer attach or a detach between the generation check and
+            // here: our row is gone or superseded. Remove the checkout we just
+            // placed so no orphaned `repo/` is left behind for chat to expose.
+            // A newer clone will re-place its own before reporting ready.
+            let _ = tokio::fs::remove_dir_all(&dst).await;
         }
         Err(e) => tracing::error!("paper_code ready write failed: {e}"),
     }

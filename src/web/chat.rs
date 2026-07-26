@@ -118,9 +118,18 @@ pub async fn send(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let has_repo = tokio::fs::try_exists(ws.join("repo"))
-        .await
-        .unwrap_or(false);
+    // Gate on the DB record, not just disk: a detach clears the row, but a
+    // clone job racing that detach can leave a stray `repo/` behind. Trusting
+    // disk alone would expose that orphaned checkout; requiring status = 'ready'
+    // (and that the directory is actually present) does not.
+    let repo_ready = matches!(
+        db::get_paper_code(&app.pool, &paper.id).await,
+        Ok(Some(c)) if c.status == "ready"
+    );
+    let has_repo = repo_ready
+        && tokio::fs::try_exists(ws.join("repo"))
+            .await
+            .unwrap_or(false);
     let treq = TurnRequest {
         backend: backend.id.clone(),
         model: backend.model.clone(),
