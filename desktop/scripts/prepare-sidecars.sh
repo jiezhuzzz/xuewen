@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
-NODE_VERSION="${NODE_VERSION:-22.17.0}"
+NODE_VERSION="${NODE_VERSION:-24.18.0}"
 mkdir -p binaries/libs
 
 echo "==> node v${NODE_VERSION} (${TRIPLE})"

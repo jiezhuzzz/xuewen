@@ -16,10 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned to the toolchain the Nix dev shell provides, so fmt/clippy are
-      # reproducible and don't drift as `stable` advances (a newer clippy can
-      # flag lints the pinned toolchain doesn't). Bump deliberately.
-      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -31,7 +28,7 @@ jobs:
       # frontend/dist/index.html, so no frontend build is needed here.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Install poppler-utils (pdftotext)
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
 
@@ -51,7 +48,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Install deps
         run: npm --prefix frontend ci
       - name: Type-check (svelte-check)
