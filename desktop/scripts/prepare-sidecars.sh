@@ -22,10 +22,17 @@ cp "/tmp/node-v${NODE_VERSION}-darwin-arm64/bin/node" "binaries/node-${TRIPLE}"
 echo "==> pdftotext from $(brew --prefix poppler)"
 cp "$(brew --prefix poppler)/bin/pdftotext" "binaries/pdftotext-${TRIPLE}"
 chmod u+w "binaries/pdftotext-${TRIPLE}"
+# -s gives dylibbundler the keg-only lib dirs to resolve deps like
+# libpoppler.NNN.dylib; without them it prompts interactively ("does not
+# exist. Try again") and, with no stdin on CI, loops forever. </dev/null makes
+# any remaining prompt hit EOF and fail fast instead of hanging.
 dylibbundler -of -b \
   -x "binaries/pdftotext-${TRIPLE}" \
   -d binaries/libs \
-  -p '@executable_path/../Resources/libs/'
+  -p '@executable_path/../Resources/libs/' \
+  -s "$(brew --prefix poppler)/lib" \
+  -s "$(brew --prefix)/lib" \
+  </dev/null
 
 echo "==> ad-hoc re-sign"
 codesign --force -s - "binaries/node-${TRIPLE}" "binaries/pdftotext-${TRIPLE}"
