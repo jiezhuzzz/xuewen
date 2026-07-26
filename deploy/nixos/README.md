@@ -25,11 +25,9 @@ runs `pdftotext` (poppler) in the unit's `PATH`, and applies systemd hardening.
             settings.ai = {
               api_key_env = "OPENAI_API_KEY";
               embedding = { model = "text-embedding-3-small"; dims = 1536; };
-              chat.models = [{
-                label = "GPT-4o mini";
-                model = "gpt-4o-mini";
-                # reasoning_effort = "high";  # reasoning models only
-              }];
+              summary = { };  # per-paper LLM summaries
+              # Paper chat / the Ask tab is Agent Ask — configure [ai.agent.*]
+              # separately (needs Node + agent-runner); see the main README.
             };
 
             # Secrets stay OUT of the Nix store (see below).

@@ -99,8 +99,8 @@ in
             api_key_env = "OPENAI_API_KEY";
             model = "gpt-4o-mini";
             embedding = { model = "text-embedding-3-small"; dims = 1536; };
-            chat.models = [{ label = "GPT-4o mini"; model = "gpt-4o-mini"; }];
             summary = { };
+            # Paper chat / the Ask tab is Agent Ask — set [ai.agent.*] separately.
           };
         }
       '';

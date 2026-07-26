@@ -144,7 +144,8 @@ database_url = "sqlite:./library.db"
 Optional sections enable the richer features:
 
 - `[ai.embedding]` + `[search]` with `qdrant_url` — semantic search.
-- `[[ai.chat.models]]` — paper chat (one entry per selectable model).
+- `[ai.agent.*]` — the reader's Ask tab / paper chat (a tool-using agent; see
+  [Agent Ask setup](#agent-ask-setup)).
 - `[daily]` — daily arXiv recommendations.
 - `[proxy]` — institutional paywall access.
 
