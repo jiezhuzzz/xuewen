@@ -277,7 +277,7 @@ impl Fetcher {
         if !resp.status().is_success() {
             return Err(anyhow!("HTTP {} fetching {url}", resp.status()));
         }
-        let bytes = resp.bytes().await?.to_vec();
+        let bytes = read_body_capped(resp).await?;
         Ok(is_pdf(&bytes).then_some(bytes))
     }
 
@@ -317,7 +317,7 @@ impl Fetcher {
             if !status.is_success() {
                 return Err(anyhow!("HTTP {status} via proxy for {target_url}"));
             }
-            let bytes = resp.bytes().await?.to_vec();
+            let bytes = read_body_capped(resp).await?;
             return Ok(is_pdf(&bytes).then_some(bytes));
         }
         Err(anyhow!("too many redirects via proxy for {target_url}"))
@@ -336,6 +336,38 @@ impl Fetcher {
 /// Whether bytes begin with the PDF magic marker.
 fn is_pdf(bytes: &[u8]) -> bool {
     bytes.starts_with(b"%PDF")
+}
+
+/// Ceiling on a fetched document, matching the multipart upload limit
+/// (`DefaultBodyLimit`, web/mod.rs). URL imports otherwise buffer the whole
+/// response with no bound; a hostile or misconfigured server could stream an
+/// arbitrarily large body into memory.
+const MAX_FETCH_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Read a response body into memory, refusing anything over `MAX_FETCH_BYTES`.
+/// Rejects early on an oversized declared `Content-Length`, then enforces the
+/// same ceiling while streaming (the header can lie or be absent).
+async fn read_body_capped(mut resp: reqwest::Response) -> Result<Vec<u8>> {
+    let too_big = || {
+        anyhow!(
+            "document exceeds the {} MB import limit",
+            MAX_FETCH_BYTES / (1024 * 1024)
+        )
+    };
+    if resp
+        .content_length()
+        .is_some_and(|len| len > MAX_FETCH_BYTES)
+    {
+        return Err(too_big());
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if buf.len() as u64 + chunk.len() as u64 > MAX_FETCH_BYTES {
+            return Err(too_big());
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -381,6 +413,25 @@ mod fetch_tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn fetch_plain_rejects_oversized_body() {
+        let server = MockServer::start().await;
+        // set_body_bytes sets Content-Length to the true size, so this trips
+        // the early declared-length reject before any body is buffered.
+        let big = vec![b'x'; (MAX_FETCH_BYTES + 1) as usize];
+        Mock::given(method("GET"))
+            .and(path("/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(big))
+            .mount(&server)
+            .await;
+        let f = Fetcher::new(None).unwrap();
+        let err = f
+            .fetch_plain(&format!("{}/big", server.uri()))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("import limit"), "got: {err}");
     }
 
     #[tokio::test]
