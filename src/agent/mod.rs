@@ -81,6 +81,8 @@ pub fn workspace_dir(library_root: &Path, paper_id: &str) -> PathBuf {
 pub struct AgentService {
     pub backends: Vec<AgentBackend>,
     pub max_repo_mb: u64,
+    /// Extra repo-clone hosts permitted beyond the built-in forges.
+    pub clone_allowed_hosts: Vec<String>,
     runner: PathBuf,
     timeout: Duration,
 }
@@ -109,6 +111,7 @@ impl AgentService {
         Some(Arc::new(Self {
             backends,
             max_repo_mb: cfg.max_repo_mb,
+            clone_allowed_hosts: cfg.clone_allowed_hosts.clone(),
             runner: cfg
                 .runner
                 .clone()

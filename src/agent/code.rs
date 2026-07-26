@@ -2,22 +2,25 @@
 //! the agent workspace as `repo/`, pin the commit, and record the outcome
 //! in `paper_code`. Clones are local-only and never redistributed.
 
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use sqlx::SqlitePool;
 use tokio::process::Command;
 
-/// Endpoint-level guard. https only, no embedded credentials, and no
-/// loopback/private/link-local host — the endpoint may be reachable remotely
-/// (`--allow-remote`), so an unrestricted target would let a caller probe the
-/// server's internal network (SSRF). (Tests hand `run_clone` file:// URLs
-/// directly, below this gate.)
+/// Public git forges permitted as clone targets out of the box. Self-hosted
+/// forges are added via `[ai.agent].clone_allowed_hosts`.
+const DEFAULT_ALLOWED_HOSTS: &[&str] =
+    &["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"];
+
+/// Endpoint-level guard. https only, no embedded credentials, and the host must
+/// be on an **allowlist** (built-in forges plus `extra_hosts` from config).
 ///
-/// This blocks host *literals* only; a public name that resolves to a private
-/// address (DNS rebinding) is not caught here — git does its own resolution, so
-/// closing that would need a custom transport. Documented, not overlooked.
-pub fn validate_repo_url(url: &str) -> Result<(), String> {
+/// An allowlist — rather than a block-list of internal ranges — is what closes
+/// clone SSRF here: the endpoint may be reachable remotely (`--allow-remote`),
+/// and `git` resolves DNS itself, so a block-list plus name resolution is
+/// bypassable via DNS rebinding. Only letting known hosts through sidesteps that
+/// entirely. (Tests hand `run_clone` file:// URLs directly, below this gate.)
+pub fn validate_repo_url(url: &str, extra_hosts: &[String]) -> Result<(), String> {
     let u = url.trim();
     if u.len() > 2000 {
         return Err("the repo URL is implausibly long".into());
@@ -32,8 +35,13 @@ pub fn validate_repo_url(url: &str) -> Result<(), String> {
     if authority.contains('@') {
         return Err("the repo URL must not carry credentials".into());
     }
-    if host_is_internal(host_of(authority)) {
-        return Err("the repo URL host is not permitted (internal address)".into());
+    let host = host_of(authority)
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if !host_is_allowed(&host, extra_hosts) {
+        return Err(format!(
+            "the repo host '{host}' is not allowed; add it to [ai.agent].clone_allowed_hosts"
+        ));
     }
     Ok(())
 }
@@ -48,44 +56,15 @@ fn host_of(authority: &str) -> &str {
     }
 }
 
-/// Whether a host literal points at the server itself or a private network.
-fn host_is_internal(host: &str) -> bool {
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return ip_is_internal(ip);
-    }
-    // Not an IP literal → a name. Block obvious internal names; anything with a
-    // public-looking dotted domain is allowed through.
-    let h = host.trim_end_matches('.').to_ascii_lowercase();
-    h == "localhost"
-        || h.ends_with(".localhost")
-        || h.ends_with(".local")
-        || h.ends_with(".internal")
-        || h.ends_with(".lan")
-        || h.ends_with(".home.arpa")
-        || !h.contains('.') // bare single-label host (e.g. `gitea`)
-}
-
-fn ip_is_internal(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()        // 127.0.0.0/8
-                || v4.is_private()  // 10/8, 172.16/12, 192.168/16
-                || v4.is_link_local() // 169.254/16 (incl. cloud metadata .169.254)
-                || v4.is_unspecified() // 0.0.0.0
-                || v4.is_broadcast()
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 unique-local
-                || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
-                || v6.to_ipv4_mapped().is_some_and(ip_is_internal_v4)
-        }
-    }
-}
-
-fn ip_is_internal_v4(v4: std::net::Ipv4Addr) -> bool {
-    ip_is_internal(IpAddr::V4(v4))
+/// Whether `host` equals, or is a subdomain of, any allowed host (built-in
+/// forges plus the configured extras). `host` is assumed already lowercased.
+fn host_is_allowed(host: &str, extra_hosts: &[String]) -> bool {
+    DEFAULT_ALLOWED_HOSTS
+        .iter()
+        .map(|s| s.to_string())
+        .chain(extra_hosts.iter().map(|s| s.trim().to_ascii_lowercase()))
+        .filter(|allowed| !allowed.is_empty())
+        .any(|allowed| host == allowed || host.ends_with(&format!(".{allowed}")))
 }
 
 /// Fire-and-forget background clone; the row is already 'cloning'. `clone_gen`
@@ -256,37 +235,48 @@ mod tests {
 
     #[test]
     fn validate_rejects_non_https_and_credentials() {
-        assert!(validate_repo_url("https://github.com/x/y").is_ok());
-        assert!(validate_repo_url("http://github.com/x/y").is_err());
-        assert!(validate_repo_url("git@github.com:x/y.git").is_err());
-        assert!(validate_repo_url("https://user:pw@github.com/x/y").is_err());
-        assert!(validate_repo_url("file:///etc").is_err());
+        let none: &[String] = &[];
+        assert!(validate_repo_url("https://github.com/x/y", none).is_ok());
+        assert!(validate_repo_url("http://github.com/x/y", none).is_err());
+        assert!(validate_repo_url("git@github.com:x/y.git", none).is_err());
+        assert!(validate_repo_url("https://user:pw@github.com/x/y", none).is_err());
+        assert!(validate_repo_url("file:///etc", none).is_err());
     }
 
     #[test]
-    fn validate_rejects_internal_hosts_ssrf() {
-        // Public hosts pass, with or without a port.
-        assert!(validate_repo_url("https://github.com/x/y").is_ok());
-        assert!(validate_repo_url("https://gitlab.example.com:8443/x/y").is_ok());
-        // Loopback / private / link-local literals are refused.
+    fn validate_allowlist_admits_forges_and_rejects_the_rest_ssrf() {
+        let none: &[String] = &[];
+        // Built-in public forges (and their subdomains) pass, port tolerated.
+        for u in [
+            "https://github.com/x/y",
+            "https://gist.github.com/x/y",
+            "https://gitlab.com/x/y.git",
+            "https://bitbucket.org/x/y",
+            "https://codeberg.org/x/y",
+            "https://github.com:443/x/y",
+        ] {
+            assert!(validate_repo_url(u, none).is_ok(), "should allow {u}");
+        }
+        // Everything off the allowlist is refused — including internal targets
+        // an SSRF probe would reach, and arbitrary public hosts.
         for u in [
             "https://localhost/x/y",
             "https://127.0.0.1/x/y",
-            "https://127.9.9.9/x/y",
-            "https://10.0.0.5/x/y",
-            "https://192.168.1.1/x/y",
-            "https://172.16.0.1/x/y",
             "https://169.254.169.254/latest/meta-data", // cloud metadata
             "https://[::1]/x/y",
-            "https://[fe80::1]/x/y",
-            "https://[fc00::1]/x/y",
-            "https://0.0.0.0/x/y",
-            "https://gitea/x/y",        // bare single-label host
-            "https://build.internal/x", // internal suffix
+            "https://gitea/x/y",
             "https://nas.local/x/y",
+            "https://evil.example.com/x/y",
+            "https://notgithub.com/x/y",
+            "https://github.com.evil.com/x/y", // suffix-spoof attempt
         ] {
-            assert!(validate_repo_url(u).is_err(), "should reject {u}");
+            assert!(validate_repo_url(u, none).is_err(), "should reject {u}");
         }
+        // A configured self-hosted forge (and its subdomains) is admitted.
+        let extra = vec!["git.example.com".to_string()];
+        assert!(validate_repo_url("https://git.example.com/x/y", &extra).is_ok());
+        assert!(validate_repo_url("https://ci.git.example.com/x/y", &extra).is_ok());
+        assert!(validate_repo_url("https://git.example.com.evil.com/x/y", &extra).is_err());
     }
 
     /// Happy path against a local repo — git accepts file:// URLs for

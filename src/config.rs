@@ -217,6 +217,10 @@ pub struct AgentConfig {
     /// Runner script override (default: agent-runner/src/runner.mjs,
     /// resolved from the server's working directory).
     pub runner: Option<PathBuf>,
+    /// Extra hosts (beyond the built-in public forges) permitted as repo-clone
+    /// targets — e.g. a self-hosted `git.example.com`. A host matches when it
+    /// equals an entry or is a subdomain of it. Guards against clone SSRF.
+    pub clone_allowed_hosts: Vec<String>,
 }
 
 impl Default for AgentConfig {
@@ -227,6 +231,7 @@ impl Default for AgentConfig {
             max_repo_mb: 500,
             timeout_secs: 300,
             runner: None,
+            clone_allowed_hosts: Vec::new(),
         }
     }
 }

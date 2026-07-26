@@ -717,7 +717,8 @@ async fn main() -> Result<()> {
                 CodeCmd::Set { paper, url } => {
                     let paper = db::find_one(&pool, &paper).await?;
                     let paper_id = paper.id.clone();
-                    xuewen::agent::code::validate_repo_url(&url).map_err(|e| anyhow::anyhow!(e))?;
+                    xuewen::agent::code::validate_repo_url(&url, &cfg.ai.agent.clone_allowed_hosts)
+                        .map_err(|e| anyhow::anyhow!(e))?;
                     let clone_gen =
                         xuewen::db::upsert_paper_code_cloning(&pool, &paper_id, url.trim()).await?;
                     // CLI clones inline so the outcome prints immediately.

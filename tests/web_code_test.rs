@@ -13,6 +13,9 @@ fn stub_agent() -> std::sync::Arc<AgentService> {
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/stub_runner.mjs"
         ))),
+        // `invalid.example` (RFC 2606) is allowlisted so the accept-then-fail
+        // path is reachable; it never resolves, so the clone fails offline.
+        clone_allowed_hosts: vec!["invalid.example".to_string()],
         ..AgentConfig::default()
     })
     .unwrap()

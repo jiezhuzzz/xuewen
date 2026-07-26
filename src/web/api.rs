@@ -1269,7 +1269,9 @@ pub async fn set_paper_code(
             return internal_error();
         }
     };
-    if let Err(msg) = crate::agent::code::validate_repo_url(&body.repo_url) {
+    if let Err(msg) =
+        crate::agent::code::validate_repo_url(&body.repo_url, &agent.clone_allowed_hosts)
+    {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({"error": msg})),
