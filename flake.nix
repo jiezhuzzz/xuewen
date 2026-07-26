@@ -17,7 +17,7 @@
       perSystemPackages = forAll (pkgs: rec {
         frontend = pkgs.buildNpmPackage {
           pname = "xuewen-frontend";
-          version = "0.1.1";
+          version = "0.1.2";
           src = ./frontend;
           npmDepsHash = "sha256-enRlx7yii4sBjjjB6APvqREmu3fSQrk05UlbbXnf2e0=";
           # `npm run build` is the default buildPhase; run vitest before install.
@@ -35,7 +35,7 @@
         };
         xuewen = pkgs.rustPlatform.buildRustPackage {
           pname = "xuewen";
-          version = "0.1.1";
+          version = "0.1.2";
           # Exclude the frontend sources (dist comes from the `frontend`
           # package), docs, and deploy manifests so editing them never
           # rebuilds the backend.
