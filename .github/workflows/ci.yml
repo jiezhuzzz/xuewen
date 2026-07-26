@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # pdftotext (poppler) and node back the ingest/pdf and agent stub-runner
+      # tests; git is preinstalled on the runner. build.rs writes a placeholder
+      # frontend/dist/index.html, so no frontend build is needed here.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install poppler-utils (pdftotext)
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      # Plain `cargo test` builds only the root package; the desktop crate needs
+      # macOS frameworks + sidecars and is intentionally excluded here.
+      - name: Test
+        run: cargo test
+
+  frontend:
+    name: Frontend (check, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install deps
+        run: npm --prefix frontend ci
+      - name: Type-check (svelte-check)
+        run: npm --prefix frontend run check
+      - name: Test (vitest)
+        run: npm --prefix frontend test
