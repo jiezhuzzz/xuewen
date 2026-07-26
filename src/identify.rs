@@ -64,12 +64,9 @@ pub fn guess_title(text: &str) -> Option<String> {
     // the join branch needs to pull a second line from the same iterator.
     let mut lines = text.lines();
     loop {
-        let first = match lines.next() {
-            Some(line) => match substantive(line) {
-                Some(t) => t,
-                None => continue,
-            },
-            None => return None,
+        let line = lines.next()?;
+        let Some(first) = substantive(line) else {
+            continue;
         };
         if ends_mid_phrase(first) {
             if let Some(next) = lines.next().and_then(substantive) {
