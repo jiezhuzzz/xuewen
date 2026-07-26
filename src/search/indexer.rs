@@ -168,21 +168,33 @@ mod tests {
     use super::*;
     use crate::models::{Authors, Paper, PaperMeta, PaperStatus};
     use crate::search::{embedder, fts, store, vector, SearchService};
-    use printpdf::{BuiltinFont, Mm, PdfDocument};
+    use printpdf::*;
     use serde_json::json;
-    use std::io::BufWriter;
     use std::path::Path;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn write_pdf(path: &Path, line: &str) {
-        let (doc, page1, layer1) = PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
-        let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-        doc.get_page(page1)
-            .get_layer(layer1)
-            .use_text(line, 12.0, Mm(15.0), Mm(280.0), &font);
-        doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap()))
-            .unwrap();
+        let mut doc = PdfDocument::new("t");
+        let ops = vec![
+            Op::StartTextSection,
+            Op::SetFont {
+                font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+                size: Pt(12.0),
+            },
+            Op::SetTextCursor {
+                pos: Point::new(Mm(15.0), Mm(280.0)),
+            },
+            Op::ShowText {
+                items: vec![TextItem::Text(line.to_string())],
+            },
+            Op::EndTextSection,
+        ];
+        let page = PdfPage::new(Mm(210.0), Mm(297.0), ops);
+        let bytes = doc
+            .with_pages(vec![page])
+            .save(&PdfSaveOptions::default(), &mut Vec::new());
+        std::fs::write(path, bytes).unwrap();
     }
 
     struct Fixture {

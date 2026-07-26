@@ -138,20 +138,32 @@ pub async fn run(svc: Arc<SummaryService>, tick: Duration) {
 mod tests {
     use super::*;
     use crate::models::{Authors, Paper, PaperMeta, PaperStatus};
-    use printpdf::{BuiltinFont, Mm, PdfDocument};
+    use printpdf::*;
     use serde_json::json;
-    use std::io::BufWriter;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn write_pdf(path: &std::path::Path, line: &str) {
-        let (doc, p, l) = PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
-        let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-        doc.get_page(p)
-            .get_layer(l)
-            .use_text(line, 12.0, Mm(15.0), Mm(280.0), &font);
-        doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap()))
-            .unwrap();
+        let mut doc = PdfDocument::new("t");
+        let ops = vec![
+            Op::StartTextSection,
+            Op::SetFont {
+                font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+                size: Pt(12.0),
+            },
+            Op::SetTextCursor {
+                pos: Point::new(Mm(15.0), Mm(280.0)),
+            },
+            Op::ShowText {
+                items: vec![TextItem::Text(line.to_string())],
+            },
+            Op::EndTextSection,
+        ];
+        let page = PdfPage::new(Mm(210.0), Mm(297.0), ops);
+        let bytes = doc
+            .with_pages(vec![page])
+            .save(&PdfSaveOptions::default(), &mut Vec::new());
+        std::fs::write(path, bytes).unwrap();
     }
 
     fn chat_reply(text: &str) -> serde_json::Value {

@@ -212,7 +212,10 @@ impl FtsIndex {
         let (query, _errors) = parser.parse_query_lenient(q);
 
         let searcher = self.reader.searcher();
-        let top = searcher.search(&query, &TopDocs::with_limit(limit))?;
+        // tantivy 0.26: TopDocs no longer implements Collector directly; the
+        // ordering must be chosen explicitly (`.order_by_score()`), which
+        // yields the same `(Score, DocAddress)` fruit as before.
+        let top = searcher.search(&query, &TopDocs::with_limit(limit).order_by_score())?;
         let mut out = Vec::with_capacity(top.len());
         for (score, addr) in top {
             let doc: TantivyDocument = searcher.doc(addr)?;

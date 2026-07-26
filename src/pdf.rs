@@ -58,34 +58,41 @@ pub fn repair_smallcaps(text: &str, title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use printpdf::{BuiltinFont, Mm, PdfDocument};
-    use std::fs::File;
-    use std::io::BufWriter;
+    use printpdf::*;
+
+    /// A single-page PDF page carrying one Helvetica line near the top.
+    fn text_page(line: &str) -> PdfPage {
+        let ops = vec![
+            Op::StartTextSection,
+            Op::SetFont {
+                font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+                size: Pt(12.0),
+            },
+            Op::SetTextCursor {
+                pos: Point::new(Mm(15.0), Mm(280.0)),
+            },
+            Op::ShowText {
+                items: vec![TextItem::Text(line.to_string())],
+            },
+            Op::EndTextSection,
+        ];
+        PdfPage::new(Mm(210.0), Mm(297.0), ops)
+    }
 
     fn write_pdf(path: &Path, line: &str) {
-        let (doc, page1, layer1) = PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
-        let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-        doc.get_page(page1)
-            .get_layer(layer1)
-            .use_text(line, 12.0, Mm(15.0), Mm(280.0), &font);
-        doc.save(&mut BufWriter::new(File::create(path).unwrap()))
-            .unwrap();
+        let mut doc = PdfDocument::new("t");
+        let bytes = doc
+            .with_pages(vec![text_page(line)])
+            .save(&PdfSaveOptions::default(), &mut Vec::new());
+        std::fs::write(path, bytes).unwrap();
     }
 
     fn write_two_page_pdf(path: &Path, line1: &str, line2: &str) {
-        use printpdf::{BuiltinFont, Mm, PdfDocument};
-        use std::io::BufWriter;
-        let (doc, page1, layer1) = PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
-        let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-        doc.get_page(page1)
-            .get_layer(layer1)
-            .use_text(line1, 12.0, Mm(15.0), Mm(280.0), &font);
-        let (page2, layer2) = doc.add_page(Mm(210.0), Mm(297.0), "L2");
-        doc.get_page(page2)
-            .get_layer(layer2)
-            .use_text(line2, 12.0, Mm(15.0), Mm(280.0), &font);
-        doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap()))
-            .unwrap();
+        let mut doc = PdfDocument::new("t");
+        let bytes = doc
+            .with_pages(vec![text_page(line1), text_page(line2)])
+            .save(&PdfSaveOptions::default(), &mut Vec::new());
+        std::fs::write(path, bytes).unwrap();
     }
 
     #[test]

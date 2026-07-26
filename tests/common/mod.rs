@@ -2,9 +2,7 @@
 // helper used by only some binaries reads as dead code in the others.
 #![allow(dead_code)]
 
-use printpdf::{BuiltinFont, Mm, PdfDocument};
-use std::fs::File;
-use std::io::BufWriter;
+use printpdf::*;
 use std::path::{Path, PathBuf};
 
 use xuewen::db;
@@ -13,16 +11,32 @@ use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
 /// Write a one-page PDF whose lines are `lines`, top-to-bottom.
 /// pdftotext reliably extracts built-in Helvetica text.
 pub fn write_test_pdf(path: &Path, lines: &[&str]) {
-    let (doc, page1, layer1) = PdfDocument::new("test", Mm(210.0), Mm(297.0), "Layer 1");
-    let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-    let layer = doc.get_page(page1).get_layer(layer1);
-    let mut y = 280.0;
-    for line in lines {
-        layer.use_text(*line, 12.0, Mm(15.0), Mm(y), &font);
-        y -= 8.0;
+    let mut doc = PdfDocument::new("test");
+    let mut ops = vec![
+        Op::StartTextSection,
+        Op::SetFont {
+            font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+            size: Pt(12.0),
+        },
+        Op::SetLineHeight { lh: Pt(18.0) },
+        Op::SetTextCursor {
+            pos: Point::new(Mm(15.0), Mm(280.0)),
+        },
+    ];
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            ops.push(Op::AddLineBreak);
+        }
+        ops.push(Op::ShowText {
+            items: vec![TextItem::Text((*line).to_string())],
+        });
     }
-    doc.save(&mut BufWriter::new(File::create(path).unwrap()))
-        .unwrap();
+    ops.push(Op::EndTextSection);
+    let page = PdfPage::new(Mm(210.0), Mm(297.0), ops);
+    let bytes = doc
+        .with_pages(vec![page])
+        .save(&PdfSaveOptions::default(), &mut Vec::new());
+    std::fs::write(path, bytes).unwrap();
 }
 
 /// A migrated pool plus a library root, seeded with one active, resolved

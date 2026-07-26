@@ -1,7 +1,6 @@
 //! End-to-end: import a PDF -> background sweep -> find it by a body phrase.
 
-use printpdf::{BuiltinFont, Mm, PdfDocument};
-use std::io::BufWriter;
+use printpdf::*;
 use std::path::Path;
 
 use xuewen::pipeline::{IngestCtx, Libraries};
@@ -12,13 +11,31 @@ use xuewen::search::{fts, indexer, vector, SearchRequest, SearchService};
 /// ingest heuristics take the first line as the title, the search phrase
 /// still only exists in the body — so the snippet's field must be "body".
 fn write_pdf(path: &Path, title_line: &str, body_line: &str) {
-    let (doc, page1, layer1) = PdfDocument::new("t", Mm(210.0), Mm(297.0), "L1");
-    let font = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-    let layer = doc.get_page(page1).get_layer(layer1);
-    layer.use_text(title_line, 14.0, Mm(15.0), Mm(280.0), &font);
-    layer.use_text(body_line, 11.0, Mm(15.0), Mm(250.0), &font);
-    doc.save(&mut BufWriter::new(std::fs::File::create(path).unwrap()))
-        .unwrap();
+    let mut doc = PdfDocument::new("t");
+    let ops = vec![
+        Op::StartTextSection,
+        Op::SetFont {
+            font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+            size: Pt(14.0),
+        },
+        Op::SetLineHeight { lh: Pt(30.0) },
+        Op::SetTextCursor {
+            pos: Point::new(Mm(15.0), Mm(280.0)),
+        },
+        Op::ShowText {
+            items: vec![TextItem::Text(title_line.to_string())],
+        },
+        Op::AddLineBreak,
+        Op::ShowText {
+            items: vec![TextItem::Text(body_line.to_string())],
+        },
+        Op::EndTextSection,
+    ];
+    let page = PdfPage::new(Mm(210.0), Mm(297.0), ops);
+    let bytes = doc
+        .with_pages(vec![page])
+        .save(&PdfSaveOptions::default(), &mut Vec::new());
+    std::fs::write(path, bytes).unwrap();
 }
 
 // Upstreams refuse instantly -> the paper lands as needs_review, offline.
