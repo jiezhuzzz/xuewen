@@ -294,7 +294,7 @@ mod tests {
         let first = stream.next().await.unwrap().unwrap();
         assert_eq!(first, "He");
         let second = stream.next().await.unwrap();
-        let err = second.err().expect("error frame must surface as Err");
+        let err = second.expect_err("error frame must surface as Err");
         assert!(err.to_string().contains("rate limited"), "got: {err}");
     }
 }

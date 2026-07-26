@@ -566,7 +566,7 @@ model = "gpt-4o-mini"
         let cfg = Config::load(f.path()).unwrap();
         let s = cfg.ai.summary.as_ref().expect("summary section present");
         assert_eq!(s.model.as_deref(), Some("gpt-4o-mini"));
-        let r = cfg.ai.resolve(&s);
+        let r = cfg.ai.resolve(s);
         assert_eq!(r.base_url, "https://api.openai.com/v1");
         assert_eq!(r.model.as_deref(), Some("gpt-4o-mini"));
     }

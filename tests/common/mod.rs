@@ -1,3 +1,7 @@
+// Shared across integration-test binaries; each includes `mod common;`, so a
+// helper used by only some binaries reads as dead code in the others.
+#![allow(dead_code)]
+
 use printpdf::{BuiltinFont, Mm, PdfDocument};
 use std::fs::File;
 use std::io::BufWriter;
