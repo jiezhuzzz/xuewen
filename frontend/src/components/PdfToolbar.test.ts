@@ -12,11 +12,18 @@ import userEvent from '@testing-library/user-event';
 import PdfToolbar from './PdfToolbar.svelte';
 import { pdfAppearance } from '../lib/state.svelte';
 
+// Mirrors the PillHide interface (lib/pillHide.svelte.ts) the toolbar binds to;
+// the component invokes pillEnter/pillLeave/focusIn/focusOut on pointer/focus
+// events, so all must be present or the events throw.
 const pill = {
   visible: true,
+  setHost: () => {},
   setExtraHold: () => {},
-  onPointerMove: () => {},
-  onPointerLeave: () => {},
+  onWindowMove: () => {},
+  pillEnter: () => {},
+  pillLeave: () => {},
+  focusIn: () => {},
+  focusOut: () => {},
 } as never;
 
 describe('PdfToolbar', () => {
