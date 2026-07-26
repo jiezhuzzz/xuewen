@@ -776,7 +776,12 @@ mod tests {
     }
 
     async fn test_pool_with_paper(paper_id: &str) -> SqlitePool {
-        let (_dir, pool) = temp_pool().await;
+        let (dir, pool) = temp_pool().await;
+        // Returning only the pool would drop `dir` here, deleting the temp
+        // directory out from under the SQLite file; a later connection then
+        // fails with "unable to open database file" (intermittently, as pool
+        // connections open lazily). Persist the dir for the pool's lifetime.
+        std::mem::forget(dir);
         let p = sample_paper(paper_id, "hash");
         insert_paper(&pool, &p).await.unwrap();
         pool
