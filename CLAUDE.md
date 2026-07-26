@@ -83,7 +83,7 @@ The reader is hand-rolled from EmbedPDF's primitives (not the ready-made `@embed
 
 ## Deployment
 
-NixOS module (`deploy/nixos/`, `nixosModules.default`) and an OCI image built with `nix2container` (`deploy/k8s/`). See `README.md` for the container/registry details.
+NixOS module (`deploy/nixos/`, `nixosModules.default`), a Home Manager module (`deploy/home-manager/`, `homeManagerModules.default`; per-user `systemd --user` service, Linux only), and an OCI image built with `nix2container` (`deploy/k8s/`). See `README.md` for the container/registry details.
 
 ## Agent skills
 

@@ -81,6 +81,17 @@
           lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.xuewen;
       };
 
+      # Home Manager counterparts: `homeManagerModules.default` fills
+      # `services.xuewen.package` from this flake's build; `homeManagerModules.xuewen`
+      # is the bare module (set `package` yourself). Linux only — the module runs a
+      # `systemd --user` service.
+      homeManagerModules.xuewen = ./deploy/home-manager/module.nix;
+      homeManagerModules.default = { pkgs, lib, ... }: {
+        imports = [ self.homeManagerModules.xuewen ];
+        services.xuewen.package =
+          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.xuewen;
+      };
+
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           packages = with pkgs; [

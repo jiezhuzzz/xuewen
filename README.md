@@ -218,6 +218,9 @@ Run `xuewen --help` (or `xuewen <command> --help`) for the full flags.
 
 - **NixOS module** — `nixosModules.default` provides a hardened systemd service.
   See [`deploy/nixos/README.md`](deploy/nixos/README.md).
+- **Home Manager module** — `homeManagerModules.default` runs a per-user
+  `systemd --user` service (Linux only).
+  See [`deploy/home-manager/README.md`](deploy/home-manager/README.md).
 - **Container image** — a minimal OCI image is built with `nix2container`; a
   Kubernetes example lives in [`deploy/k8s/`](deploy/k8s/).
 
