@@ -1276,17 +1276,21 @@ pub async fn set_paper_code(
         )
             .into_response();
     }
-    if let Err(e) = db::upsert_paper_code_cloning(&app.pool, &paper.id, body.repo_url.trim()).await
-    {
-        tracing::error!("paper_code upsert: {e}");
-        return internal_error();
-    }
+    let clone_gen =
+        match db::upsert_paper_code_cloning(&app.pool, &paper.id, body.repo_url.trim()).await {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::error!("paper_code upsert: {e}");
+                return internal_error();
+            }
+        };
     crate::agent::code::spawn_clone(
         app.pool.clone(),
         app.library_root.clone(),
         paper.id.clone(),
         body.repo_url.trim().to_string(),
         agent.max_repo_mb,
+        clone_gen,
     );
     match db::get_paper_code(&app.pool, &paper.id).await {
         Ok(code) => (

@@ -718,7 +718,8 @@ async fn main() -> Result<()> {
                     let paper = db::find_one(&pool, &paper).await?;
                     let paper_id = paper.id.clone();
                     xuewen::agent::code::validate_repo_url(&url).map_err(|e| anyhow::anyhow!(e))?;
-                    xuewen::db::upsert_paper_code_cloning(&pool, &paper_id, url.trim()).await?;
+                    let clone_gen =
+                        xuewen::db::upsert_paper_code_cloning(&pool, &paper_id, url.trim()).await?;
                     // CLI clones inline so the outcome prints immediately.
                     xuewen::agent::code::run_clone(
                         pool.clone(),
@@ -726,6 +727,7 @@ async fn main() -> Result<()> {
                         paper_id.clone(),
                         url.trim().to_string(),
                         cfg.ai.agent.max_repo_mb,
+                        clone_gen,
                     )
                     .await;
                     match xuewen::db::get_paper_code(&pool, &paper_id).await? {
