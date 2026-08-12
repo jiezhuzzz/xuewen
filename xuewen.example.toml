@@ -55,7 +55,7 @@ database_url  = "sqlite:./library.db"
 # [ai.agent]
 # max_repo_mb = 500      # attached-repo clone size guard
 # timeout_secs = 300     # per-turn wall clock
-# runner = "agent-runner/src/runner.mjs"  # default; resolved (with ~ expansion) relative to the server's working directory, not the binary's location
+# runner = "agent-runner/src/runner.mjs"  # default; resolved (with ~ expansion) relative to the server's working directory, not the binary's location. The NixOS / Home Manager modules override this with their packaged copy in the Nix store.
 # Repo attach (PUT /api/papers/{id}/code) only clones from an allowlist:
 # github.com, gitlab.com, bitbucket.org, codeberg.org are built in. Add
 # self-hosted forges here (a host matches itself and its subdomains). This

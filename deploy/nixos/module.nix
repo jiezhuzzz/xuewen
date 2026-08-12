@@ -15,6 +15,13 @@ let
     library_root = "${cfg.dataDir}/library";
     database_url = "sqlite:${cfg.dataDir}/library.db";
     search.index_dir = "${cfg.dataDir}/search-index";
+  }
+  # The backend resolves `[ai.agent].runner` against its working directory,
+  # whose default (`agent-runner/src/runner.mjs`) only exists in a dev
+  # checkout. Point it at the store copy so Agent Ask needs no unpackaged
+  # files under dataDir.
+  // lib.optionalAttrs (agentConfigured && cfg.agentRunnerPackage != null) {
+    ai.agent.runner = "${cfg.agentRunnerPackage}/lib/xuewen/agent-runner/src/runner.mjs";
   };
   configFile = tomlFormat.generate "xuewen.toml"
     (lib.recursiveUpdate derivedSettings cfg.settings);
@@ -38,6 +45,19 @@ in
       description = ''
         The xuewen package to run. `nixosModules.default` sets this to the
         flake's build; with the bare `nixosModules.xuewen` you must set it.
+      '';
+    };
+
+    agentRunnerPackage = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      defaultText = lib.literalMD "the flake's `agent-runner` package (via `nixosModules.default`)";
+      description = ''
+        The Node runner behind Agent Ask (`[ai.agent.*]`), used to default
+        `settings.ai.agent.runner`. `nixosModules.default` sets this to the
+        flake's build; with the bare `nixosModules.xuewen`, leaving it `null`
+        means you must set `settings.ai.agent.runner` yourself. Ignored when
+        `[ai.agent.*]` is absent from {option}`services.xuewen.settings`.
       '';
     };
 
@@ -154,14 +174,21 @@ in
       # pdftotext (poppler-utils) is required for PDF text extraction, which the
       # ingest pipeline and paper chat both depend on. git backs the repo-attach
       # endpoint (PUT /api/papers/{id}/code shallow-clones into the agent
-      # workspace). node is only needed when [ai.agent.*] is configured.
+      # workspace). node and ripgrep are only needed when [ai.agent.*] is
+      # configured.
       path = [ pkgs.poppler-utils pkgs.git ]
-        ++ lib.optional agentConfigured pkgs.nodejs;
+        ++ lib.optionals agentConfigured [ pkgs.nodejs pkgs.ripgrep ];
       environment = {
         RUST_LOG = lib.mkDefault "info";
         # reqwest talks HTTPS to arXiv/Crossref/OpenAI; give it a CA bundle
         # under the hardened (ProtectSystem=strict) sandbox.
         SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+      } // lib.optionalAttrs agentConfigured {
+        # Claude Code's CLI otherwise extracts its own ripgrep out of the Bun
+        # binary into a temp dir and execs it — unpatched, so it finds no ELF
+        # interpreter on a NixOS host and the Grep tool dies. Same fix nixpkgs'
+        # claude-code applies: turn it off and put a real ripgrep on PATH.
+        USE_BUILTIN_RIPGREP = "0";
       };
       serviceConfig = {
         ExecStart = lib.escapeShellArgs ([

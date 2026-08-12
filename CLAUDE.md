@@ -85,6 +85,8 @@ The reader is hand-rolled from EmbedPDF's primitives (not the ready-made `@embed
 
 NixOS module (`deploy/nixos/`, `nixosModules.default`), a Home Manager module (`deploy/home-manager/`, `homeManagerModules.default`; per-user `systemd --user` service, Linux only), and an OCI image built with `nix2container` (`deploy/k8s/`). See `README.md` for the container/registry details.
 
+Agent Ask needs its Node runner *and* that runner's `node_modules` at runtime, so — unlike the frontend, which `rust-embed` bakes into the binary — it can't ride along in the `xuewen` derivation. The flake builds it separately (`packages.agent-runner`, a `buildNpmPackage` installing to `$out/lib/xuewen/agent-runner`), and both modules default `settings.ai.agent.runner` to that store path via their `agentRunnerPackage` option, since the backend's own default (`agent-runner/src/runner.mjs`, relative to the working directory) only exists in a dev checkout. Each SDK vendors its CLI as a prebuilt native binary: Codex's are static-pie musl, but Claude Code's is glibc-dynamic, so the package runs `autoPatchelfHook` (with `dontStrip`, or the Bun runtime executes instead of the embedded program) and the modules set `USE_BUILTIN_RIPGREP=0` with a real `ripgrep` on `PATH`. The OCI image bundles none of this. The x86_64-linux VM check enables `[ai.agent.claude_code]` and asserts the startup preflight logs no `agent ask:` warning, which is what keeps that wiring honest.
+
 ## Agent skills
 
 ### Issue tracker

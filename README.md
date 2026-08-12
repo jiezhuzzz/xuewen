@@ -162,7 +162,8 @@ repository, inside a read-only per-paper workspace.
 
 1. **Node ≥ 20** on the machine running `xuewen serve`.
 2. Install the runner's own dependencies once: `npm --prefix agent-runner install`
-   (separate from the frontend's `npm --prefix frontend install`).
+   (separate from the frontend's `npm --prefix frontend install`). The NixOS
+   and Home Manager modules do this for you — see [Deployment](#deployment).
 3. Enable one or both backends in `xuewen.toml`:
    ```toml
    [ai.agent]
@@ -225,14 +226,15 @@ Run `xuewen --help` (or `xuewen <command> --help`) for the full flags.
 - **Container image** — a minimal OCI image is built with `nix2container`; a
   Kubernetes example lives in [`deploy/k8s/`](deploy/k8s/).
 
-Neither the NixOS module nor the OCI image currently bundles Node.js or the
-`agent-runner/` directory into the deployed closure — both are pulled in for
-the frontend *build* only. To use Agent Ask in either deployment, make sure
-the runtime environment also has Node ≥ 20 on `PATH` and `agent-runner/`
-(with `npm --prefix agent-runner install` already run) relative to the
-server's working directory — see `[ai.agent].runner` in
-`xuewen.example.toml` to point at it explicitly if it isn't alongside the
-binary.
+The NixOS and Home Manager modules handle Agent Ask themselves: put an
+`[ai.agent.*]` section in `settings` and the unit gets Node ≥ 20 on its
+`PATH`, with `[ai.agent].runner` defaulted to a packaged `agent-runner`
+(npm dependencies and the CLI binaries those ship, all built into the
+store). Nothing needs installing under the data directory by hand.
+
+The OCI image still leaves it out — it bundles neither Node.js nor
+`agent-runner/`. To use Agent Ask there, mount both into the container and
+point `[ai.agent].runner` at the runner script; see `xuewen.example.toml`.
 
 ## Development
 

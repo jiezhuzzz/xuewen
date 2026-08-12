@@ -20,6 +20,13 @@ let
     library_root = "${cfg.dataDir}/library";
     database_url = "sqlite:${cfg.dataDir}/library.db";
     search.index_dir = "${cfg.dataDir}/search-index";
+  }
+  # The backend resolves `[ai.agent].runner` against its working directory,
+  # whose default (`agent-runner/src/runner.mjs`) only exists in a dev
+  # checkout. Point it at the store copy so Agent Ask needs no unpackaged
+  # files under dataDir.
+  // lib.optionalAttrs (agentConfigured && cfg.agentRunnerPackage != null) {
+    ai.agent.runner = "${cfg.agentRunnerPackage}/lib/xuewen/agent-runner/src/runner.mjs";
   };
   configFile = tomlFormat.generate "xuewen.toml"
     (lib.recursiveUpdate derivedSettings cfg.settings);
@@ -36,9 +43,10 @@ let
   # pdftotext (poppler-utils) is required for PDF text extraction, which the
   # ingest pipeline and paper chat both depend on. git backs the repo-attach
   # endpoint (PUT /api/papers/{id}/code shallow-clones into the agent
-  # workspace). node is only needed when [ai.agent.*] is configured.
+  # workspace). node and ripgrep are only needed when [ai.agent.*] is
+  # configured.
   runtimePath = lib.makeBinPath ([ pkgs.poppler-utils pkgs.git ]
-    ++ lib.optional agentConfigured pkgs.nodejs);
+    ++ lib.optionals agentConfigured [ pkgs.nodejs pkgs.ripgrep ]);
 in
 {
   options.services.xuewen = {
@@ -50,6 +58,20 @@ in
       description = ''
         The xuewen package to run. `homeManagerModules.default` sets this to the
         flake's build; with the bare `homeManagerModules.xuewen` you must set it.
+      '';
+    };
+
+    agentRunnerPackage = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      defaultText = lib.literalMD "the flake's `agent-runner` package (via `homeManagerModules.default`)";
+      description = ''
+        The Node runner behind Agent Ask (`[ai.agent.*]`), used to default
+        `settings.ai.agent.runner`. `homeManagerModules.default` sets this to
+        the flake's build; with the bare `homeManagerModules.xuewen`, leaving
+        it `null` means you must set `settings.ai.agent.runner` yourself.
+        Ignored when `[ai.agent.*]` is absent from
+        {option}`services.xuewen.settings`.
       '';
     };
 
@@ -147,9 +169,15 @@ in
           "RUST_LOG=info"
           # reqwest talks HTTPS to arXiv/Crossref/OpenAI; give it a CA bundle.
           "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-          # pdftotext, git, and (when Agent Ask is on) node are resolved from here.
+          # pdftotext, git, and (when Agent Ask is on) node and ripgrep are
+          # resolved from here.
           "PATH=${runtimePath}"
-        ];
+        ] ++ lib.optional agentConfigured
+          # Claude Code's CLI otherwise extracts its own ripgrep out of the Bun
+          # binary into a temp dir and execs it — unpatched, so it finds no ELF
+          # interpreter on a NixOS host and the Grep tool dies. Same fix nixpkgs'
+          # claude-code applies: turn it off and put a real ripgrep on PATH.
+          "USE_BUILTIN_RIPGREP=0";
         Restart = "on-failure";
         RestartSec = 5;
 

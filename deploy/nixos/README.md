@@ -26,8 +26,7 @@ runs `pdftotext` (poppler) in the unit's `PATH`, and applies systemd hardening.
               api_key_env = "OPENAI_API_KEY";
               embedding = { model = "text-embedding-3-small"; dims = 1536; };
               summary = { };  # per-paper LLM summaries
-              # Paper chat / the Ask tab is Agent Ask — configure [ai.agent.*]
-              # separately (needs Node + agent-runner); see the main README.
+              # Paper chat / the Ask tab is Agent Ask — see below.
             };
 
             # Secrets stay OUT of the Nix store (see below).
@@ -65,6 +64,26 @@ services.qdrant.enable = true;   # listens on 127.0.0.1:6333
 services.xuewen.settings.search.qdrant_url = "http://127.0.0.1:6333";
 ```
 
+## Agent Ask (optional)
+
+The reader's Ask tab runs a tool-using agent through the Claude Code / Codex
+SDKs. Enabling a backend is all that's needed — the module puts Node on the
+unit's `PATH` and points `[ai.agent].runner` at the packaged runner in the
+store, so nothing has to be installed under `dataDir`:
+
+```nix
+services.xuewen.settings.ai.agent.claude_code = { };   # and/or .codex = { };
+services.xuewen.environmentFile = "/run/secrets/xuewen.env";  # ANTHROPIC_API_KEY=…
+```
+
+The service user has no `claude`/`codex` CLI login, so authentication comes
+from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the `environmentFile`.
+
+Two things to know. The runner package vendors each SDK's prebuilt CLI binary,
+so it adds roughly 250 MB to the closure. And enabling it relaxes one
+hardening knob — `MemoryDenyWriteExecute` has to go off for Node's JIT — which
+is why the section is opt-in rather than on by default.
+
 ## Exposing it
 
 The web UI has **no authentication** and exposes mutating endpoints. Keep the
@@ -87,6 +106,7 @@ only do that on a trusted network.
 | --- | --- | --- |
 | `enable` | `false` | Enable the service |
 | `package` | flake build | Xuewen package to run |
+| `agentRunnerPackage` | flake build | Agent Ask runner; defaults `settings.ai.agent.runner` |
 | `host` / `port` | `127.0.0.1` / `8080` | Bind address |
 | `openFirewall` | `false` | Open the port |
 | `dataDir` | `/var/lib/xuewen` | Library / DB / index state |

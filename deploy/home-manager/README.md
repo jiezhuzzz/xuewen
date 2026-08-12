@@ -34,8 +34,7 @@ does not provide on macOS. On a Mac, use the native desktop app
               api_key_env = "OPENAI_API_KEY";
               embedding = { model = "text-embedding-3-small"; dims = 1536; };
               summary = { };  # per-paper LLM summaries
-              # Paper chat / the Ask tab is Agent Ask — configure [ai.agent.*]
-              # separately (needs Node + agent-runner); see the main README.
+              # Paper chat / the Ask tab is Agent Ask — see below.
             };
 
             # Secrets stay OUT of the Nix store (see below).
@@ -79,6 +78,26 @@ services.xuewen.settings.search.qdrant_url = "http://127.0.0.1:6333";
 Running Qdrant itself is a system concern (there is no Home Manager module for
 it); a NixOS host can enable `services.qdrant`, or run it via a container.
 
+## Agent Ask (optional)
+
+The reader's Ask tab runs a tool-using agent through the Claude Code / Codex
+SDKs. Enabling a backend is all that's needed — the module puts Node on the
+unit's `PATH` and points `[ai.agent].runner` at the packaged runner in the
+store, so nothing has to be installed under `dataDir`:
+
+```nix
+services.xuewen.settings.ai.agent.claude_code = { };   # and/or .codex = { };
+```
+
+The unit runs as you with `$HOME` intact (`ProtectHome` is deliberately unset),
+so an existing `claude` / `codex` CLI login works as-is. `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` via `environmentFile` is the alternative — and the only option
+under the NixOS module, whose service user has no such login.
+
+The runner package vendors each SDK's prebuilt CLI binary, so it adds roughly
+250 MB to the closure. Enabling it also relaxes one hardening knob —
+`MemoryDenyWriteExecute` has to go off for Node's JIT.
+
 ## Exposing it
 
 The web UI has **no authentication** and exposes mutating endpoints. Keep the
@@ -92,6 +111,7 @@ only do that on a trusted network.
 | --- | --- | --- |
 | `enable` | `false` | Enable the service |
 | `package` | flake build | Xuewen package to run |
+| `agentRunnerPackage` | flake build | Agent Ask runner; defaults `settings.ai.agent.runner` |
 | `host` / `port` | `127.0.0.1` / `8080` | Bind address |
 | `dataDir` | `$XDG_DATA_HOME/xuewen` | Library / DB / index state |
 | `environmentFile` | `null` | systemd `EnvironmentFile` for secrets |
