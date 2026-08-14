@@ -137,6 +137,24 @@ export function fromWire(row: Annotation): AnnotationTransferItem | null {
   return { annotation: a };
 }
 
+/// A value as a string that does not depend on key order. Load-bearing for the
+/// comparison below: a payload built here keeps the plugin's own field order,
+/// but the copy that comes back from the server has been through
+/// `serde_json::Value`, whose map is a BTreeMap — so the round trip returns the
+/// same object with its keys alphabetized. A plain `JSON.stringify` of the two
+/// therefore differs on key order alone, and every unchanged mark would look
+/// changed. Array order is content, so it is left as-is; `undefined` members
+/// are dropped exactly as `JSON.stringify` drops them.
+export function canonicalJson(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  const fields = Object.entries(v as Record<string, unknown>)
+    .filter(([, value]) => value !== undefined)
+    .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+    .map(([k, value]) => `${JSON.stringify(k)}:${canonicalJson(value)}`);
+  return `{${fields.join(',')}}`;
+}
+
 /// Whether a stored row still matches what the plugin holds, so the save loop
 /// can skip a PUT that would change nothing. Compares the projection and the
 /// payload; the payload carries geometry, so a moved mark differs here.
@@ -147,7 +165,7 @@ export function sameAsStored(a: NewAnnotation, b: NewAnnotation): boolean {
     a.color === b.color &&
     a.quoted_text === b.quoted_text &&
     a.note === b.note &&
-    JSON.stringify(a.payload) === JSON.stringify(b.payload)
+    canonicalJson(a.payload) === canonicalJson(b.payload)
   );
 }
 

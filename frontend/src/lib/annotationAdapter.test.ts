@@ -4,6 +4,7 @@ import type { PdfAnnotationObject } from '@embedpdf/models';
 import {
   TEXT_MARKUP_KINDS,
   TOOL_BY_KIND,
+  canonicalJson,
   fromWire,
   kindOf,
   safeColor,
@@ -11,7 +12,7 @@ import {
   toWire,
 } from './annotationAdapter';
 import { colorHex } from './annotationPalette';
-import type { Annotation } from './types';
+import type { Annotation, NewAnnotation } from './types';
 
 /** A highlight the way the plugin builds one from a text selection. */
 function mark(over: Partial<PdfAnnotationObject> = {}): PdfAnnotationObject {
@@ -167,7 +168,36 @@ describe('fromWire', () => {
   });
 });
 
+describe('canonicalJson', () => {
+  it('ignores key order but not array order', () => {
+    expect(canonicalJson({ b: 1, a: { d: 2, c: 3 } })).toBe(
+      canonicalJson({ a: { c: 3, d: 2 }, b: 1 }),
+    );
+    expect(canonicalJson([1, 2])).not.toBe(canonicalJson([2, 1]));
+  });
+
+  it('drops undefined members, the way JSON.stringify does', () => {
+    expect(canonicalJson({ a: 1, b: undefined })).toBe(canonicalJson({ a: 1 }));
+    expect(canonicalJson([undefined])).toBe('[null]');
+  });
+});
+
 describe('sameAsStored', () => {
+  it('sees through the key reordering of a server round trip', () => {
+    // serde_json's map is a BTreeMap, so the payload comes back alphabetized;
+    // comparing raw JSON.stringify output would call every mark changed and
+    // re-PUT it on every benign update event.
+    const live = toWire({ annotation: mark() })!;
+    const echoed: NewAnnotation = {
+      ...live,
+      payload: JSON.parse(canonicalJson(live.payload)) as unknown,
+    };
+    expect(Object.keys((echoed.payload as { annotation: object }).annotation)).not.toEqual(
+      Object.keys((live.payload as { annotation: object }).annotation),
+    );
+    expect(sameAsStored(live, echoed)).toBe(true);
+  });
+
   it('is true for an unchanged mark and false once anything moves', () => {
     const a = toWire({ annotation: mark() })!;
     expect(sameAsStored(a, toWire({ annotation: mark() })!)).toBe(true);

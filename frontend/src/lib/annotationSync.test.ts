@@ -7,6 +7,21 @@ import type { Annotation, NewAnnotation } from './types';
 const server: Record<string, Record<string, Annotation>> = {};
 let putFails: string | null = null;
 
+/// What a payload looks like once it has been through the backend: the Rust
+/// side parses it into a `serde_json::Value`, whose map is a BTreeMap, so every
+/// object comes back with its keys alphabetized rather than in the order the
+/// plugin wrote them. Every stored payload below goes through this, so the
+/// "nothing changed" checks are made against a realistic echo.
+function serverJson<T>(v: T): T {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map(serverJson) as T;
+  return Object.fromEntries(
+    Object.entries(v as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, value]) => [k, serverJson(value)]),
+  ) as T;
+}
+
 vi.mock('./api', () => ({
   listAnnotations: vi.fn(async (paperId: string) => Object.values(server[paperId] ?? {})),
   putAnnotation: vi.fn(async (paperId: string, id: string, b: NewAnnotation) => {
@@ -15,6 +30,7 @@ vi.mock('./api', () => ({
       paper_id: paperId,
       id,
       ...b,
+      payload: serverJson(b.payload),
       created_at: '2026-08-14T00:00:00Z',
       updated_at: '2026-08-14T01:00:00Z',
     };
@@ -48,10 +64,12 @@ function mark(id: string, over: Partial<PdfAnnotationObject> = {}): PdfAnnotatio
 }
 
 function seed(paperId: string, a: PdfAnnotationObject): void {
+  const wire = toWire({ annotation: a })!;
   (server[paperId] ??= {})[a.id] = {
     paper_id: paperId,
     id: a.id,
-    ...toWire({ annotation: a })!,
+    ...wire,
+    payload: serverJson(wire.payload),
     created_at: '2026-08-14T00:00:00Z',
     updated_at: '2026-08-14T00:00:00Z',
   };
