@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Search, SlidersHorizontal } from 'lucide-svelte';
   import { scale } from 'svelte/transition';
+  import { clickOutside } from '../lib/clickOutside';
   import { DUR, dur } from '../lib/motion';
   import {
     filters,
@@ -13,7 +14,6 @@
   } from '../lib/state.svelte';
 
   let optionsOpen = $state(false);
-  let root = $state<HTMLElement | null>(null);
   const FIELDS = [
     ['title', 'Title'],
     ['authors', 'Authors'],
@@ -29,9 +29,6 @@
   // semantic engine doesn't count, or the "narrowed" hint would never clear.
   const availableCount = $derived(FIELDS.length + 1 + (semanticBlocked() ? 0 : 1));
 
-  function onPointerdownOutside(e: PointerEvent) {
-    if (optionsOpen && root && !root.contains(e.target as Node)) optionsOpen = false;
-  }
   function onRootKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && optionsOpen) {
       // The popover owns this Esc — it must not also reach the global
@@ -42,13 +39,19 @@
   }
 </script>
 
-<svelte:window onpointerdown={onPointerdownOutside} />
-
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -- the div is
      not an interaction target; it only delegates Esc bubbling up from the
      focused input/chips so the popover can close without the global
-     shortcut handler also firing. -->
-<div class="relative" role="search" bind:this={root} onkeydown={onRootKeydown}>
+     shortcut handler also firing. Click-outside is on the whole root (not
+     just the popover) so clicking back into the search input keeps it open. -->
+<div
+  class="relative"
+  role="search"
+  use:clickOutside={() => {
+    if (optionsOpen) optionsOpen = false;
+  }}
+  onkeydown={onRootKeydown}
+>
   <Search size={16} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
   <input
     data-search-input

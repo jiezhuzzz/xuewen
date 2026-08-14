@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import { Copy, ScanSearch, Trash2 } from 'lucide-svelte';
   import ConfirmButtons from './ConfirmButtons.svelte';
+  import { clickOutside } from '../lib/clickOutside';
   import { closeContextMenu, contextMenu } from '../lib/contextMenu.svelte';
   import { copyCitation, openIdentify, removePaper } from '../lib/state.svelte';
   import { toast } from '../lib/toasts.svelte';
@@ -106,14 +107,6 @@
     }
   }
 
-  // Any pointerdown outside the menu dismisses it. The right-click that opened
-  // the menu fires its pointerdown BEFORE openContextMenu flips `open`, so it's
-  // already filtered by the `!contextMenu.open` guard — no immediate re-close.
-  function onWindowPointerDown(e: PointerEvent) {
-    if (!contextMenu.open) return;
-    if (e.target instanceof Node && menuEl?.contains(e.target)) return;
-    closeContextMenu();
-  }
   function onWindowKeydown(e: KeyboardEvent) {
     if (contextMenu.open && e.key === 'Escape') closeContextMenu();
   }
@@ -122,16 +115,15 @@
     'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-stone-600 hover:bg-parchment hover:text-ink dark:text-stone-300 dark:hover:bg-stone-800';
 </script>
 
-<svelte:window
-  onpointerdown={onWindowPointerDown}
-  onkeydown={onWindowKeydown}
-  onscroll={closeContextMenu}
-  onblur={closeContextMenu}
-/>
+<svelte:window onkeydown={onWindowKeydown} onscroll={closeContextMenu} onblur={closeContextMenu} />
 
 {#if contextMenu.open && contextMenu.paper}
+  <!-- Dismiss on any pointerdown outside the menu. The right-click that
+       opened it fires its pointerdown BEFORE the menu mounts (and with it
+       the action's listener) — no immediate re-close. -->
   <div
     bind:this={menuEl}
+    use:clickOutside={closeContextMenu}
     role="menu"
     aria-label="Paper actions"
     tabindex="-1"

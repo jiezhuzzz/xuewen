@@ -2,6 +2,8 @@
   import { closeTranslate, requestTranslate, translateBox } from '../lib/translate.svelte';
   import { appSettings, copyText, openDock } from '../lib/state.svelte';
   import { chat } from '../lib/chat.svelte';
+  import { clickOutside } from '../lib/clickOutside';
+  import { anchoredPosition } from '../lib/popoverPosition';
   import { toast } from '../lib/toasts.svelte';
 
   const providers = $derived(appSettings.translate.providers ?? []);
@@ -10,15 +12,8 @@
   const sourceLabel = $derived(translateBox.sourceLang ? translateBox.sourceLang.toUpperCase() : null);
   const directionLabel = $derived(sourceLabel ? `${sourceLabel} → ${targetLabel}` : `→ ${targetLabel}`);
 
-  // Clamp to the viewport (same idea as CitationPopover).
-  const MARGIN = 8;
-  const MAX_W = 320;
-  const vw = $derived(typeof window === 'undefined' ? 1280 : window.innerWidth);
-  const left = $derived(Math.max(MARGIN, Math.min(translateBox.x, vw - MAX_W - MARGIN)));
-  const below = $derived(translateBox.y < 220);
-  const top = $derived(below ? translateBox.y + 12 : translateBox.y - 8);
-
-  let menuEl = $state<HTMLDivElement | null>(null);
+  // Clamp to the viewport (shared flip/clamp policy — see popoverPosition).
+  const pos = $derived(anchoredPosition(translateBox.x, translateBox.y, { maxW: 320, belowOffset: 12 }));
 
   function pick(p: 'llm' | 'deepl') {
     if (p === translateBox.provider) return;
@@ -40,24 +35,19 @@
   function onWindowKeydown(e: KeyboardEvent) {
     if (translateBox.open && e.key === 'Escape') closeTranslate();
   }
-  function onWindowPointerDown(e: PointerEvent) {
-    if (!translateBox.open) return;
-    if (e.target instanceof Node && menuEl?.contains(e.target)) return;
-    closeTranslate();
-  }
 </script>
 
-<svelte:window onkeydown={onWindowKeydown} onpointerdown={onWindowPointerDown} onscroll={closeTranslate} />
+<svelte:window onkeydown={onWindowKeydown} onscroll={closeTranslate} />
 
 {#if translateBox.open}
   <div
-    bind:this={menuEl}
+    use:clickOutside={closeTranslate}
     role="dialog"
     aria-label="Translation"
     class="fixed z-50 w-80 max-w-[calc(100vw-1rem)] rounded-xl border border-stone-200 bg-paper shadow-2xl dark:border-stone-800 dark:bg-soot"
-    style:left="{left}px"
-    style:top="{top}px"
-    style:transform={below ? 'none' : 'translateY(-100%)'}
+    style:left="{pos.left}px"
+    style:top="{pos.top}px"
+    style:transform={pos.below ? 'none' : 'translateY(-100%)'}
   >
     <div class="flex items-center gap-2 border-b border-stone-200 px-3 py-2 dark:border-stone-800">
       <span class="font-serif text-amber-700 dark:text-amber-500">譯</span>

@@ -2,6 +2,7 @@
   import { ChevronDown, ChevronLeft, ChevronRight, Contrast, Eclipse, PanelLeft, Search, SunDim, ZoomIn, ZoomOut } from 'lucide-svelte';
   import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
+  import { clickOutside } from '../lib/clickOutside';
   import { DUR, dur, EASE } from '../lib/motion';
   import { cyclePdfAppearance, pdfAppearance, ui, viewer } from '../lib/state.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
@@ -28,12 +29,6 @@
 
   // --- zoom preset menu ---
   let zoomMenuOpen = $state(false);
-  let zoomMenuWrap: HTMLDivElement | undefined = $state();
-  function onWindowPointerDown(e: PointerEvent): void {
-    if (zoomMenuOpen && !(e.target instanceof Node && zoomMenuWrap?.contains(e.target))) {
-      zoomMenuOpen = false;
-    }
-  }
 
   // Local interaction holds (page editing, zoom menu) feed the shared
   // auto-hide controller. Wrapped in $effect (not a bare top-level call)
@@ -60,8 +55,6 @@
     ],
   );
 </script>
-
-<svelte:window onpointerdown={onWindowPointerDown} />
 
 <!-- svelte-ignore a11y_interactive_supports_focus -- every control inside
      the pill is individually tabbable via normal document tab order; the
@@ -150,7 +143,9 @@
        never see that Escape. Every interactive child is a real button. -->
   <div
     class="relative"
-    bind:this={zoomMenuWrap}
+    use:clickOutside={() => {
+      if (zoomMenuOpen) zoomMenuOpen = false;
+    }}
     onkeydown={(e) => {
       if (zoomMenuOpen && e.key === 'Escape') {
         e.stopPropagation(); // the global cascade must not see this

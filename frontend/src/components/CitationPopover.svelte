@@ -3,21 +3,17 @@
   import { citationHover, cancelHideCitation, hideCitationSoon } from '../lib/citationState.svelte';
   import { enqueueUrl, openImport, openTab } from '../lib/state.svelte';
   import { abbreviateVenue } from '../lib/venue';
+  import { anchoredPosition } from '../lib/popoverPosition';
   import { authorLine, refLinks, titleCase } from '../lib/refFormat';
 
   const c = $derived(citationHover.current);
   const s = $derived(c?.reference.structured ?? null);
   const links = $derived(c ? refLinks(s, c.reference.externalUrl) : []);
 
-  // Keep the popover on screen. It normally sits ABOVE the marker; near the top
-  // of the viewport that would clip off-screen (looked like "no popup"), so flip
-  // it BELOW. Also clamp horizontally so it never runs off the right edge.
-  const MARGIN = 8;
-  const MAX_W = 384; // Tailwind max-w-sm
-  const vw = $derived(typeof window === 'undefined' ? 1280 : window.innerWidth);
-  const below = $derived((c?.screenY ?? 0) < 220);
-  const left = $derived(Math.max(MARGIN, Math.min(c?.screenX ?? 0, vw - MAX_W - MARGIN)));
-  const top = $derived(below ? (c?.screenY ?? 0) + 18 : (c?.screenY ?? 0) - 8);
+  // Keep the popover on screen (shared flip/clamp policy — see popoverPosition).
+  const pos = $derived(
+    anchoredPosition(c?.screenX ?? 0, c?.screenY ?? 0, { maxW: 384 /* max-w-sm */, belowOffset: 18 }),
+  );
 
   function open() {
     if (c?.matchedPaper) openTab(c.matchedPaper);
@@ -41,9 +37,9 @@
     role="tooltip"
     onpointerenter={cancelHideCitation}
     onpointerleave={hideCitationSoon}
-    style:left="{left}px"
-    style:top="{top}px"
-    style:transform={below ? 'none' : 'translateY(-100%)'}
+    style:left="{pos.left}px"
+    style:top="{pos.top}px"
+    style:transform={pos.below ? 'none' : 'translateY(-100%)'}
     class="pointer-events-auto fixed z-50 max-w-sm rounded-xl border border-stone-200 bg-paper p-3 text-[12.5px] shadow-2xl dark:border-stone-800 dark:bg-soot"
   >
     {#if s?.title}
