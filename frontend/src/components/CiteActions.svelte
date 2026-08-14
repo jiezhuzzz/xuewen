@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Copy, Download } from 'lucide-svelte';
+  import { paperExportUrl } from '../lib/api';
   import { bibFormat, copyCitation } from '../lib/state.svelte';
   import { toast } from '../lib/toasts.svelte';
 
@@ -36,7 +37,7 @@
     <Copy size={12} /> Copy
   </button>
   <a
-    href={`/api/papers/${encodeURIComponent(id)}/export?format=${bibFormat.value}`}
+    href={paperExportUrl(id, bibFormat.value)}
     download={`${citeKey ?? id}.bib`}
     class="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-700/10 dark:border-stone-700 dark:text-amber-500"
   >

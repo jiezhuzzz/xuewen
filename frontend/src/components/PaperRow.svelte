@@ -3,6 +3,7 @@
   import { openContextMenu } from '../lib/contextMenu.svelte';
   import { openTab, searchMeta, selectPaper, selection, toggleStar, viewer } from '../lib/state.svelte';
   import { abbreviateVenue } from '../lib/venue';
+  import { authorLine } from '../lib/refFormat';
   import PaperRowTags from './PaperRowTags.svelte';
   import StatusPill from './StatusPill.svelte';
 
@@ -11,11 +12,7 @@
   const selected = $derived(selection.id === paper.id);
   const isOpen = $derived(viewer.tabs.some((t) => t.id === paper.id));
   // With 3+ authors, show just the first and last (middle authors elided).
-  const authors = $derived(
-    paper.authors.length > 2
-      ? `${paper.authors[0]} … ${paper.authors[paper.authors.length - 1]}`
-      : paper.authors.join(', '),
-  );
+  const authors = $derived(authorLine(paper.authors, ' … '));
 
   // A single click (or Enter/Space — see the non-native button role below)
   // opens the paper's PDF (openTab also highlights the row).

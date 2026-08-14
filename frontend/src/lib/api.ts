@@ -108,7 +108,7 @@ export async function translateText(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ text, provider: opts?.provider, target_lang: opts?.targetLang }),
   });
-  if (!res.ok) throw await errorFromResponse(res, 'translate failed');
+  if (!res.ok) return errorFromResponse(res, 'translate failed');
   return res.json();
 }
 
@@ -237,8 +237,14 @@ export async function setStar(paperId: string, on: boolean): Promise<void> {
   if (!res.ok) throw new Error(`star failed: ${res.status}`);
 }
 
+/// URL for one paper's citation export — also the Download link target
+/// (sibling of `pdfUrl`; `exportUrl` below covers the filtered-list export).
+export function paperExportUrl(id: string, fmt: BibFormat): string {
+  return `/api/papers/${encodeURIComponent(id)}/export?format=${fmt}`;
+}
+
 export async function exportPaper(id: string, fmt: BibFormat): Promise<string> {
-  const res = await fetch(`/api/papers/${encodeURIComponent(id)}/export?format=${fmt}`);
+  const res = await fetch(paperExportUrl(id, fmt));
   if (!res.ok) throw new Error(`export failed: ${res.status}`);
   return res.text();
 }

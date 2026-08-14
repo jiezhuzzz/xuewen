@@ -6,10 +6,11 @@ import type { StructuredReference } from './types';
  *  keeps small words lowercase except first/last or after a colon. */
 export { titleCase };
 
-/** One or two authors verbatim; three or more collapse to "First, …, Last". */
-export function authorLine(authors: string[]): string {
+/** One or two authors verbatim; three or more collapse to first-…-last,
+ *  joined by `sep` (", …, " for prose; the list/table rows pass " … "). */
+export function authorLine(authors: string[], sep = ', …, '): string {
   if (authors.length <= 2) return authors.join(', ');
-  return `${authors[0]}, …, ${authors[authors.length - 1]}`;
+  return `${authors[0]}${sep}${authors[authors.length - 1]}`;
 }
 
 /** External links for a reference: structured DOI/arXiv/URL first, then the
