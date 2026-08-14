@@ -6,12 +6,16 @@ import { ANNOTATION_COLORS, colorHex } from './annotationPalette';
 describe('ENGINE_OPTIONS', () => {
   it('is offline + runs PDFium in a worker (load-bearing)', () => {
     expect(ENGINE_OPTIONS.worker).toBe(true);
-    // Resolved to a fully-qualified same-origin URL (not a bare path) — the
-    // stock blob worker's self.location is a blob: URL, which can't resolve
-    // a path-absolute fetch like '/pdfium.wasm' against it. See pdfEngine.ts.
-    expect(ENGINE_OPTIONS.wasmUrl).toBe(new URL('/pdfium.wasm', location.origin).href);
-    expect(ENGINE_OPTIONS.wasmUrl.endsWith('/pdfium.wasm')).toBe(true);
+    // Resolved to a fully-qualified URL (not a bare path) — the stock blob
+    // worker's self.location is a blob: URL, which can't resolve a
+    // path-absolute fetch like '/pdfium.wasm' against it. See pdfEngine.ts.
     expect(ENGINE_OPTIONS.wasmUrl.startsWith('http')).toBe(true);
+    // Self-hosted: same origin, never the jsDelivr CDN default (which breaks
+    // offline). The exact path is Vite's to choose — it fingerprints the file
+    // so the backend can serve it immutable — so assert the shape, not a
+    // literal name.
+    expect(new URL(ENGINE_OPTIONS.wasmUrl).origin).toBe(location.origin);
+    expect(ENGINE_OPTIONS.wasmUrl.endsWith('.wasm')).toBe(true);
     expect(ENGINE_OPTIONS.fontFallback).toBeNull();
   });
 });

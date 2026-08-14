@@ -15,6 +15,11 @@ import { AnnotationPluginPackage } from '@embedpdf/plugin-annotation/svelte';
 import { HistoryPluginPackage } from '@embedpdf/plugin-history';
 import { type AnnotationKind, colorPatch, TOOL_BY_KIND } from './annotationAdapter';
 import { DEFAULT_ANNOTATION_COLOR, colorHex } from './annotationPalette';
+// `?url` so Vite emits the wasm as a content-hashed asset and hands back its
+// path — see ENGINE_OPTIONS below for why the fingerprint matters. The package
+// exports this subpath explicitly ("./pdfium.wasm" in its package.json), so
+// this is a supported entry point, not a reach into its internals.
+import pdfiumWasmUrl from '@embedpdf/pdfium/pdfium.wasm?url';
 
 // Load-bearing offline config (see CLAUDE.md "PDF viewer gotchas"):
 //  - worker:true   -> PDFium runs in EmbedPDF's stock blob module worker. The
@@ -22,12 +27,17 @@ import { DEFAULT_ANNOTATION_COLOR, colorHex } from './annotationPalette';
 //    path-absolute fetch like '/pdfium.wasm' (Chromium throws "Failed to
 //    parse URL from /pdfium.wasm" — there's no hierarchical path on a blob:
 //    base to graft it onto). Passing a fully-qualified URL sidesteps that
-//    entirely, since it needs no base-relative resolution.
-//  - wasmUrl       -> self-hosted, resolved to an absolute same-origin URL
-//    (default is a jsDelivr CDN, which breaks offline)
+//    entirely, since it needs no base-relative resolution. That is why the
+//    imported path still goes through `new URL(..., location.origin)`.
+//  - wasmUrl       -> self-hosted (the default is a jsDelivr CDN, which breaks
+//    offline), and emitted under Vite's fingerprinted `assets/` rather than
+//    copied verbatim into `public/`. The content hash in the name is what lets
+//    the backend serve it `immutable` (see cache_control_for in
+//    src/web/assets.rs): 4.6 MB fetched once per build instead of revalidated
+//    on every page load, which is the single largest asset the reader needs.
 //  - fontFallback:null -> no external font fetches
 export const ENGINE_OPTIONS = {
-  wasmUrl: new URL('/pdfium.wasm', location.origin).href,
+  wasmUrl: new URL(pdfiumWasmUrl, location.origin).href,
   worker: true,
   fontFallback: null,
 } as const;
