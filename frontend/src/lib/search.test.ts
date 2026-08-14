@@ -7,6 +7,7 @@ const allOpts: SearchOpts = {
   authors: true,
   abstract: true,
   body: true,
+  notes: true,
   keyword: true,
   semantic: true,
 };

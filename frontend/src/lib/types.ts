@@ -112,6 +112,8 @@ export interface SearchOpts {
   authors: boolean;
   abstract: boolean;
   body: boolean;
+  /// The reader's own annotation notes.
+  notes: boolean;
   keyword: boolean;
   semantic: boolean;
 }

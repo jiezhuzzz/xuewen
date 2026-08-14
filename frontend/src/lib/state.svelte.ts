@@ -31,6 +31,8 @@ import { dur } from './motion';
 import {
   type FieldKey,
   type ParsedQuery,
+  FIELD_KEYS,
+  SEMANTIC_FIELD_KEYS,
   hasSearchTerms,
   parseQuery,
   setFieldQualifiers,
@@ -78,7 +80,7 @@ function syncFiltersFromQuery(): ParsedQuery {
     ? (projects.items.find((pr) => pr.name.toLowerCase() === p.project!.toLowerCase())?.id ??
       p.project)
     : 'all';
-  for (const k of ['title', 'authors', 'abstract', 'body'] as const) {
+  for (const k of FIELD_KEYS) {
     searchOpts[k] = p.fields === null || p.fields.includes(k);
   }
   return p;
@@ -89,6 +91,7 @@ export const searchOpts = $state<SearchOpts>({
   authors: true,
   abstract: true,
   body: true,
+  notes: true,
   keyword: true,
   semantic: true,
 });
@@ -103,18 +106,17 @@ export const searchMeta = $state<{
 }>({ byId: {}, semantic: { available: true, reason: null }, pending: 0 });
 
 /// Semantic chip is disabled when the backend can't serve it or the field
-/// selection makes it meaningless (authors-only).
+/// selection makes it meaningless (nothing embedded is selected).
 export function semanticBlocked(): boolean {
-  const authorsOnly =
-    searchOpts.authors && !searchOpts.title && !searchOpts.abstract && !searchOpts.body;
-  return authorsOnly || !searchMeta.semantic.available;
+  const noEmbedded = !SEMANTIC_FIELD_KEYS.some((f) => searchOpts[f]);
+  return noEmbedded || !searchMeta.semantic.available;
 }
 
 export function toggleSearchField(k: FieldKey): void {
-  const on = (['title', 'authors', 'abstract', 'body'] as const).filter((f) => searchOpts[f]);
+  const on = FIELD_KEYS.filter((f) => searchOpts[f]);
   if (searchOpts[k] && on.length === 1) return; // keep at least one field
   const next = searchOpts[k] ? on.filter((f) => f !== k) : [...on, k];
-  filters.q = setFieldQualifiers(filters.q, next.length === 4 ? null : next);
+  filters.q = setFieldQualifiers(filters.q, next.length === FIELD_KEYS.length ? null : next);
   if (hasSearchTerms(syncFiltersFromQuery())) void loadPapers();
 }
 

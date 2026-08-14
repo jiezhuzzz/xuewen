@@ -211,7 +211,7 @@ enum Command {
         /// Query; supports tag:/project:/is:starred/status:/in:/author: qualifiers
         /// and "quoted phrases" (e.g. 'tag:nlp author:smith attention').
         query: String,
-        /// Comma-separated fields: title,authors,abstract,body (default all).
+        /// Comma-separated fields: title,authors,abstract,body,notes (default all).
         #[arg(long)]
         fields: Option<String>,
         /// Keyword (BM25) engine only.

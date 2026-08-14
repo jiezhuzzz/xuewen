@@ -32,7 +32,7 @@ the assistant that answers questions about a paper.
   | `project:thesis`, `project:"my thesis"` | filter by project name |
   | `is:starred` | starred papers only |
   | `status:resolved` / `status:needs-review` | resolution status |
-  | `in:title` `in:authors` `in:abstract` `in:body` | restrict search fields (union of `in:` tokens) |
+  | `in:title` `in:authors` `in:abstract` `in:body` `in:notes` | restrict search fields (union of `in:` tokens; `notes` = your annotation notes) |
   | `author:smith`, `author:"ada lovelace"` | author-scoped search term (repeatable, ANDed) |
   | `"exact phrase"` | phrase query |
 

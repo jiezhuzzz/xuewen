@@ -19,6 +19,7 @@
     ['authors', 'Authors'],
     ['abstract', 'Abstract'],
     ['body', 'Body'],
+    ['notes', 'Notes'],
   ] as const;
   const activeCount = $derived(
     FIELDS.filter(([k]) => searchOpts[k]).length +

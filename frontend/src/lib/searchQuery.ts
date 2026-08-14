@@ -1,8 +1,13 @@
 /// TS mirror of the canonical Rust parser (src/search/query.rs). The two
 /// share fixture cases — change one, change both.
 
-export type FieldKey = 'title' | 'authors' | 'abstract' | 'body';
-const FIELD_KEYS: readonly FieldKey[] = ['title', 'authors', 'abstract', 'body'];
+export type FieldKey = 'title' | 'authors' | 'abstract' | 'body' | 'notes';
+export const FIELD_KEYS: readonly FieldKey[] = ['title', 'authors', 'abstract', 'body', 'notes'];
+
+/// Fields the vector tier actually holds. Mirrors `FieldSel::semantic_applicable`
+/// in src/search/fts.rs: `authors` and `notes` are never chunked or embedded, so a
+/// query scoped to them alone has nothing for semantic search to match.
+export const SEMANTIC_FIELD_KEYS: readonly FieldKey[] = ['title', 'abstract', 'body'];
 
 export interface ParsedQuery {
   text: string;

@@ -90,18 +90,11 @@ pub fn parse(raw: &str) -> ParsedQuery {
                 }
             }
             Some("in") => {
-                let sel = fields.get_or_insert(FieldSel {
-                    title: false,
-                    authors: false,
-                    abstract_text: false,
-                    body: false,
-                });
-                match t.value.to_ascii_lowercase().as_str() {
-                    "title" => sel.title = true,
-                    "authors" => sel.authors = true,
-                    "abstract" => sel.abstract_text = true,
-                    "body" => sel.body = true,
-                    _ => text.push(t.raw),
+                let sel = fields.get_or_insert(FieldSel::none());
+                // `select` is shared with the `fields=` CSV so the qualifier
+                // and the query parameter can never accept different spellings.
+                if !sel.select(&t.value.to_ascii_lowercase()) {
+                    text.push(t.raw);
                 }
             }
             _ => text.push(t.raw),
@@ -159,8 +152,16 @@ mod tests {
     fn in_tokens_union_fields() {
         let p = parse("in:title in:abstract transformers");
         let f = p.fields.unwrap();
-        assert!(f.title && f.abstract_text && !f.authors && !f.body);
+        assert!(f.title && f.abstract_text && !f.authors && !f.body && !f.notes);
         assert_eq!(p.text, "transformers");
+    }
+
+    #[test]
+    fn in_notes_scopes_to_annotation_notes() {
+        let p = parse("in:notes attention");
+        let f = p.fields.unwrap();
+        assert!(f.notes && !f.title && !f.authors && !f.abstract_text && !f.body);
+        assert_eq!(p.text, "attention");
     }
 
     #[test]

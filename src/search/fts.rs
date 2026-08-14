@@ -15,6 +15,8 @@ pub struct FieldSel {
     pub authors: bool,
     pub abstract_text: bool,
     pub body: bool,
+    /// The reader's own annotation notes.
+    pub notes: bool,
 }
 
 impl FieldSel {
@@ -24,26 +26,27 @@ impl FieldSel {
             authors: true,
             abstract_text: true,
             body: true,
+            notes: true,
+        }
+    }
+
+    /// Nothing selected — the starting point for `parse` and for `in:` tokens.
+    pub fn none() -> Self {
+        Self {
+            title: false,
+            authors: false,
+            abstract_text: false,
+            body: false,
+            notes: false,
         }
     }
 
     /// Parse a `fields=title,body` CSV. Absent, empty, or all-unknown input
     /// falls back to every field (unknown values are ignored, never an error).
     pub fn parse(csv: Option<&str>) -> Self {
-        let mut sel = Self {
-            title: false,
-            authors: false,
-            abstract_text: false,
-            body: false,
-        };
+        let mut sel = Self::none();
         for part in csv.unwrap_or("").split(',').map(str::trim) {
-            match part {
-                "title" => sel.title = true,
-                "authors" => sel.authors = true,
-                "abstract" => sel.abstract_text = true,
-                "body" => sel.body = true,
-                _ => {}
-            }
+            sel.select(part);
         }
         if sel.any() {
             sel
@@ -52,13 +55,32 @@ impl FieldSel {
         }
     }
 
-    pub fn any(&self) -> bool {
-        self.title || self.authors || self.abstract_text || self.body
+    /// Turn on the field `name` addresses. Returns whether it named one, so
+    /// `in:` can fall back to free text for anything unrecognized. Shared with
+    /// `parse` so the CSV and the query qualifier can never accept different
+    /// spellings.
+    pub fn select(&mut self, name: &str) -> bool {
+        match name {
+            "title" => self.title = true,
+            "authors" => self.authors = true,
+            "abstract" => self.abstract_text = true,
+            "body" => self.body = true,
+            "notes" => self.notes = true,
+            _ => return false,
+        }
+        true
     }
 
-    /// Authors is the only selected field — semantic search is meaningless.
-    pub fn authors_only(&self) -> bool {
-        self.authors && !self.title && !self.abstract_text && !self.body
+    pub fn any(&self) -> bool {
+        self.title || self.authors || self.abstract_text || self.body || self.notes
+    }
+
+    /// Whether any field the vector tier actually holds is selected. Only
+    /// title/abstract/body are chunked and embedded — `authors` and `notes`
+    /// never are — so a query scoped to those alone has nothing for semantic
+    /// search to match and should say so rather than silently return nothing.
+    pub fn semantic_applicable(&self) -> bool {
+        self.title || self.abstract_text || self.body
     }
 }
 
@@ -71,13 +93,15 @@ pub struct PaperDoc {
     pub venue: String,
     pub abstract_text: String,
     pub body: String,
+    /// The paper's annotation notes, newline-joined in reading order.
+    pub notes: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct FtsHit {
     pub paper_id: String,
     pub score: f32,
-    /// Which field the snippet came from: title|authors|abstract|body.
+    /// Which field the snippet came from: title|authors|abstract|body|notes.
     pub field: String,
     /// HTML-safe: escaped text with <mark> highlights only.
     pub snippet_html: String,
@@ -90,6 +114,20 @@ struct FtsFields {
     venue: Field,
     abstract_text: Field,
     body: Field,
+    notes: Field,
+}
+
+/// Bumped whenever the Tantivy schema changes. Tantivy cannot add a field to
+/// an index that already exists, so an index written before a bump is wiped
+/// and re-swept. Stamping the version ourselves makes that deterministic
+/// instead of depending on how `Index::open_or_create` happens to fail.
+const SCHEMA_VERSION: u32 = 2;
+const VERSION_FILE: &str = "xuewen-schema-version";
+
+fn stored_schema_version(dir: &Path) -> Option<u32> {
+    std::fs::read_to_string(dir.join(VERSION_FILE))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
 }
 
 pub struct FtsIndex {
@@ -102,24 +140,56 @@ pub struct FtsIndex {
 }
 
 impl FtsIndex {
-    /// Open (or create) the index at `dir`. On corruption the directory is
-    /// wiped and recreated — it is derived data. Returns `(index, created)`;
-    /// when `created` the caller must clear all FTS stamps so the sweep
-    /// re-indexes everything.
+    /// Open (or create) the index at `dir`. On corruption — or on a schema
+    /// version older than this build's — the directory is wiped and recreated;
+    /// it is derived data. Returns `(index, created)`; when `created` the
+    /// caller must clear all FTS stamps so the sweep re-indexes everything.
+    ///
+    /// The wipe is why `index rebuild` tells you to stop `serve` first: a
+    /// second process opening this directory can pull the index out from
+    /// under a running server.
     pub fn open(dir: &Path) -> Result<(Self, bool)> {
         std::fs::create_dir_all(dir)?;
         let fresh = !dir.join("meta.json").exists();
-        match Self::try_open(dir) {
-            Ok(idx) => Ok((idx, fresh)),
+        let stale_schema = !fresh && stored_schema_version(dir) != Some(SCHEMA_VERSION);
+        if stale_schema {
+            tracing::info!(
+                "tantivy index at {} predates schema v{SCHEMA_VERSION}; rebuilding",
+                dir.display()
+            );
+        }
+        let opened = if stale_schema {
+            Err(anyhow::anyhow!("schema version changed"))
+        } else {
+            Self::try_open(dir)
+        };
+        match opened {
+            Ok(idx) => {
+                Self::stamp_version(dir);
+                Ok((idx, fresh))
+            }
             Err(e) => {
-                tracing::warn!(
-                    "tantivy index at {} unusable ({e}); rebuilding",
-                    dir.display()
-                );
+                if !stale_schema {
+                    tracing::warn!(
+                        "tantivy index at {} unusable ({e}); rebuilding",
+                        dir.display()
+                    );
+                }
                 std::fs::remove_dir_all(dir)?;
                 std::fs::create_dir_all(dir)?;
-                Ok((Self::try_open(dir)?, true))
+                let idx = Self::try_open(dir)?;
+                Self::stamp_version(dir);
+                Ok((idx, true))
             }
+        }
+    }
+
+    /// Record the schema this index was built against. Best-effort: failing to
+    /// write it costs one extra rebuild on the next open, which is far better
+    /// than refusing to serve search at all.
+    fn stamp_version(dir: &Path) {
+        if let Err(e) = std::fs::write(dir.join(VERSION_FILE), SCHEMA_VERSION.to_string()) {
+            tracing::warn!("could not stamp the tantivy schema version: {e}");
         }
     }
 
@@ -131,6 +201,7 @@ impl FtsIndex {
         let venue = b.add_text_field("venue", TEXT | STORED);
         let abstract_text = b.add_text_field("abstract", TEXT | STORED);
         let body = b.add_text_field("body", TEXT | STORED);
+        let notes = b.add_text_field("notes", TEXT | STORED);
         let schema = b.build();
         let index = Index::open_or_create(MmapDirectory::open(dir)?, schema)?;
         let reader = index.reader()?;
@@ -145,6 +216,7 @@ impl FtsIndex {
                 venue,
                 abstract_text,
                 body,
+                notes,
             },
         })
     }
@@ -171,6 +243,7 @@ impl FtsIndex {
                 self.f.venue => d.venue.clone(),
                 self.f.abstract_text => d.abstract_text.clone(),
                 self.f.body => d.body.clone(),
+                self.f.notes => d.notes.clone(),
             ))?;
             w.commit()?;
             Ok(())
@@ -203,10 +276,17 @@ impl FtsIndex {
         if sel.body {
             fields.push(self.f.body);
         }
+        if sel.notes {
+            fields.push(self.f.notes);
+        }
 
         let mut parser = QueryParser::for_index(&self.index, fields);
         parser.set_field_boost(self.f.title, 3.0);
         parser.set_field_boost(self.f.authors, 2.0);
+        // Above the abstract: a note is the reader's own words about this
+        // paper, so matching one is a stronger signal than matching prose the
+        // publisher wrote.
+        parser.set_field_boost(self.f.notes, 2.5);
         parser.set_field_boost(self.f.abstract_text, 1.5);
         // Lenient: user input must never be a query syntax error.
         let (query, _errors) = parser.parse_query_lenient(q);
@@ -235,8 +315,10 @@ impl FtsIndex {
         Ok(out)
     }
 
-    /// The first selected field (title > authors > abstract > body) with a
-    /// highlighted fragment; falls back to the escaped title text.
+    /// The first selected field (title > authors > abstract > notes > body)
+    /// with a highlighted fragment; falls back to the escaped title text.
+    /// Notes outrank body because a matched note is short, deliberate and
+    /// already about this paper — a better thing to show than a body fragment.
     fn best_snippet(
         &self,
         searcher: &tantivy::Searcher,
@@ -244,10 +326,11 @@ impl FtsIndex {
         doc: &TantivyDocument,
         sel: &FieldSel,
     ) -> Result<(String, String)> {
-        let candidates: [(&str, Field, bool); 4] = [
+        let candidates: [(&str, Field, bool); 5] = [
             ("title", self.f.title, sel.title),
             ("authors", self.f.authors, sel.authors),
             ("abstract", self.f.abstract_text, sel.abstract_text),
+            ("notes", self.f.notes, sel.notes),
             ("body", self.f.body, sel.body),
         ];
         for (name, field, enabled) in candidates {
@@ -294,6 +377,7 @@ mod tests {
             venue: "USENIX Security".into(),
             abstract_text: "We defend binaries against automated analysis.".into(),
             body: body.into(),
+            notes: String::new(),
         }
     }
 
@@ -311,8 +395,12 @@ mod tests {
         assert!(!s.title && s.authors && !s.abstract_text && s.body);
         // Unknown-only input falls back to all (never an error).
         assert!(FieldSel::parse(Some("bogus")).title);
-        assert!(FieldSel::parse(Some("authors")).authors_only());
-        assert!(!FieldSel::parse(Some("authors,title")).authors_only());
+        assert!(FieldSel::parse(Some("notes")).notes);
+        // Neither authors nor notes is embedded, so neither reaches the
+        // vector tier — alone or together.
+        assert!(!FieldSel::parse(Some("authors")).semantic_applicable());
+        assert!(!FieldSel::parse(Some("authors,notes")).semantic_applicable());
+        assert!(FieldSel::parse(Some("authors,title")).semantic_applicable());
     }
 
     #[test]
@@ -342,22 +430,33 @@ mod tests {
         let (idx, _dir) = open_tmp();
         idx.upsert(&doc("p1", "A Title", "the body mentions quicksort"))
             .unwrap();
-        let sel = FieldSel {
-            title: true,
-            authors: false,
-            abstract_text: false,
-            body: false,
-        };
+        let mut sel = FieldSel::none();
+        sel.title = true;
         assert!(idx.search("quicksort", &sel, 10).unwrap().is_empty());
-        let sel = FieldSel {
-            title: false,
-            authors: false,
-            abstract_text: false,
-            body: true,
-        };
+        let mut sel = FieldSel::none();
+        sel.body = true;
         let hits = idx.search("quicksort", &sel, 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].field, "body");
+    }
+
+    #[test]
+    fn notes_are_searchable_and_scopeable() {
+        let (idx, _dir) = open_tmp();
+        let mut d = doc("p1", "A Title", "the body says nothing useful");
+        d.notes
+            .push_str("compare this against the Dijkstra baseline");
+        idx.upsert(&d).unwrap();
+        idx.upsert(&doc("p2", "Dijkstra Revisited", "unrelated body"))
+            .unwrap();
+
+        let mut sel = FieldSel::none();
+        sel.notes = true;
+        let hits = idx.search("dijkstra", &sel, 10).unwrap();
+        assert_eq!(hits.len(), 1, "in:notes must not reach the title field");
+        assert_eq!(hits[0].paper_id, "p1");
+        assert_eq!(hits[0].field, "notes");
+        assert!(hits[0].snippet_html.contains("<mark>"));
     }
 
     #[test]
@@ -390,6 +489,58 @@ mod tests {
     fn corrupt_dir_is_wiped_and_reports_created() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("meta.json"), b"not json").unwrap();
+        let (_idx, created) = FtsIndex::open(dir.path()).unwrap();
+        assert!(created);
+    }
+
+    #[test]
+    fn reopening_a_current_index_neither_wipes_nor_restamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let (idx, created) = FtsIndex::open(dir.path()).unwrap();
+        assert!(created);
+        idx.upsert(&doc("p1", "A Title", "body")).unwrap();
+        drop(idx); // release the writer lock before reopening
+
+        let (idx, created) = FtsIndex::open(dir.path()).unwrap();
+        assert!(!created, "an index at the current schema must survive");
+        assert_eq!(
+            idx.search("quicksort", &FieldSel::all(), 10).unwrap().len(),
+            0
+        );
+        assert_eq!(idx.search("title", &FieldSel::all(), 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_stale_schema_stamp_forces_a_rebuild() {
+        let dir = tempfile::tempdir().unwrap();
+        let (idx, _) = FtsIndex::open(dir.path()).unwrap();
+        idx.upsert(&doc("p1", "A Title", "body")).unwrap();
+        drop(idx);
+        // Stand in for an index written by an older build.
+        std::fs::write(dir.path().join(VERSION_FILE), b"1").unwrap();
+
+        let (idx, created) = FtsIndex::open(dir.path()).unwrap();
+        assert!(created, "a stale stamp must report created so stamps clear");
+        assert!(
+            idx.search("title", &FieldSel::all(), 10)
+                .unwrap()
+                .is_empty(),
+            "the wiped index starts empty; the sweep refills it"
+        );
+        assert_eq!(
+            stored_schema_version(dir.path()),
+            Some(SCHEMA_VERSION),
+            "the rebuilt index must carry the current stamp"
+        );
+    }
+
+    #[test]
+    fn an_unstamped_index_is_treated_as_stale() {
+        // Indexes written before schema stamping existed have no version file.
+        let dir = tempfile::tempdir().unwrap();
+        let (idx, _) = FtsIndex::open(dir.path()).unwrap();
+        drop(idx);
+        std::fs::remove_file(dir.path().join(VERSION_FILE)).unwrap();
         let (_idx, created) = FtsIndex::open(dir.path()).unwrap();
         assert!(created);
     }

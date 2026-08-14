@@ -38,6 +38,12 @@ describe('parseQuery', () => {
     expect(p.text).toBe('transformers');
   });
 
+  it('scopes to annotation notes with in:notes', () => {
+    const p = parseQuery('in:notes attention');
+    expect(p.fields).toEqual(['notes']);
+    expect(p.text).toBe('attention');
+  });
+
   it('collects repeated author terms', () => {
     const p = parseQuery('author:smith author:"ada lovelace" attention');
     expect(p.authors).toEqual(['smith', 'ada lovelace']);
@@ -109,8 +115,9 @@ describe('setFieldQualifiers', () => {
   it('writes one in: token per field', () => {
     expect(setFieldQualifiers('x', ['title', 'body'])).toBe('x in:title in:body');
   });
-  it('all four fields means no tokens', () => {
-    expect(setFieldQualifiers('in:title x', ['title', 'authors', 'abstract', 'body'])).toBe('x');
+  it('every field means no tokens', () => {
+    const all = ['title', 'authors', 'abstract', 'body', 'notes'] as const;
+    expect(setFieldQualifiers('in:title x', [...all])).toBe('x');
   });
   it('null clears tokens', () => {
     expect(setFieldQualifiers('in:title in:body x', null)).toBe('x');

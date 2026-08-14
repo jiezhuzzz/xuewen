@@ -85,6 +85,7 @@ async fn index_paper(
             .map(|c| c.text.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
+        let notes = crate::annotations::store::notes_blob(&svc.pool, &paper.id).await?;
         svc.fts.upsert(&fts::PaperDoc {
             id: paper.id.clone(),
             title: paper.meta.title.clone().unwrap_or_default(),
@@ -92,6 +93,7 @@ async fn index_paper(
             venue: paper.meta.venue.clone().unwrap_or_default(),
             abstract_text: paper.meta.abstract_text.clone().unwrap_or_default(),
             body,
+            notes,
         })?;
         store::mark_fts_done(&svc.pool, &paper.id).await?;
         chunks

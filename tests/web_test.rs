@@ -1515,6 +1515,7 @@ mod search_api {
                 venue: String::new(),
                 abstract_text: String::new(),
                 body: "router dictionaries".into(),
+                notes: String::new(),
             })
             .unwrap();
         let router = xuewen::web::build_router_with_search(
@@ -1600,6 +1601,7 @@ mod search_api {
                     venue: String::new(),
                     abstract_text: String::new(),
                     body: String::new(),
+                    notes: String::new(),
                 })
                 .unwrap();
         }

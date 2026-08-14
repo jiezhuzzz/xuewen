@@ -128,12 +128,13 @@ describe('search state', () => {
     expect(filters.q).toContain('in:title');
     expect(filters.q).toContain('in:abstract');
     expect(filters.q).toContain('in:authors');
+    expect(filters.q).toContain('in:notes');
     expect(filters.q).not.toContain('in:body');
     vi.useRealTimers();
   });
 
   it('cannot turn off the last field or engine', () => {
-    Object.assign(searchOpts, { title: false, authors: false, abstract: false });
+    Object.assign(searchOpts, { title: false, authors: false, abstract: false, notes: false });
     toggleSearchField('body'); // body is the last field
     expect(searchOpts.body).toBe(true);
     searchOpts.semantic = false;
@@ -141,8 +142,9 @@ describe('search state', () => {
     expect(searchOpts.keyword).toBe(true);
   });
 
-  it('semanticBlocked for authors-only or unavailable backend', async () => {
+  it('semanticBlocked when nothing embedded is selected, or unavailable backend', async () => {
     expect(semanticBlocked()).toBe(false);
+    // authors + notes are keyword-only — neither is chunked or embedded.
     Object.assign(searchOpts, { title: false, abstract: false, body: false });
     expect(semanticBlocked()).toBe(true);
     Object.assign(searchOpts, { title: true, abstract: true, body: true });

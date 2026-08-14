@@ -159,10 +159,14 @@ impl SearchService {
     pub async fn search(&self, req: &SearchRequest) -> Result<SearchOutcome> {
         let q = req.q.trim();
         let mut semantic = self.semantic_config_state();
-        if req.fields.authors_only() && semantic.available {
+        // Only title/abstract/body are embedded; a query scoped to authors or
+        // notes alone has nothing for the vector tier to match.
+        if !req.fields.semantic_applicable() && semantic.available {
             semantic = SemanticState {
                 available: false,
-                reason: Some("semantic search does not apply to an authors-only query".into()),
+                reason: Some(
+                    "semantic search does not apply to a query scoped to authors or notes".into(),
+                ),
             };
         }
 
@@ -432,6 +436,7 @@ mod tests {
                 venue: String::new(),
                 abstract_text: String::new(),
                 body: "we fuzz routers".into(),
+                notes: String::new(),
             })
             .unwrap();
         svc.fts
@@ -442,6 +447,7 @@ mod tests {
                 venue: String::new(),
                 abstract_text: String::new(),
                 body: "batcher merge".into(),
+                notes: String::new(),
             })
             .unwrap();
 
@@ -484,6 +490,7 @@ mod tests {
                 venue: String::new(),
                 abstract_text: String::new(),
                 body: String::new(),
+                notes: String::new(),
             })
             .unwrap();
         let out = svc
@@ -553,6 +560,7 @@ mod tests {
                 venue: String::new(),
                 abstract_text: String::new(),
                 body: "we fuzz routers".into(),
+                notes: String::new(),
             })
             .unwrap();
         let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
@@ -668,6 +676,7 @@ mod tests {
                 venue: String::new(),
                 abstract_text: String::new(),
                 body: String::new(),
+                notes: String::new(),
             })
             .unwrap();
         // Embedder points at a dead port -> semantic path errors.
@@ -704,10 +713,8 @@ mod tests {
                 q: "lovelace".into(),
                 author_terms: Vec::new(),
                 fields: fts::FieldSel {
-                    title: false,
                     authors: true,
-                    abstract_text: false,
-                    body: false,
+                    ..fts::FieldSel::none()
                 },
                 keyword: true,
                 semantic: true,
@@ -783,10 +790,8 @@ mod tests {
                 q: "ada".into(),
                 author_terms: Vec::new(),
                 fields: fts::FieldSel {
-                    title: false,
                     authors: true,
-                    abstract_text: false,
-                    body: false,
+                    ..fts::FieldSel::none()
                 },
                 keyword: true,
                 semantic: true,
@@ -804,9 +809,34 @@ mod tests {
         );
         assert_eq!(
             out.semantic.reason.as_deref(),
-            Some("semantic search does not apply to an authors-only query"),
-            "reason should explain authors-only disables semantic"
+            Some("semantic search does not apply to a query scoped to authors or notes"),
+            "reason should explain the field selection disables semantic"
         );
+    }
+
+    #[tokio::test]
+    async fn notes_only_selection_skips_semantic() {
+        let pool = pool().await;
+        let svc = keyword_only_service(pool).await;
+        let out = svc
+            .search(&SearchRequest {
+                q: "baseline".into(),
+                author_terms: Vec::new(),
+                fields: fts::FieldSel {
+                    notes: true,
+                    ..fts::FieldSel::none()
+                },
+                keyword: true,
+                semantic: true,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            })
+            .await
+            .unwrap();
+        // Notes are indexed for keyword search only — nothing embeds them.
+        assert!(!out.semantic.available);
     }
 
     #[tokio::test]
@@ -928,6 +958,7 @@ mod tests {
                 venue: String::new(),
                 abstract_text: String::new(),
                 body: "thanks to smith for fuzzing help".into(),
+                notes: String::new(),
             })
             .unwrap();
         svc.fts
@@ -938,6 +969,7 @@ mod tests {
                 venue: String::new(),
                 abstract_text: String::new(),
                 body: "batcher merge".into(),
+                notes: String::new(),
             })
             .unwrap();
 
