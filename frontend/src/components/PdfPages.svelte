@@ -16,7 +16,9 @@
   import TranslateBubble from './TranslateBubble.svelte';
   import Spinner from './Spinner.svelte';
   import { SearchLayer } from '@embedpdf/plugin-search/svelte';
+  import { AnnotationLayer } from '@embedpdf/plugin-annotation/svelte';
   import CitationLayer from './CitationLayer.svelte';
+  import { ANNOTATION_RENDERERS } from '../lib/annotationRenderers';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
   import { libraryTitleIndex, matchReferences } from '../lib/citationMatch';
   import { parseCitations } from '../lib/api';
@@ -215,6 +217,19 @@
         pageHeightPt={pageSizes[page.pageIndex]?.height ?? page.height}
         data={citations}
         {matches}
+      />
+      <!-- Outside the data-pdf-appearance wrapper, like the other overlays:
+           marks keep the palette color the user picked instead of being
+           dimmed or hue-rotated into some other color entirely. Renderers
+           carry the link-renderer suppression (see annotationRenderers.ts) —
+           CitationLayer above already owns link annotations. -->
+      <!-- scale/rotation are deliberately not passed: omitted, the layer reads
+           both off the document state, which is the same source the zoom
+           plugin writes to. Passing them would fork that. -->
+      <AnnotationLayer
+        {documentId}
+        pageIndex={page.pageIndex}
+        annotationRenderers={ANNOTATION_RENDERERS}
       />
     </PagePointerProvider>
   </div>

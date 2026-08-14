@@ -3,6 +3,7 @@
   import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { clickOutside } from '../lib/clickOutside';
+  import AnnotationTools from './AnnotationTools.svelte';
   import { DUR, dur, EASE } from '../lib/motion';
   import { cyclePdfAppearance, pdfAppearance, ui, viewer } from '../lib/state.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
@@ -18,6 +19,7 @@
   // --- page-number input: mirrors currentPage except while being edited ---
   let pageText = $state('1');
   let pageEditing = $state(false);
+  let annotationMenuOpen = $state(false);
   $effect(() => {
     if (!pageEditing) pageText = String(scroll.state.currentPage);
   });
@@ -36,7 +38,7 @@
   // context only captures its initial value (svelte-check flags this as
   // `state_referenced_locally`).
   $effect(() => {
-    pill.setExtraHold(() => pageEditing || zoomMenuOpen);
+    pill.setExtraHold(() => pageEditing || zoomMenuOpen || annotationMenuOpen);
   });
 
   const title = $derived(viewer.tabs.find((t) => t.id === documentId)?.title ?? '');
@@ -192,6 +194,10 @@
   <button type="button" class={btn} aria-label="Zoom in" title="Zoom in" onclick={() => zoom.provides?.zoomIn()}>
     <ZoomIn size={16} />
   </button>
+
+  <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
+
+  <AnnotationTools {documentId} onHoldChange={(held) => (annotationMenuOpen = held)} />
 
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
 
