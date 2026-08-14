@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
@@ -20,6 +20,8 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 import * as api from '../lib/api';
 import LibraryTable from './LibraryTable.svelte';
+import { columnWidths, resetColumnWidths } from '../lib/columnWidths.svelte';
+import { PINNED_COLUMNS } from '../lib/tableColumns';
 import { filters, library, projects, selection, viewer } from '../lib/state.svelte';
 import { toasts } from '../lib/toasts.svelte';
 import type { PaperSummary } from '../lib/types';
@@ -33,6 +35,14 @@ function paper(id: string, title: string, extra: Partial<PaperSummary> = {}): Pa
   };
 }
 
+// This jsdom build has no PointerEvent; MouseEvent carries the same fields
+// the resize action reads (clientX/button), and pointer capture is try/caught.
+function pointerEvent(type: string, clientX: number): Event {
+  const Ctor: typeof MouseEvent =
+    typeof PointerEvent === 'undefined' ? MouseEvent : (PointerEvent as unknown as typeof MouseEvent);
+  return new Ctor(type, { clientX, button: 0, bubbles: true, cancelable: true });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   library.papers = [paper('p1', 'First Paper'), paper('p2', 'Second Paper', { starred: true })];
@@ -41,6 +51,7 @@ beforeEach(() => {
   viewer.activeId = null;
   selection.id = null;
   toasts.items.length = 0;
+  resetColumnWidths(); // module singleton — a prior test's widths would leak
   localStorage.clear();
   Object.assign(filters, {
     q: '', status: 'all', sort: 'year_desc', project: 'all', tag: undefined, starred: undefined,
@@ -51,7 +62,8 @@ describe('LibraryTable', () => {
   it('renders one row per paper and opens a paper from its title', async () => {
     render(LibraryTable);
     expect(screen.getAllByRole('row')).toHaveLength(3); // header + 2 papers
-    expect(screen.getAllByText('Ada Lovelace … Grace Hopper')).toHaveLength(2);
+    expect(screen.getAllByText('Ada Lovelace')).toHaveLength(2); // first-author column
+    expect(screen.getAllByText('Grace Hopper')).toHaveLength(2); // last-author column
     await userEvent.click(screen.getByRole('button', { name: 'First Paper' }));
     expect(viewer.activeId).toBe('p1');
   });
@@ -137,16 +149,75 @@ describe('LibraryTable', () => {
     }
   });
 
-  it('shows em-dash placeholders for missing metadata and opens Identify from the pill', async () => {
-    const { identifyState } = await import('../lib/state.svelte');
+  it('shows em-dash placeholders for missing metadata, without a status pill', () => {
     library.papers = [
       paper('p3', 'Mystery Paper', { authors: [], venue: null, year: null, status: 'needs_review' }),
     ];
     render(LibraryTable);
-    // authors + venue + year each show a placeholder dash
-    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
-    await userEvent.click(screen.getByRole('button', { name: /resolve metadata/i }));
-    expect(identifyState.open).toBe(true);
-    expect(identifyState.paperId).toBe('p3');
+    // first author + last author + venue + year each show a placeholder dash
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
+    // The table deliberately carries no needs-review pill; the sidebar list
+    // and the right-click Identify… action cover that.
+    expect(screen.queryByText(/needs review/i)).not.toBeInTheDocument();
+  });
+
+  it('a single-author paper shows that author in both author columns', () => {
+    library.papers = [paper('p4', 'Solo Work', { authors: ['Ada Lovelace'] })];
+    render(LibraryTable);
+    expect(screen.getAllByText('Ada Lovelace')).toHaveLength(2);
+  });
+
+  it('shows the abbreviated venue in the cell and the raw venue in the tooltip', () => {
+    const raw = '2019 IEEE Symposium on Security and Privacy (SP)';
+    library.papers = [paper('p5', 'Secure Paper', { venue: raw })];
+    render(LibraryTable);
+    const cell = screen.getByText('S&P');
+    expect(cell.closest('[title]')?.getAttribute('title')).toBe(raw);
+  });
+
+  it('renders one resize separator per pinned column', () => {
+    render(LibraryTable);
+    expect(screen.getAllByRole('separator')).toHaveLength(6);
+  });
+
+  it('dragging a handle commits and persists the width', async () => {
+    render(LibraryTable);
+    const handle = screen.getByRole('separator', { name: 'Resize Title column' });
+    await fireEvent(handle, pointerEvent('pointerdown', 100));
+    await fireEvent(handle, pointerEvent('pointermove', 150));
+    await fireEvent(handle, pointerEvent('pointerup', 150));
+    expect(columnWidths.title).toBe(PINNED_COLUMNS.title.defaultWidth + 50);
+    const saved = JSON.parse(localStorage.getItem('xuewen-library-columns') ?? '{}');
+    expect(saved.title).toBe(PINNED_COLUMNS.title.defaultWidth + 50);
+    // A real browser fires a post-drag click that consumes the one-shot
+    // swallower; jsdom doesn't, so drain it or it leaks into the next test.
+    window.dispatchEvent(new MouseEvent('click'));
+  });
+
+  it('double-clicking a handle auto-fits that column to its content', async () => {
+    render(LibraryTable);
+    await fireEvent.dblClick(screen.getByRole('separator', { name: 'Resize Title column' }));
+    // jsdom has no canvas, so the estimate measurer runs: the short fixture
+    // titles land the column at its minimum — down from the default.
+    expect(columnWidths.title).toBe(PINNED_COLUMNS.title.minWidth);
+    expect(localStorage.getItem('xuewen-library-columns')).not.toBeNull();
+  });
+
+  it('right-clicking the header offers reset-to-defaults', async () => {
+    render(LibraryTable);
+    columnWidths.title = 400;
+    await fireEvent.contextMenu(screen.getAllByRole('row')[0]);
+    await userEvent.click(screen.getByRole('menuitem', { name: /reset to default widths/i }));
+    expect(columnWidths.title).toBe(PINNED_COLUMNS.title.defaultWidth);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('auto-fit all from the header menu commits and persists the pinned columns', async () => {
+    render(LibraryTable);
+    await fireEvent.contextMenu(screen.getAllByRole('row')[0]);
+    await userEvent.click(screen.getByRole('menuitem', { name: /auto-fit all columns/i }));
+    expect(columnWidths.title).toBeLessThan(PINNED_COLUMNS.title.defaultWidth);
+    const saved = JSON.parse(localStorage.getItem('xuewen-library-columns') ?? '{}');
+    expect(saved.title).toBe(columnWidths.title);
   });
 });

@@ -17,6 +17,7 @@
   import TranslatePopover from './components/TranslatePopover.svelte';
   import Welcome from './components/Welcome.svelte';
   import { loadChatModels, loadThread } from './lib/chat.svelte';
+  import { initColumnWidths } from './lib/columnWidths.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
   import {
@@ -42,6 +43,7 @@
     initDock();
     initResponsiveSidebar();
     initPdfAppearance();
+    initColumnWidths();
     void initTabs();
     loadStats();
     loadProjects();
