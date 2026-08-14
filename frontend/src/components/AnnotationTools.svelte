@@ -3,7 +3,13 @@
   import { useAnnotation, useAnnotationCapability } from '@embedpdf/plugin-annotation/svelte';
   import { PdfAnnotationSubtype } from '@embedpdf/models';
   import { clickOutside } from '../lib/clickOutside';
-  import { type AnnotationKind, TOOL_BY_KIND } from '../lib/annotationAdapter';
+  import {
+    type AnnotationKind,
+    colorPatch,
+    KIND_LABELS,
+    kindOf,
+    TOOL_BY_KIND,
+  } from '../lib/annotationAdapter';
   import { annotationTools, setToolColor, toggleTool } from '../lib/annotationState.svelte';
   import {
     type AnnotationColor,
@@ -21,13 +27,20 @@
   let menuOpen = $state(false);
   $effect(() => onHoldChange(menuOpen));
 
-  const TOOLS: { kind: AnnotationKind; label: string; icon: typeof Highlighter }[] = [
-    { kind: 'highlight', label: 'Highlight', icon: Highlighter },
-    { kind: 'underline', label: 'Underline', icon: Underline },
-    { kind: 'strikeout', label: 'Strikeout', icon: Strikethrough },
-    { kind: 'squiggly', label: 'Squiggly', icon: Waves },
-    { kind: 'text_comment', label: 'Note', icon: MessageSquare },
-  ];
+  // Only the icon is toolbar-specific; the names come from the adapter, which
+  // the sidebar list reads too.
+  const ICONS: Record<AnnotationKind, typeof Highlighter> = {
+    highlight: Highlighter,
+    underline: Underline,
+    strikeout: Strikethrough,
+    squiggly: Waves,
+    text_comment: MessageSquare,
+  };
+  const TOOLS = (Object.keys(ICONS) as AnnotationKind[]).map((kind) => ({
+    kind,
+    label: KIND_LABELS[kind],
+    icon: ICONS[kind],
+  }));
 
   const active = $derived(annotationTools.active);
   const activeTool = $derived(TOOLS.find((t) => t.kind === active));
@@ -50,8 +63,7 @@
     if (!cap) return;
     const hex = colorHex(annotationTools.color);
     for (const [kind, toolId] of Object.entries(TOOL_BY_KIND)) {
-      // A sticky note is an icon: stroke only, no fill to color.
-      cap.setToolDefaults(toolId, kind === 'text_comment' ? { strokeColor: hex } : { color: hex, strokeColor: hex });
+      cap.setToolDefaults(toolId, colorPatch(kind as AnnotationKind, hex));
     }
   });
 
@@ -64,12 +76,10 @@
     if (!scope) return;
     const hex = colorHex(c);
     for (const sel of scope.getSelectedAnnotations()) {
-      // A sticky note is an icon: stroke only, no fill to color.
-      const patch =
-        sel.object.type === PdfAnnotationSubtype.TEXT
-          ? { strokeColor: hex }
-          : { color: hex, strokeColor: hex };
-      scope.updateAnnotation(sel.object.pageIndex, sel.object.id, patch);
+      // A mark whose subtype isn't one of ours (a foreign one the reader
+      // happens to have selected) is left alone rather than guessed at.
+      const kind = kindOf(sel.object);
+      if (kind) scope.updateAnnotation(sel.object.pageIndex, sel.object.id, colorPatch(kind, hex));
     }
   }
 

@@ -13,7 +13,7 @@ import { ThumbnailPluginPackage } from '@embedpdf/plugin-thumbnail';
 import { BookmarkPluginPackage } from '@embedpdf/plugin-bookmark';
 import { AnnotationPluginPackage } from '@embedpdf/plugin-annotation/svelte';
 import { HistoryPluginPackage } from '@embedpdf/plugin-history';
-import { TOOL_BY_KIND } from './annotationAdapter';
+import { type AnnotationKind, colorPatch, TOOL_BY_KIND } from './annotationAdapter';
 import { DEFAULT_ANNOTATION_COLOR, colorHex } from './annotationPalette';
 
 // Load-bearing offline config (see CLAUDE.md "PDF viewer gotchas"):
@@ -96,14 +96,10 @@ export const ANNOTATION_HISTORY_TOPIC = 'annotations';
 /// washes the glyphs out instead.
 function paletteTools(): { id: string; defaults: Record<string, string> }[] {
   const hex = colorHex(DEFAULT_ANNOTATION_COLOR);
-  return [
-    { id: TOOL_BY_KIND.highlight, defaults: { color: hex, strokeColor: hex } },
-    { id: TOOL_BY_KIND.underline, defaults: { color: hex, strokeColor: hex } },
-    { id: TOOL_BY_KIND.strikeout, defaults: { color: hex, strokeColor: hex } },
-    { id: TOOL_BY_KIND.squiggly, defaults: { color: hex, strokeColor: hex } },
-    // A sticky note is an icon: it has a stroke color but no fill.
-    { id: TOOL_BY_KIND.text_comment, defaults: { strokeColor: hex } },
-  ];
+  return Object.entries(TOOL_BY_KIND).map(([kind, id]) => ({
+    id,
+    defaults: colorPatch(kind as AnnotationKind, hex),
+  }));
 }
 
 export const ANNOTATION_OPTIONS = {

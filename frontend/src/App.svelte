@@ -16,6 +16,7 @@
   import TopBar from './components/TopBar.svelte';
   import TranslatePopover from './components/TranslatePopover.svelte';
   import Welcome from './components/Welcome.svelte';
+  import { initAnnotationTools } from './lib/annotationState.svelte';
   import { loadChatModels, loadThread } from './lib/chat.svelte';
   import { initColumnWidths } from './lib/columnWidths.svelte';
   import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
@@ -44,6 +45,7 @@
     initResponsiveSidebar();
     initPdfAppearance();
     initColumnWidths();
+    initAnnotationTools();
     void initTabs();
     loadStats();
     loadProjects();

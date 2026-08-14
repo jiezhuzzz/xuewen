@@ -9,7 +9,11 @@
 /// rules out pastels (invisible on white) and near-blacks (invisible on dark);
 /// each hex below is a mid-tone chosen to sit between the two.
 
-export type AnnotationColor = 'amber' | 'rose' | 'green' | 'blue' | 'violet';
+import type { Annotation } from './types';
+
+/// Derived from the wire type, not restated: a color added to the backend enum
+/// then to `types.ts` fails to compile here until `PALETTE` has a hex for it.
+export type AnnotationColor = Annotation['color'];
 
 interface Swatch {
   label: string;

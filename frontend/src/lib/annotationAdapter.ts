@@ -28,6 +28,25 @@ export const TOOL_BY_KIND: Record<AnnotationKind, string> = {
   text_comment: 'textComment',
 };
 
+/// What each kind is called in the UI — one copy, so the toolbar's tooltip and
+/// the sidebar's row can never disagree about what a mark is.
+export const KIND_LABELS: Record<AnnotationKind, string> = {
+  highlight: 'Highlight',
+  underline: 'Underline',
+  strikeout: 'Strikeout',
+  squiggly: 'Squiggly',
+  text_comment: 'Note',
+};
+
+/// The color patch for a kind. A sticky note is an icon: it has a stroke color
+/// but no fill to color, and getting that wrong paints a black square over the
+/// page. One copy, because the plugin has to be told this three times — when
+/// tools are seeded, when the palette changes, and when a selected mark is
+/// recolored.
+export function colorPatch(kind: AnnotationKind, hex: string): Record<string, string> {
+  return kind === 'text_comment' ? { strokeColor: hex } : { color: hex, strokeColor: hex };
+}
+
 /// Tools whose mark is driven by a text selection (as opposed to a click).
 export const TEXT_MARKUP_KINDS: readonly AnnotationKind[] = [
   'highlight',

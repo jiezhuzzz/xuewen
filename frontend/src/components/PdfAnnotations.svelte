@@ -5,6 +5,7 @@
   import { useAnnotation, useAnnotationCapability } from '@embedpdf/plugin-annotation/svelte';
   import { useDocumentManagerCapability } from '@embedpdf/plugin-document-manager/svelte';
   import { annotationList, annotations, removeAnnotation } from '../lib/annotationStore.svelte';
+  import { KIND_LABELS } from '../lib/annotationAdapter';
   import { buildAnnotatedPdf, exportErrorMessage } from '../lib/annotationExport';
   import { colorHex, colorLabel } from '../lib/annotationPalette';
   import { annotatedFilename, downloadBlob } from '../lib/download';
@@ -25,14 +26,6 @@
   const items = $derived(annotationList(documentId));
   const failed = $derived(annotations.error[documentId] ?? null);
   const title = $derived(viewer.tabs.find((t) => t.id === documentId)?.title ?? 'paper');
-
-  const KIND_LABELS = {
-    highlight: 'Highlight',
-    underline: 'Underline',
-    strikeout: 'Strikeout',
-    squiggly: 'Squiggly',
-    text_comment: 'Note',
-  } as const;
 
   /// Jump to the mark's page and select it, so the reader can see which one
   /// the panel row refers to. Selecting is best-effort: a row whose payload
