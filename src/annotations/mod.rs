@@ -48,6 +48,45 @@ pub enum AnnotationColor {
     Violet,
 }
 
+impl AnnotationKind {
+    /// The stored/wire spelling. Kept in step with the serde and sqlx
+    /// renames by `names_match_the_wire_spelling` below.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Highlight => "highlight",
+            Self::Underline => "underline",
+            Self::Strikeout => "strikeout",
+            Self::Squiggly => "squiggly",
+            Self::TextComment => "text_comment",
+        }
+    }
+}
+
+impl std::fmt::Display for AnnotationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AnnotationColor {
+    /// The stored/wire spelling.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Amber => "amber",
+            Self::Rose => "rose",
+            Self::Green => "green",
+            Self::Blue => "blue",
+            Self::Violet => "violet",
+        }
+    }
+}
+
+impl std::fmt::Display for AnnotationColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A stored annotation. Column names match the `annotations` table.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Annotation {
@@ -260,6 +299,31 @@ mod tests {
             serde_json::to_string(&AnnotationColor::Violet).unwrap(),
             "\"violet\""
         );
+    }
+
+    #[test]
+    fn names_match_the_wire_spelling() {
+        // `as_str` is hand-written while serde/sqlx derive theirs from
+        // rename_all; this pins them together so a renamed variant can't
+        // print one thing and store another.
+        for k in [
+            AnnotationKind::Highlight,
+            AnnotationKind::Underline,
+            AnnotationKind::Strikeout,
+            AnnotationKind::Squiggly,
+            AnnotationKind::TextComment,
+        ] {
+            assert_eq!(serde_json::to_string(&k).unwrap(), format!("\"{k}\""));
+        }
+        for c in [
+            AnnotationColor::Amber,
+            AnnotationColor::Rose,
+            AnnotationColor::Green,
+            AnnotationColor::Blue,
+            AnnotationColor::Violet,
+        ] {
+            assert_eq!(serde_json::to_string(&c).unwrap(), format!("\"{c}\""));
+        }
     }
 
     #[test]

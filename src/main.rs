@@ -27,6 +27,18 @@ fn confirm(prompt: &str) -> anyhow::Result<bool> {
     ))
 }
 
+/// One-line preview of quoted text, cut on a character boundary. A PDF
+/// selection routinely spans line breaks, which would otherwise split one
+/// annotation across several rows of the listing.
+fn ellipsize(s: &str, max: usize) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let head: String = flat.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", head.trim_end())
+}
+
 /// First three authors, "et al."-truncated — matches the web UI's rule.
 fn author_line(authors: &[String]) -> String {
     if authors.len() > 3 {
@@ -155,6 +167,11 @@ enum Command {
         #[command(subcommand)]
         cmd: CodeCmd,
     },
+    /// Inspect or clear a paper's reader annotations.
+    Annotation {
+        #[command(subcommand)]
+        cmd: AnnotationCmd,
+    },
     /// Star a paper.
     Star { paper: String },
     /// Un-star a paper.
@@ -279,6 +296,21 @@ enum CodeCmd {
     Status { paper: String },
     /// Detach the repo and delete the local checkout
     Rm { paper: String },
+}
+
+#[derive(Subcommand)]
+enum AnnotationCmd {
+    /// List a paper's annotations in reading order.
+    List { paper: String },
+    /// Delete one annotation by id.
+    Rm { paper: String, id: String },
+    /// Delete every annotation on a paper.
+    Clear {
+        paper: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -768,6 +800,54 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Command::Annotation { cmd } => {
+            let svc = xuewen::annotations::AnnotationsService::new(pool.clone());
+            match cmd {
+                AnnotationCmd::List { paper } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    let items = svc.list(&paper.id).await?;
+                    if items.is_empty() {
+                        println!("no annotations");
+                    }
+                    for a in &items {
+                        // Pages are 0-based in storage and 1-based to a reader.
+                        println!(
+                            "{}  p{}  {}/{}  {}",
+                            a.id,
+                            a.page_index + 1,
+                            a.kind,
+                            a.color,
+                            ellipsize(a.quoted_text.as_deref().unwrap_or(""), 60)
+                        );
+                        if let Some(note) = &a.note {
+                            println!("      note: {note}");
+                        }
+                    }
+                }
+                AnnotationCmd::Rm { paper, id } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    if svc.delete(&paper.id, &id).await? {
+                        println!("removed {id}");
+                    } else {
+                        anyhow::bail!("no annotation {id} on {}", paper.id);
+                    }
+                }
+                AnnotationCmd::Clear { paper, yes } => {
+                    let paper = db::find_one(&pool, &paper).await?;
+                    let n = svc.list(&paper.id).await?.len();
+                    if n == 0 {
+                        println!("no annotations");
+                    } else if yes || confirm(&format!("Delete {n} annotation(s)?"))? {
+                        println!("removed {}", svc.delete_all(&paper.id).await?);
+                    }
+                }
+            }
+            // The search index carries annotation notes; a CLI edit while
+            // `serve` holds Tantivy's single-writer lock cannot reindex here
+            // (see `index rebuild`). The running server's sweep picks the
+            // change up on its next pass; a CLI-only session catches it the
+            // next time one runs.
+        }
         Command::Star { paper } => {
             let paper = db::find_one(&pool, &paper).await?;
             let label = paper.cite_key.as_deref().unwrap_or(&paper.id);
@@ -1001,4 +1081,35 @@ async fn main() -> Result<()> {
         },
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ellipsize;
+
+    #[test]
+    fn short_text_passes_through() {
+        assert_eq!(ellipsize("a short quote", 60), "a short quote");
+    }
+
+    #[test]
+    fn line_breaks_and_runs_of_space_collapse() {
+        // PDF selections carry the newlines of the wrapped source text; the
+        // listing is one row per annotation, so they cannot survive.
+        assert_eq!(ellipsize("two\nlines   here", 60), "two lines here");
+    }
+
+    #[test]
+    fn overlong_text_is_cut_with_an_ellipsis() {
+        assert_eq!(ellipsize("abcdefghij", 5), "abcd…");
+    }
+
+    #[test]
+    fn cutting_respects_character_boundaries() {
+        // Byte slicing here would panic mid-codepoint: each of these is three
+        // bytes wide, so `max` counts characters, not bytes.
+        assert_eq!(ellipsize("學問學問學問", 3), "學問…");
+        assert_eq!(ellipsize("學問學問學問", 4), "學問學…");
+        assert_eq!(ellipsize("學問學問學問", 6), "學問學問學問");
+    }
 }
