@@ -5,19 +5,20 @@
   import StatusPill from './StatusPill.svelte';
   import { openContextMenu } from '../lib/contextMenu.svelte';
   import {
-    addTagToPaper,
-    addToProject,
+    addPapersToProject,
+    addTagToPapers,
     filters,
     library,
-    loadPapers,
     openIdentify,
     openTab,
     projects,
     removePapers,
     selectPaper,
     selection,
+    setSortFilter,
     toggleStar,
   } from '../lib/state.svelte';
+  import { authorLine } from '../lib/refFormat';
   import type { PaperSummary, Sort } from '../lib/types';
 
   // Multi-select for bulk actions. Lives here (not in global state): it only
@@ -28,10 +29,15 @@
   let tagDraft = $state('');
   let busy = $state(false);
 
+  // Memoized id sets: the prune effect re-runs on every selection change too,
+  // and each row's checkbox re-checks membership when `selected` changes —
+  // both stay O(1)-per-lookup instead of rescanning arrays.
+  const paperIds = $derived(new Set(library.papers.map((p) => p.id)));
+  const selectedSet = $derived(new Set(selected));
+
   $effect(() => {
-    const ids = new Set(library.papers.map((p) => p.id));
-    if (selected.some((id) => !ids.has(id))) {
-      selected = selected.filter((id) => ids.has(id));
+    if (selected.some((id) => !paperIds.has(id))) {
+      selected = selected.filter((id) => paperIds.has(id));
     }
   });
 
@@ -40,7 +46,7 @@
   );
 
   function toggleOne(id: string) {
-    selected = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
+    selected = selectedSet.has(id) ? selected.filter((x) => x !== id) : [...selected, id];
   }
   function toggleAll() {
     selected = allSelected ? [] : library.papers.map((p) => p.id);
@@ -51,19 +57,20 @@
   }
 
   function setSort(s: Sort) {
-    filters.sort = s;
-    void loadPapers();
+    void setSortFilter(s);
   }
 
   // While a query is active the server ranks by relevance; sort headers
   // would lie, so they go inert (arrows off, buttons disabled, no aria-sort).
   const searching = $derived(filters.q.trim() !== '');
 
-  function authorsLine(p: PaperSummary): string {
-    return p.authors.length > 2
-      ? `${p.authors[0]} … ${p.authors[p.authors.length - 1]}`
-      : p.authors.join(', ');
-  }
+  // One shared formatter: constructing Intl.DateTimeFormat per row per render
+  // (what toLocaleDateString with options does) is measurably expensive.
+  const DATE_FMT = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
 
   function open(p: PaperSummary) {
     openTab(p);
@@ -82,9 +89,10 @@
     }
   }
   function bulkStar() {
-    const targets = library.papers.filter((p) => selected.includes(p.id) && !p.starred);
+    const targets = library.papers.filter((p) => selectedSet.has(p.id) && !p.starred);
     void run(async () => {
-      for (const p of targets) await toggleStar(p.id);
+      // Independent papers; toggleStar handles its own rollback/toast per id.
+      await Promise.all(targets.map((p) => toggleStar(p.id)));
     });
   }
   function bulkTag() {
@@ -92,7 +100,7 @@
     if (!name) return;
     const ids = [...selected];
     void run(async () => {
-      for (const id of ids) await addTagToPaper(id, name);
+      await addTagToPapers(ids, name);
       tagDraft = '';
     });
   }
@@ -102,9 +110,7 @@
     sel.value = '';
     if (!projectId) return;
     const ids = [...selected];
-    void run(async () => {
-      for (const id of ids) await addToProject(id, projectId);
-    });
+    void run(() => addPapersToProject(ids, projectId));
   }
   function bulkDelete() {
     const ids = [...selected];
@@ -264,7 +270,7 @@
               <input
                 type="checkbox"
                 aria-label={`Select ${p.title ?? p.id}`}
-                checked={selected.includes(p.id)}
+                checked={selectedSet.has(p.id)}
                 onchange={() => toggleOne(p.id)}
                 class="accent-amber-700"
               />
@@ -317,7 +323,7 @@
             </td>
             <td class={`${td} text-stone-500 dark:text-stone-400`}>
               <div class="truncate" title={p.authors.join(', ')}>
-                {#if p.authors.length}{authorsLine(p)}{:else}<span class="text-stone-300 dark:text-stone-600">—</span>{/if}
+                {#if p.authors.length}{authorLine(p.authors, ' … ')}{:else}<span class="text-stone-300 dark:text-stone-600">—</span>{/if}
               </div>
             </td>
             <td class={`${td} text-stone-500 dark:text-stone-400`}>
@@ -330,13 +336,7 @@
             </td>
             <td class={td}><PaperRowTags paper={p} /></td>
             <td class={`${td} whitespace-nowrap text-stone-400 dark:text-stone-500`}>
-              {p.added_at
-                ? new Date(p.added_at).toLocaleDateString(undefined, {
-                    year: 'numeric',
-                    month: 'short',
-                    day: 'numeric',
-                  })
-                : ''}
+              {p.added_at ? DATE_FMT.format(new Date(p.added_at)) : ''}
             </td>
           </tr>
         {/each}

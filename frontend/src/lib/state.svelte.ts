@@ -29,6 +29,7 @@ import { invalidateLibraryTitleIndex } from './citationMatch';
 import { dur } from './motion';
 import {
   type FieldKey,
+  type ParsedQuery,
   hasSearchTerms,
   parseQuery,
   setFieldQualifiers,
@@ -47,6 +48,7 @@ import type {
   Project,
   SearchMatch,
   SearchOpts,
+  Sort,
   Stats,
   StatusFilter,
   TagSummary,
@@ -66,7 +68,7 @@ export const filters = $state<Filters>({
 /// status on `filters` (and the field toggles on `searchOpts`) are a cache of
 /// its parse — `project:` names resolve to ids via the loaded projects list
 /// (unresolved names pass through verbatim and simply match nothing).
-function syncFiltersFromQuery(): void {
+function syncFiltersFromQuery(): ParsedQuery {
   const p = parseQuery(filters.q);
   filters.tag = p.tag ?? undefined;
   filters.starred = p.starred || undefined;
@@ -78,6 +80,7 @@ function syncFiltersFromQuery(): void {
   for (const k of ['title', 'authors', 'abstract', 'body'] as const) {
     searchOpts[k] = p.fields === null || p.fields.includes(k);
   }
+  return p;
 }
 
 export const searchOpts = $state<SearchOpts>({
@@ -111,8 +114,7 @@ export function toggleSearchField(k: FieldKey): void {
   if (searchOpts[k] && on.length === 1) return; // keep at least one field
   const next = searchOpts[k] ? on.filter((f) => f !== k) : [...on, k];
   filters.q = setFieldQualifiers(filters.q, next.length === 4 ? null : next);
-  syncFiltersFromQuery();
-  if (hasSearchTerms(parseQuery(filters.q))) void loadPapers();
+  if (hasSearchTerms(syncFiltersFromQuery())) void loadPapers();
 }
 
 export function toggleSearchEngine(k: 'keyword' | 'semantic'): void {
@@ -427,6 +429,14 @@ export async function setStatusFilter(status: StatusFilter): Promise<void> {
   await applyQueryEdit(setQualifier(filters.q, 'status', status === 'all' ? null : status));
 }
 
+/// Sort lives on `filters` directly (it's a query param, not a search-string
+/// qualifier), but changing it still means "mutate + reload" like the setters
+/// above — the sort selects in FilterRow and LibraryTable both come here.
+export async function setSortFilter(sort: Sort): Promise<void> {
+  filters.sort = sort;
+  await loadPapers();
+}
+
 /// Whether any list filter deviates from the default view — i.e. whether an
 /// empty list means "nothing matches" rather than "the library is empty".
 export function anyFilterActive(): boolean {
@@ -486,8 +496,15 @@ export async function removeProject(id: string): Promise<void> {
 }
 
 export async function addToProject(paperId: string, projectId: string): Promise<void> {
-  await addPaperToProject(paperId, projectId);
-  detailCache.delete(paperId);
+  await addPapersToProject([paperId], projectId);
+}
+
+/// Bulk variant: the memberships are added in parallel and the project list /
+/// paper list refresh happens ONCE — per-paper `addToProject` calls would
+/// refetch them once per paper.
+export async function addPapersToProject(paperIds: string[], projectId: string): Promise<void> {
+  await Promise.all(paperIds.map((id) => addPaperToProject(id, projectId)));
+  for (const id of paperIds) detailCache.delete(id);
   detailRefresh.n += 1;
   await loadProjects();
   if (filters.project === projectId) await loadPapers();
@@ -528,11 +545,22 @@ export async function toggleStar(paperId: string): Promise<void> {
 /// Add a tag (by name; creating it if new) to a paper, patch the row/cached
 /// detail, and refresh the tags store (name list + counts).
 export async function addTagToPaper(paperId: string, name: string): Promise<void> {
-  const tag = await addTag(paperId, name);
-  const row = library.papers.find((p) => p.id === paperId);
-  if (row && !row.tags.some((t) => t.id === tag.id)) row.tags = [...row.tags, tag];
-  const cached = detailCache.get(paperId);
-  if (cached && !cached.tags.some((t) => t.id === tag.id)) cached.tags = [...cached.tags, tag];
+  await addTagToPapers([paperId], name);
+}
+
+/// Bulk variant: rows are patched per paper but the tags store / paper list
+/// refresh happens ONCE at the end — per-paper `addTagToPaper` calls would
+/// refetch them once per paper. The adds stay sequential (not Promise.all):
+/// a new tag name is created by whichever add lands first, and racing that
+/// creation across requests is not worth the latency win.
+export async function addTagToPapers(paperIds: string[], name: string): Promise<void> {
+  for (const paperId of paperIds) {
+    const tag = await addTag(paperId, name);
+    const row = library.papers.find((p) => p.id === paperId);
+    if (row && !row.tags.some((t) => t.id === tag.id)) row.tags = [...row.tags, tag];
+    const cached = detailCache.get(paperId);
+    if (cached && !cached.tags.some((t) => t.id === tag.id)) cached.tags = [...cached.tags, tag];
+  }
   detailRefresh.n += 1;
   await loadTags();
   if (filters.tag) await loadPapers();
@@ -580,10 +608,10 @@ let kwDebounce: ReturnType<typeof setTimeout> | undefined;
 let fullDebounce: ReturnType<typeof setTimeout> | undefined;
 export function setSearch(q: string): void {
   filters.q = q;
-  syncFiltersFromQuery();
+  const parsed = syncFiltersFromQuery();
   clearTimeout(kwDebounce);
   clearTimeout(fullDebounce);
-  if (!hasSearchTerms(parseQuery(q))) {
+  if (!hasSearchTerms(parsed)) {
     // Qualifier-only (or empty) → plain list; small debounce so typing a
     // qualifier character-by-character doesn't fire a request per keystroke.
     kwDebounce = setTimeout(() => void loadPapers(), 150);
@@ -717,7 +745,7 @@ export async function removePaper(id: string): Promise<void> {
 /// Bulk delete: every id is dropped, then ONE combined toast carries the
 /// Undo for the whole batch — per-paper toasts would stack unusably.
 export async function removePapers(ids: string[]): Promise<void> {
-  for (const id of ids) await dropPaper(id);
+  await Promise.all(ids.map((id) => dropPaper(id)));
   await loadStats();
   const message = ids.length === 1 ? 'Paper deleted' : `${ids.length} papers deleted`;
   toast('success', message, 8000, { label: 'Undo', run: () => void undoDelete(ids) });
@@ -725,7 +753,7 @@ export async function removePapers(ids: string[]): Promise<void> {
 
 async function undoDelete(ids: string[]): Promise<void> {
   try {
-    for (const id of ids) await restorePaper(id);
+    await Promise.all(ids.map((id) => restorePaper(id)));
     invalidateLibraryTitleIndex();
     await loadPapers();
     await loadStats();
