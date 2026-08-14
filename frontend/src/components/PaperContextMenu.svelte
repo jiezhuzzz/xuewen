@@ -4,6 +4,8 @@
   import ConfirmButtons from './ConfirmButtons.svelte';
   import { clickOutside } from '../lib/clickOutside';
   import { closeContextMenu, contextMenu } from '../lib/contextMenu.svelte';
+  import { menuItems, menuNavKeydown } from '../lib/menuNav';
+  import { clampMenuPosition } from '../lib/popoverPosition';
   import { copyCitation, openIdentify, removePaper } from '../lib/state.svelte';
   import { toast } from '../lib/toasts.svelte';
 
@@ -25,36 +27,15 @@
       mode = 'menu';
       busy = false;
       prevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      void tick().then(() => menuItems()[0]?.focus());
+      void tick().then(() => menuItems(menuEl)[0]?.focus());
     } else {
       prevFocus?.focus();
       prevFocus = null;
     }
   });
 
-  // Roving focus: ArrowUp/Down cycle with wrap-around, Home/End jump.
-  function menuItems(): HTMLElement[] {
-    return menuEl ? Array.from(menuEl.querySelectorAll<HTMLElement>('[role="menuitem"]')) : [];
-  }
   function onMenuKeydown(e: KeyboardEvent) {
-    if (mode !== 'menu') return;
-    const list = menuItems();
-    if (list.length === 0) return;
-    const idx = list.indexOf(document.activeElement as HTMLElement);
-    const wrap = (n: number) => (n + list.length) % list.length;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      list[wrap(idx + 1)].focus();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      list[idx === -1 ? list.length - 1 : wrap(idx - 1)].focus();
-    } else if (e.key === 'Home') {
-      e.preventDefault();
-      list[0].focus();
-    } else if (e.key === 'End') {
-      e.preventDefault();
-      list[list.length - 1].focus();
-    }
+    if (mode === 'menu') menuNavKeydown(menuEl, e);
   }
 
   // Switching to the delete confirm moves focus onto its first button, so
@@ -65,14 +46,13 @@
     }
   });
 
-  // Clamp to the viewport so a right-click near the bottom/right edge doesn't
-  // render the menu off-screen. Re-runs when the menu resizes (mode switch).
+  // Re-runs when the menu resizes (mode switch).
   $effect(() => {
     if (!contextMenu.open || !menuEl) return;
     mode; // re-clamp when the delete-confirm changes the menu's height
-    const { offsetWidth: w, offsetHeight: h } = menuEl;
-    left = Math.min(contextMenu.x, window.innerWidth - w - 8);
-    top = Math.min(contextMenu.y, window.innerHeight - h - 8);
+    const p = clampMenuPosition(contextMenu.x, contextMenu.y, menuEl);
+    left = p.left;
+    top = p.top;
   });
 
   async function doCopy() {
