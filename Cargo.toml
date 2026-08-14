@@ -32,6 +32,8 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs"] }
 rust-embed = "8"
 mime_guess = "2"
+flate2 = "1"
+brotli = "8"
 tantivy = "0.26"
 async-trait = "0.1.89"
 
@@ -43,3 +45,21 @@ axum-test = "17"
 
 [workspace]
 members = [".", "desktop"]
+
+# Hashing and compression are the only places a dev build does real work per
+# request, and unoptimized they dominate it: rust-embed re-reads and SHA-256s
+# every asset on every request in debug (that is what makes a frontend rebuild
+# show up without a Rust recompile), which measured 38-44 ms for the 4.6 MB
+# PDFium wasm — ~119 MB/s, exactly unoptimized SHA-256 speed. These crates are
+# pure computation with no debugging value, so optimize them even in dev; they
+# are compiled once and the rest of the tree keeps its fast, debuggable build.
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.brotli]
+opt-level = 3
+[profile.dev.package.brotli-decompressor]
+opt-level = 3
