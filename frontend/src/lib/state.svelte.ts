@@ -40,6 +40,7 @@ import {
   setStarredQualifier,
 } from './searchQuery';
 import { dropReaderState } from './readerState.svelte';
+import { dropAnnotations } from './annotationStore.svelte';
 import { toast } from './toasts.svelte';
 import type {
   BibFormat,
@@ -663,6 +664,9 @@ export function closeTab(id: string): void {
   if (idx === -1) return;
   viewer.tabs.splice(idx, 1);
   dropReaderState(id);
+  // The rows stay on the server; reopening reloads them. Keeping the cache
+  // would only mean a closed paper's marks linger in memory.
+  dropAnnotations(id);
   if (viewer.activeId === id) {
     viewer.activeId = viewer.tabs[Math.max(0, idx - 1)]?.id ?? null;
   }

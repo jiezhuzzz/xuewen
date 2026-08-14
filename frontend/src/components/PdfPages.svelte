@@ -16,9 +16,15 @@
   import TranslateBubble from './TranslateBubble.svelte';
   import Spinner from './Spinner.svelte';
   import { SearchLayer } from '@embedpdf/plugin-search/svelte';
-  import { AnnotationLayer } from '@embedpdf/plugin-annotation/svelte';
+  import {
+    AnnotationLayer,
+    useAnnotation,
+    useAnnotationCapability,
+  } from '@embedpdf/plugin-annotation/svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { ANNOTATION_RENDERERS } from '../lib/annotationRenderers';
+  import { createAnnotationSync } from '../lib/annotationSync';
+  import { toast } from '../lib/toasts.svelte';
   import { loadCitations, type EngineLike } from '../lib/loadCitations';
   import { libraryTitleIndex, matchReferences } from '../lib/citationMatch';
   import { parseCitations } from '../lib/api';
@@ -42,6 +48,30 @@
 
   const ctx = useRegistry();
   const docState = useDocumentState(() => documentId);
+
+  // Annotations ⇄ the SQLite sidecar. The tab id IS the paper id, so one sync
+  // per mounted tab covers exactly one paper. Both capabilities start null and
+  // settle once, so this effect runs at most twice; re-running is safe because
+  // `destroy` flushes before it stops listening.
+  const annotationScope = useAnnotation(() => documentId);
+  const annotationCap = useAnnotationCapability();
+  $effect(() => {
+    const scope = annotationScope.provides;
+    const cap = annotationCap.provides;
+    if (!scope || !cap) return;
+    const sync = createAnnotationSync({
+      paperId: documentId,
+      documentId,
+      scope,
+      subscribe: (handler) => cap.onAnnotationEvent(handler),
+      // A mark that silently failed to save is the worst outcome here: the
+      // reader sees it on the page and only finds out it was never stored on
+      // the next open.
+      onError: (message) => toast('error', `Annotation not saved — ${message}`),
+    });
+    void sync.start();
+    return () => void sync.destroy();
+  });
 
   // Selection → translate wiring (Task 7). `getSelectedText()` takes only an
   // optional documentId — no doc/page object crosses into the engine call —
