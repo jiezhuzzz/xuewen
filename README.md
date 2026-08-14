@@ -38,6 +38,7 @@ the assistant that answers questions about a paper.
 
   Anything else — including malformed qualifiers — is plain free text; parsing
   never errors.
+- **Annotations** — highlight, underline, strike through or squiggle a passage, drop a sticky note, and attach a note to any mark, with undo/redo and a page-ordered list in the reader's sidebar. Marks live in SQLite beside the paper, never in the PDF: **the library's file stays byte-identical**, so its content hash (which drives dedupe and filing) keeps telling the truth. Note text is searchable (`in:notes`), and "Export annotated PDF" writes a separate copy with the marks burned in for sharing.
 - **Agent Ask** — optional tool-using agent (Claude Code / Codex SDKs) in the
   reader's Ask tab, grounded in the paper's extracted text and, when
   attached, its code repository, inside a read-only sandbox.
@@ -209,6 +210,7 @@ The same binary drives everything from the terminal:
 | `project` | Manage projects (named groups of papers) |
 | `tag` | Manage tags on papers (add/remove/rename/list) |
 | `star` / `unstar` | Star or un-star a paper |
+| `annotation` | Inspect or clear a paper's reader annotations (`list` / `rm` / `clear`) |
 | `index` | Inspect or rebuild the search indexes |
 | `code` | Attach, inspect, or detach a paper's code repo for Agent Ask (`set` / `status` / `rm`) |
 | `delete` / `restore` / `purge` | Trash lifecycle |
