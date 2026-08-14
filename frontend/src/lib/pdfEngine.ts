@@ -1,5 +1,5 @@
 import { createPluginRegistration } from '@embedpdf/core';
-import type { PluginBatchRegistrations } from '@embedpdf/core';
+import type { PluginBatchRegistrations, PluginRegistryConfig } from '@embedpdf/core';
 import { ViewportPluginPackage } from '@embedpdf/plugin-viewport';
 import { ScrollPluginPackage } from '@embedpdf/plugin-scroll';
 import { RenderPluginPackage } from '@embedpdf/plugin-render';
@@ -42,6 +42,30 @@ export const ENGINE_OPTIONS = {
   fontFallback: null,
 } as const;
 
+/// Registry-wide config for <EmbedPDF>. The only thing in it is one permission
+/// override. A PDF can carry a "no copying" bit, and the selection plugin
+/// honours it at a single choke point: `getSelectedText` rejects with
+/// PdfErrorCode.Security before doing anything else (plugin-selection 2.14.4
+/// index.js:1281). Xuewen does not honour it, on purpose. The same file's full
+/// text is already extracted by `pdftotext` at ingest, stored in SQLite,
+/// indexed into Tantivy and Qdrant, summarised by an LLM, and written out as
+/// `<library_root>/agent/<paper_id>/paper.txt` for the Ask agent to read;
+/// refusing to let the reader copy one sentence out of a document the app has
+/// read cover to cover would be theatre. The bit is advisory metadata, not
+/// encryption, and PDFium reports AllowAll for unencrypted files, so this only
+/// ever changes behaviour for the rare restricted paper — which is the user's
+/// own library copy.
+///
+/// Blast radius, since that one choke point has three callers here: ⌘C
+/// (pdfCopy.ts), selection-translate (PdfPages.svelte), and the annotation
+/// plugin's quoted-text capture, which fills a highlight's `quoted_text` in the
+/// sidecar. On a restricted PDF all three go from silently inert to working.
+/// Only copyContents is overridden — print/modifyAnnotations/assemble keep
+/// whatever the document says.
+export const REGISTRY_CONFIG: PluginRegistryConfig = {
+  permissions: { overrides: { copyContents: true } },
+};
+
 // One shared registry hosts every open paper as a document (EmbedPDF's Svelte
 // bindings use a module-level singleton context, so there can only be ONE
 // <EmbedPDF> per page). `maxDocuments` caps how many tabs can be open at once.
@@ -60,6 +84,16 @@ export function viewerPlugins(): PluginBatchRegistrations {
     createPluginRegistration(ScrollPluginPackage),
     createPluginRegistration(RenderPluginPackage),
     createPluginRegistration(InteractionManagerPluginPackage),
+    // Deliberately the BASE package, not '@embedpdf/plugin-selection/svelte' —
+    // do not "fix" the asymmetry with AnnotationPluginPackage below. The
+    // /svelte build wraps this one with an auto-mounted CopyToClipboard
+    // utility, the only clipboard write in the whole EmbedPDF tree, which calls
+    // navigator.clipboard.writeText bare and merely console.errors a rejection:
+    // no execCommand fallback, so it is dead over plain HTTP to a LAN host
+    // (`--allow-remote`), which is exactly why copyText exists. ⌘C goes through
+    // pdfCopy.ts + copyText instead, and nothing calls the plugin's own
+    // copyToClipboard(), so mounting that utility would only add a second,
+    // worse clipboard writer.
     createPluginRegistration(SelectionPluginPackage),
     createPluginRegistration(ZoomPluginPackage, { defaultZoomLevel: ZoomMode.FitPage }),
     // Visible-area high-res tiles; the full-page RenderLayer base stays at

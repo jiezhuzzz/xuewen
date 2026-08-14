@@ -1,7 +1,8 @@
 import { tick } from 'svelte';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleKeydown, isEditable } from './shortcuts';
 import { chat } from './chat.svelte';
+import { registerPdfCopy } from './pdfCopy';
 import { dock, identifyState, library, selection, ui, viewer } from './state.svelte';
 import { reader } from './readerState.svelte';
 import type { PaperSummary } from './types';
@@ -275,5 +276,107 @@ describe('handleKeydown', () => {
     ui.importOpen = true;
     handleKeydown(key('f', { metaKey: true, cancelable: true }));
     expect(reader.find['a']).toBeUndefined();
+  });
+});
+
+describe('cmd+c in the reader', () => {
+  let copied = 0;
+  let hasSel = true;
+
+  function openReader(): void {
+    viewer.tabs = [{ id: 'a', title: 'A', name: null }];
+    viewer.activeId = 'a';
+  }
+
+  beforeEach(() => {
+    copied = 0;
+    hasSel = true;
+    registerPdfCopy({
+      hasSelection: () => hasSel,
+      copySelection: async () => {
+        copied += 1;
+      },
+      forget: () => {},
+      destroy: () => {},
+    });
+  });
+
+  // Registered globally by PdfDeck in the app, so it must not leak into the
+  // sibling test files that share this module.
+  afterEach(() => registerPdfCopy(null));
+
+  it('copies the PDF selection and swallows the browser copy', () => {
+    openReader();
+    const e = key('c', { metaKey: true, cancelable: true });
+    handleKeydown(e);
+    expect(copied).toBe(1);
+    expect(e.defaultPrevented).toBe(true);
+  });
+
+  it('stands aside on the Library view', () => {
+    viewer.activeId = null;
+    const e = key('c', { metaKey: true, cancelable: true });
+    handleKeydown(e);
+    expect(copied).toBe(0);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('stands aside while focus is in a text control', () => {
+    openReader();
+    const e = key('c', { metaKey: true, cancelable: true, target: document.createElement('textarea') });
+    handleKeydown(e);
+    expect(copied).toBe(0);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('stands aside when the browser has its own text selection', () => {
+    openReader();
+    const real = document.getSelection;
+    document.getSelection = () => ({ toString: () => 'text from the details dock' }) as Selection;
+    try {
+      const e = key('c', { metaKey: true, cancelable: true });
+      handleKeydown(e);
+      expect(copied).toBe(0);
+      expect(e.defaultPrevented).toBe(false);
+    } finally {
+      document.getSelection = real;
+    }
+  });
+
+  it('stands aside when nothing is selected in the PDF', () => {
+    openReader();
+    hasSel = false;
+    const e = key('c', { metaKey: true, cancelable: true });
+    handleKeydown(e);
+    expect(copied).toBe(0);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('leaves cmd+alt+c and cmd+shift+c to the browser', () => {
+    openReader();
+    for (const mods of [{ altKey: true }, { shiftKey: true }]) {
+      const e = key('c', { metaKey: true, cancelable: true, ...mods });
+      handleKeydown(e);
+      expect(e.defaultPrevented).toBe(false);
+    }
+    expect(copied).toBe(0);
+  });
+
+  it('is inert while a modal is open', () => {
+    openReader();
+    ui.helpOpen = true;
+    const e = key('c', { metaKey: true, cancelable: true });
+    handleKeydown(e);
+    expect(copied).toBe(0);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('leaves the bare c shortcut alone', () => {
+    openReader();
+    chat.available = true;
+    handleKeydown(key('c'));
+    expect(copied).toBe(0);
+    expect(dock.open).toBe(true);
+    expect(dock.tab).toBe('ask');
   });
 });

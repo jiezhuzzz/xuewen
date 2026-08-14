@@ -1,5 +1,6 @@
 import { tick } from 'svelte';
 import { chat } from './chat.svelte';
+import { copyPdfSelection, pdfSelectionHasText } from './pdfCopy';
 import { openFind, toggleAnnotationsPanel } from './readerState.svelte';
 import {
   closeDock,
@@ -29,6 +30,18 @@ export function isEditable(t: EventTarget | null): boolean {
 
 function anyModalOpen(): boolean {
   return ui.importOpen || identifyState.open || ui.helpOpen;
+}
+
+/// True when the browser has a real text selection of its own. Every surface
+/// outside the PDF page area — library rows, the details dock, the Ask
+/// transcript, popovers, the reader's own toolbar — is ordinary DOM text where
+/// native copy already works, so ⌘C must stand aside there. The page area is
+/// the sole exception, and it can never produce a selection to confuse this:
+/// its pages are <img>, its overlays are empty <div>s, the Viewport carries
+/// `select-none`, and pdfCopy clears any stale selection when a PDF selection
+/// begins.
+function hasDomSelection(): boolean {
+  return (document.getSelection()?.toString() ?? '').trim() !== '';
 }
 
 function moveSelection(delta: number): void {
@@ -74,17 +87,35 @@ export function handleKeydown(e: KeyboardEvent): void {
     }
     return;
   }
+  // Keyboard events from inside a shadow DOM (the PDF viewer) retarget
+  // `e.target` to the shadow host, which is never editable — so keys typed
+  // into the viewer's find box would leak to these app shortcuts. Check the
+  // real deepest target from the composed path instead.
+  const realTarget = e.composedPath()[0] ?? e.target;
+  // ⌘C copies the reader's text selection. The reader is the one place in the
+  // app where the browser cannot do this itself — its pages are <img> and its
+  // selection overlay is empty <div>s, so the document selection there is
+  // always collapsed and no `copy` event is ever dispatched (see pdfCopy.ts).
+  // Everywhere else IS real DOM text, so this branch stands aside — no
+  // preventDefault, no call — on a live DOM selection, in a text control, on
+  // the Library view, or with nothing selected in the PDF, and native copy
+  // proceeds untouched. ⌥/⇧ are excluded so ⌘⌥C and ⌘⇧C (DevTools inspect)
+  // still reach the browser. copyPdfSelection() must not be awaited or
+  // deferred: it writes the clipboard synchronously, while this keystroke's
+  // user gesture still authorizes the write.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
+    if (viewer.activeId && !isEditable(realTarget) && !hasDomSelection() && pdfSelectionHasText()) {
+      e.preventDefault();
+      copyPdfSelection();
+    }
+    return;
+  }
   if (e.key === 'Escape') {
     if (ui.paletteOpen) ui.paletteOpen = false;
     else if (dock.open && viewer.activeId !== null) closeDock();
     else if (ui.zen) ui.zen = false;
     return;
   }
-  // Keyboard events from inside a shadow DOM (the PDF viewer) retarget
-  // `e.target` to the shadow host, which is never editable — so keys typed
-  // into the viewer's find box would leak to these app shortcuts. Check the
-  // real deepest target from the composed path instead.
-  const realTarget = e.composedPath()[0] ?? e.target;
   if (isEditable(realTarget) || ui.paletteOpen) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   // Match letters case-insensitively so Caps Lock or a held Shift doesn't

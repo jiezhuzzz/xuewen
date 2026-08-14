@@ -16,6 +16,7 @@ describe('ShortcutHelp', () => {
     expect(screen.getByText('Command palette')).toBeInTheDocument();
     expect(screen.getByText('Next / previous paper')).toBeInTheDocument();
     expect(screen.getByText('Find in PDF')).toBeInTheDocument();
+    expect(screen.getByText('Copy selected text')).toBeInTheDocument();
   });
 
   it('closes on Escape', async () => {

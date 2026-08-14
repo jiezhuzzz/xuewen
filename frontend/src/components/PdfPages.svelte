@@ -318,7 +318,15 @@
                (viewers/snippet app.tsx): GlobalPointerProvider > Viewport >
                ZoomGestureWrapper > Scroller, all stock. -->
           <GlobalPointerProvider {documentId}>
-            <Viewport {documentId} class="h-full w-full">
+            <!-- select-none scopes native selection out of the page area only
+                 (the toolbar, find bar and side panel are siblings and stay
+                 selectable). PDF text selection is the plugin's synthetic
+                 overlay and is unaffected; what this stops is the browser's own
+                 drag-selection running alongside it and grabbing the floating
+                 toolbar's page/zoom labels when a drag sweeps over them. That
+                 stray DOM selection would otherwise make shortcuts.ts stand
+                 aside and copy "/ 12" instead of the sentence. -->
+            <Viewport {documentId} class="h-full w-full select-none">
               <!-- No class on ZoomGestureWrapper: it must size to its content,
                    not the viewport. Its pinch-anchor math reads the wrapped
                    element's own width/height, so forcing h-full/w-full (element

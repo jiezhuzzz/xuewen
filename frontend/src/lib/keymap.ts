@@ -25,6 +25,7 @@ export const SHORTCUT_GROUPS: ReadonlyArray<{ title: string; items: ShortcutItem
       { keys: 'z', label: 'Zen mode' },
       { keys: 'x', label: 'Close tab' },
       { keys: '⌘F', label: 'Find in PDF' },
+      { keys: '⌘C', label: 'Copy selected text' },
     ],
   },
   {

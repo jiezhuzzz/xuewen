@@ -1,7 +1,7 @@
 <script lang="ts">
   import { EmbedPDF } from '@embedpdf/core/svelte';
   import { usePdfiumEngine } from '@embedpdf/engines/svelte';
-  import { ENGINE_OPTIONS, viewerPlugins } from '../lib/pdfEngine';
+  import { ENGINE_OPTIONS, REGISTRY_CONFIG, viewerPlugins } from '../lib/pdfEngine';
   import PdfDeck from './PdfDeck.svelte';
   import Spinner from './Spinner.svelte';
 
@@ -20,7 +20,7 @@
   {:else if engine.error}
     <p class="p-4 text-sm text-red-600 dark:text-red-400">Engine failed: {engine.error.message}</p>
   {:else if engine.engine}
-    <EmbedPDF engine={engine.engine} {plugins}>
+    <EmbedPDF engine={engine.engine} {plugins} config={REGISTRY_CONFIG}>
       {#snippet children()}
         <PdfDeck />
       {/snippet}
