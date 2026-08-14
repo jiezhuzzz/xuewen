@@ -1,18 +1,12 @@
 <script lang="ts">
   import { Bookmark, X } from 'lucide-svelte';
+  import NewProjectInput from './NewProjectInput.svelte';
   import { addToProject, createNewProject, projects, removeFromProject } from '../lib/state.svelte';
   import type { PaperDetail } from '../lib/types';
 
   let { d }: { d: PaperDetail } = $props();
 
   let error = $state<string | null>(null);
-  let adding = $state(false);
-  let newName = $state('');
-  let newInput = $state<HTMLInputElement | null>(null);
-
-  $effect(() => {
-    if (adding) newInput?.focus();
-  });
 
   const available = $derived(projects.items.filter((p) => !d.projects.some((dp) => dp.id === p.id)));
 
@@ -38,36 +32,13 @@
     }
   }
 
-  function startNew() {
-    newName = '';
-    adding = true;
-  }
-  function cancelNew() {
-    adding = false;
-    newName = '';
-  }
-  async function submitNew() {
-    const name = newName.trim();
-    if (!name) {
-      cancelNew();
-      return;
-    }
-    cancelNew();
+  async function createAndAdd(name: string) {
     error = null;
     try {
       const p = await createNewProject(name);
       await addToProject(d.id, p.id);
     } catch (err) {
       error = (err as Error).message;
-    }
-  }
-  function onNewKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      void submitNew();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      cancelNew();
     }
   }
 </script>
@@ -106,26 +77,11 @@
       {/each}
     </select>
   {/if}
-  {#if adding}
-    <input
-      bind:this={newInput}
-      bind:value={newName}
-      type="text"
-      aria-label="New project name"
-      placeholder="Project name"
-      onkeydown={onNewKeydown}
-      onblur={() => (newName.trim() ? void submitNew() : cancelNew())}
-      class="w-28 rounded-lg border border-dashed border-indigo-600/40 bg-paper px-2 py-1 text-xs outline-none focus:border-indigo-600 dark:border-indigo-400/40 dark:bg-stone-800"
-    />
-  {:else}
-    <button
-      type="button"
-      onclick={startNew}
-      class="inline-flex items-center rounded-lg border border-dashed border-stone-300 px-2 py-1 text-xs text-stone-400 hover:border-stone-400 hover:text-stone-600 dark:border-stone-600 dark:text-stone-500 dark:hover:border-stone-500 dark:hover:text-stone-300"
-    >
-      + New project
-    </button>
-  {/if}
+  <NewProjectInput
+    onCreate={createAndAdd}
+    inputClass="w-28 rounded-lg border border-dashed border-indigo-600/40 bg-paper px-2 py-1 text-xs outline-none focus:border-indigo-600 dark:border-indigo-400/40 dark:bg-stone-800"
+    buttonClass="inline-flex items-center rounded-lg border border-dashed border-stone-300 px-2 py-1 text-xs text-stone-400 hover:border-stone-400 hover:text-stone-600 dark:border-stone-600 dark:text-stone-500 dark:hover:border-stone-500 dark:hover:text-stone-300"
+  />
 </div>
 {#if error}
   <p class="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>

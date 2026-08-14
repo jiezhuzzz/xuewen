@@ -2,17 +2,18 @@
   import { Bookmark, ChevronRight, Ellipsis, Star } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import ConfirmButtons from './ConfirmButtons.svelte';
+  import NewProjectInput from './NewProjectInput.svelte';
   import {
     createNewProject,
     deleteTag,
     filters,
-    loadPapers,
     loadTags,
     projects,
     removeProject,
     renameProject,
     renameTag,
     setProjectFilter,
+    setSortFilter,
     setStarFilter,
     setStatusFilter,
     setTagFilter,
@@ -24,8 +25,7 @@
     void setStatusFilter((e.currentTarget as HTMLSelectElement).value as StatusFilter);
   }
   function onSort(e: Event) {
-    filters.sort = (e.currentTarget as HTMLSelectElement).value as Sort;
-    loadPapers();
+    void setSortFilter((e.currentTarget as HTMLSelectElement).value as Sort);
   }
 
   const selectClasses =
@@ -51,22 +51,24 @@
     void loadTags();
   });
 
+  // Shared pill shape; the three kinds differ only in their color pairs.
+  const pillBase = 'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium';
   function projectPillClasses(active: boolean): string {
-    return `inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${
+    return `${pillBase} ${
       active
         ? 'border-indigo-600 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-500'
         : 'border-indigo-600/25 bg-indigo-600/10 text-indigo-800 hover:border-indigo-600/45 dark:border-indigo-400/25 dark:bg-indigo-400/10 dark:text-indigo-300'
     }`;
   }
   function starPillClasses(active: boolean): string {
-    return `inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${
+    return `${pillBase} ${
       active
         ? 'border-orange-600/50 bg-orange-600/15 text-orange-700 dark:border-orange-400/50 dark:bg-orange-400/15 dark:text-orange-400'
         : 'border-stone-200 text-orange-700/70 hover:border-orange-600/35 dark:border-stone-700 dark:text-orange-400/70'
     }`;
   }
   function tagPillClasses(active: boolean): string {
-    return `inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${
+    return `${pillBase} ${
       active
         ? 'border-amber-700/40 bg-amber-700/10 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
         : 'border-stone-200 text-stone-500 hover:border-stone-300 dark:border-stone-700 dark:text-stone-400'
@@ -81,41 +83,6 @@
   }
   function onTagPill(name: string) {
     void setTagFilter(filters.tag === name ? undefined : name);
-  }
-
-  let addingProject = $state(false);
-  let newProjectName = $state('');
-  let newProjectInput = $state<HTMLInputElement | null>(null);
-
-  $effect(() => {
-    if (addingProject) newProjectInput?.focus();
-  });
-
-  function startNewProject() {
-    newProjectName = '';
-    addingProject = true;
-  }
-  function cancelNewProject() {
-    addingProject = false;
-    newProjectName = '';
-  }
-  async function submitNewProject() {
-    const name = newProjectName.trim();
-    if (!name) {
-      cancelNewProject();
-      return;
-    }
-    cancelNewProject();
-    await createNewProject(name);
-  }
-  function onNewProjectKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      void submitNewProject();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      cancelNewProject();
-    }
   }
 
   // --- per-pill "⋯" menu (rename / delete) ---
@@ -380,26 +347,11 @@
         {/if}
       </div>
     {/each}
-    {#if addingProject}
-      <input
-        bind:this={newProjectInput}
-        bind:value={newProjectName}
-        type="text"
-        aria-label="New project name"
-        placeholder="Project name"
-        onkeydown={onNewProjectKeydown}
-        onblur={() => (newProjectName.trim() ? void submitNewProject() : cancelNewProject())}
-        class="w-28 rounded-full border border-dashed border-indigo-600/40 bg-paper px-2 py-0.5 text-xs outline-none focus:border-indigo-600 dark:border-indigo-400/40 dark:bg-stone-800"
-      />
-    {:else}
-      <button
-        type="button"
-        onclick={startNewProject}
-        class="inline-flex items-center rounded-full border border-dashed border-stone-300 px-2 py-0.5 text-xs text-stone-400 hover:border-stone-400 hover:text-stone-600 dark:border-stone-600 dark:text-stone-500 dark:hover:border-stone-500 dark:hover:text-stone-300"
-      >
-        + New project
-      </button>
-    {/if}
+    <NewProjectInput
+      onCreate={(name) => createNewProject(name)}
+      inputClass="w-28 rounded-full border border-dashed border-indigo-600/40 bg-paper px-2 py-0.5 text-xs outline-none focus:border-indigo-600 dark:border-indigo-400/40 dark:bg-stone-800"
+      buttonClass="inline-flex items-center rounded-full border border-dashed border-stone-300 px-2 py-0.5 text-xs text-stone-400 hover:border-stone-400 hover:text-stone-600 dark:border-stone-600 dark:text-stone-500 dark:hover:border-stone-500 dark:hover:text-stone-300"
+    />
   </div>
   {/if}
 </div>
