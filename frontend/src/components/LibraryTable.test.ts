@@ -21,7 +21,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 import * as api from '../lib/api';
 import LibraryTable from './LibraryTable.svelte';
 import { columnWidths, resetColumnWidths } from '../lib/columnWidths.svelte';
-import { PINNED_COLUMNS } from '../lib/tableColumns';
+import { ICON_COLUMN_PX, PINNED_COLUMNS, PINNED_KEYS, TAGS_MIN_PX } from '../lib/tableColumns';
 import { filters, library, projects, selection, viewer } from '../lib/state.svelte';
 import { toasts } from '../lib/toasts.svelte';
 import type { PaperSummary } from '../lib/types';
@@ -193,6 +193,32 @@ describe('LibraryTable', () => {
     render(LibraryTable);
     const cell = screen.getByText('S&P');
     expect(cell.closest('[title]')?.getAttribute('title')).toBe(raw);
+  });
+
+  it('keeps every row one line high however many tags a paper carries', () => {
+    library.papers = [
+      paper('p1', 'First Paper', {
+        projects: [{ id: 'pr1', name: 'RTOS Fuzzing' }],
+        tags: [
+          { id: 't1', name: 'security/fuzzing' },
+          { id: 't2', name: 'os/rtos' },
+          { id: 't3', name: 'ml/llm' },
+          { id: 't4', name: 'benchmarks' },
+        ],
+      }),
+    ];
+    render(LibraryTable);
+    const strip = screen.getByText('security/fuzzing').parentElement!;
+    expect(strip.className).toMatch(/overflow-hidden/);
+    expect(strip.parentElement!.className).not.toMatch(/flex-wrap|mt-1\.5/);
+  });
+
+  it('reserves a floor for the Tags column rather than letting it collapse', () => {
+    render(LibraryTable);
+    const pinned = PINNED_KEYS.reduce((s, k) => s + columnWidths[k], 0);
+    expect(screen.getByRole('table').style.minWidth).toBe(
+      `${2 * ICON_COLUMN_PX + pinned + TAGS_MIN_PX}px`,
+    );
   });
 
   it('renders one resize separator per pinned column', () => {

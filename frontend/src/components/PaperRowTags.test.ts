@@ -78,6 +78,44 @@ describe('PaperRowTags', () => {
     expect(screen.queryByText('benchmarks')).not.toBeInTheDocument();
   });
 
+  // The chip strip is the element the chips are children of; the sidebar
+  // renders it `display: contents` so it is structurally the same in both
+  // variants and only the classes differ.
+  function strip() {
+    return screen.getByText('security/fuzzing').parentElement!;
+  }
+
+  it('wraps onto as many lines as it needs in the sidebar (default) variant', () => {
+    render(PaperRowTags, { props: { paper } });
+    expect(strip().className).toBe('contents');
+    expect(strip()).not.toHaveAttribute('title');
+    expect(strip().parentElement!.className).toMatch(/mt-1\.5.*flex-wrap/);
+  });
+
+  it('stays on one clipped line in the inline (table) variant', () => {
+    render(PaperRowTags, { props: { paper, inline: true } });
+    // One line: no wrap, and none of the sidebar's leading margin — both of
+    // which made a tag-heavy table row taller than its neighbours.
+    expect(strip().parentElement!.className).not.toMatch(/flex-wrap|mt-1\.5/);
+    expect(strip().className).toMatch(/overflow-hidden/);
+    // Chips clip rather than squeeze, and the tooltip names the ones the cut
+    // edge hides.
+    expect(screen.getByText('security/fuzzing').className).toMatch(/shrink-0/);
+    expect(strip()).toHaveAttribute(
+      'title',
+      'security/fuzzing, os/rtos, ml/llm, benchmarks, robotics',
+    );
+  });
+
+  it('lets the inline variant wrap once expanded, so +N still reveals everything', async () => {
+    render(PaperRowTags, { props: { paper, inline: true } });
+    await userEvent.click(screen.getByRole('button', { name: '+2' }));
+    // Growing taller is fine when it was asked for — and "Less" undoes it.
+    expect(strip().className).toBe('contents');
+    expect(strip().parentElement!.className).toMatch(/flex-wrap/);
+    expect(screen.getByText('robotics')).toBeInTheDocument();
+  });
+
   it('keeps a tag matching the active filter visible beyond the cap', () => {
     filters.tag = 'robotics';
     render(PaperRowTags, { props: { paper } });

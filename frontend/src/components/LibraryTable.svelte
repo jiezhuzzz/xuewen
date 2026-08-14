@@ -82,15 +82,29 @@
   const searching = $derived(filters.q.trim() !== '');
 
   let tableEl = $state<HTMLTableElement | null>(null);
+  let paneEl = $state<HTMLDivElement | null>(null);
   let headerMenu = $state<{ x: number; y: number } | null>(null);
+
+  // Under `table-layout: fixed` the width-less Tags column only ever gets the
+  // remainder — and once the pinned widths alone exceed the pane that
+  // remainder is *zero*. Tags then wrapped one chip per line, so the papers
+  // with the most tags stood several rows tall next to their neighbours. The
+  // floor turns that into the honest outcome instead: the pane scrolls
+  // sideways and every column keeps a width you can read.
+  const tableMinWidth = $derived(
+    2 * ICON_COLUMN_PX + PINNED_KEYS.reduce((s, k) => s + columnWidths[k], 0) + TAGS_MIN_PX,
+  );
 
   // Widest `key` may grow while every other pinned column keeps its width
   // and Tags keeps its reserve — the invariant that keeps the table filling
-  // the pane with no horizontal scroll. Falls back to the static max when
-  // layout isn't available (jsdom).
+  // the pane with no horizontal scroll. Measured against the *pane*, not the
+  // table: the table can no longer be narrower than tableMinWidth, so sizing
+  // to it would let auto-fit grow columns into surplus that only exists
+  // because the columns are already too wide. Falls back to the static max
+  // when layout isn't available (jsdom).
   function maxFor(key: PinnedColumnKey): number {
     const stat = PINNED_COLUMNS[key].maxWidth;
-    const container = tableEl?.clientWidth ?? 0;
+    const container = paneEl?.clientWidth ?? 0;
     if (container <= 0) return stat;
     const others = PINNED_KEYS.reduce((s, k) => (k === key ? s : s + columnWidths[k]), 0);
     return Math.max(
@@ -129,7 +143,7 @@
       });
       bounds[key] = { min: def.minWidth, max: def.maxWidth };
     }
-    const container = tableEl.clientWidth;
+    const container = paneEl?.clientWidth ?? 0;
     const fitted =
       container > 0
         ? fitToAvailable(natural, bounds, container - 2 * ICON_COLUMN_PX - TAGS_TARGET_PX)
@@ -277,8 +291,12 @@
     />
   {/snippet}
 
-  <div class="min-h-0 flex-1 overflow-auto">
-    <table bind:this={tableEl} class="w-full table-fixed border-collapse text-sm">
+  <div bind:this={paneEl} class="min-h-0 flex-1 overflow-auto">
+    <table
+      bind:this={tableEl}
+      style={`min-width:${tableMinWidth}px`}
+      class="w-full table-fixed border-collapse text-sm"
+    >
       <!-- Single source of column widths. Tags has no <col> width on
            purpose: under table-fixed the one width-less column absorbs the
            remainder, which is what keeps the table exactly pane-wide. -->
@@ -480,7 +498,9 @@
             <td class={`${td} tabular-nums text-stone-500 dark:text-stone-400`} data-col="year">
               {#if p.year !== null}{p.year}{:else}<span class="text-stone-300 dark:text-stone-600">—</span>{/if}
             </td>
-            <td class={td}><PaperRowTags paper={p} /></td>
+            <!-- `inline`: one line, clipped — a table row's height has to be
+                 the same for every paper, tags or no tags. -->
+            <td class={td}><PaperRowTags paper={p} inline /></td>
             <td class={`${td} whitespace-nowrap text-stone-400 dark:text-stone-500`} data-col="added">
               {p.added_at ? DATE_FMT.format(new Date(p.added_at)) : ''}
             </td>
