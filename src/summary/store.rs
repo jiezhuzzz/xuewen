@@ -138,6 +138,7 @@ mod tests {
             added_at: "2026-07-12T00:00:00Z".into(),
             deleted_at: None,
             starred: false,
+            name: None,
             meta: PaperMeta {
                 title: Some("T".into()),
                 abstract_text: Some("A".into()),

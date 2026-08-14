@@ -20,6 +20,7 @@ fn seed_paper(id: &str, hash: &str, rel_path: &str, status: PaperStatus) -> Pape
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
         starred: false,
+        name: None,
         meta: PaperMeta {
             title: None,
             abstract_text: None,

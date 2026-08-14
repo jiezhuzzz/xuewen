@@ -230,6 +230,21 @@ export async function deleteTag(id: string): Promise<void> {
   if (!res.ok) throw new Error(`delete tag failed: ${res.status}`);
 }
 
+/// Returns the normalized name as the server stored it (trimmed; cleared to
+/// null when empty) — callers treat that echo as authoritative, not their input.
+export async function setPaperName(
+  paperId: string,
+  name: string | null,
+): Promise<{ name: string | null }> {
+  const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/name`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) return errorFromResponse(res, 'update name failed');
+  return res.json();
+}
+
 export async function setStar(paperId: string, on: boolean): Promise<void> {
   const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/star`, {
     method: on ? 'PUT' : 'DELETE',

@@ -17,7 +17,7 @@ function paper(id: string): PaperSummary {
   return {
     id, title: id, authors: [], venue: null, year: null, doi: null, arxiv_id: null,
     dblp_key: null, cite_key: null, url: null, source: null, status: 'resolved',
-    added_at: '', starred: false, tags: [], projects: [],
+    added_at: '', name: null, starred: false, tags: [], projects: [],
   };
 }
 

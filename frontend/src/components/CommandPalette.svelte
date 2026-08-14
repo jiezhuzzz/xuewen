@@ -48,7 +48,7 @@
     const papers: Item[] = library.papers
       .map((p) => ({
         p,
-        score: fuzzyScore(q, `${p.title ?? ''} ${p.authors.join(' ')} ${p.cite_key ?? ''}`),
+        score: fuzzyScore(q, `${p.name ?? ''} ${p.title ?? ''} ${p.authors.join(' ')} ${p.cite_key ?? ''}`),
       }))
       .filter((x): x is { p: PaperSummary; score: number } => x.score !== null)
       .sort((a, b) => b.score - a.score)

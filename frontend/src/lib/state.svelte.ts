@@ -22,6 +22,7 @@ import {
   renameTag as apiRenameTag,
   deleteTag as apiDeleteTag,
   searchPapers,
+  setPaperName as apiSetPaperName,
   setStar,
   updateProject,
 } from './api';
@@ -540,6 +541,24 @@ export async function toggleStar(paperId: string): Promise<void> {
     return;
   }
   if (filters.starred !== undefined) await loadPapers();
+}
+
+/// Set (or clear) a paper's manual name. Deliberately NOT optimistic (unlike
+/// toggleStar): the editor holds its own draft while typing, and bumping
+/// detailRefresh before the request resolves would remount the dock's
+/// children mid-flight — a failure's error message would land on the orphaned
+/// editor instance, invisibly. Await first, then patch the row/cached detail
+/// from the server's echo (authoritative: it re-trims and normalizes empty to
+/// null). Name is never a filter, so the list only reloads when its order
+/// depends on it.
+export async function setPaperName(paperId: string, name: string | null): Promise<void> {
+  const { name: stored } = await apiSetPaperName(paperId, name);
+  const row = library.papers.find((p) => p.id === paperId);
+  if (row) row.name = stored;
+  const cached = detailCache.get(paperId);
+  if (cached) cached.name = stored;
+  detailRefresh.n += 1;
+  if (filters.sort === 'name') await loadPapers();
 }
 
 /// Add a tag (by name; creating it if new) to a paper, patch the row/cached

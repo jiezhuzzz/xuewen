@@ -372,6 +372,7 @@ impl PaperMeta {
             added_at: chrono::Utc::now().to_rfc3339(),
             deleted_at: None,
             starred: false,
+            name: None,
             meta: self,
         }
     }
@@ -452,6 +453,7 @@ mod tests {
             added_at: "2026-07-08T00:00:00Z".into(),
             deleted_at: None,
             starred: false,
+            name: None,
             meta: PaperMeta {
                 title: Some("T".into()),
                 abstract_text: None,
@@ -540,6 +542,11 @@ mod tests {
         a.meta.abstract_text = Some("kept abstract".into());
         std::fs::write(library.join("ha.pdf"), b"%PDF-1.4 fake").unwrap();
         db::insert_paper(&pool, &a).await.unwrap();
+        // A manual name must survive identify: apply_match replaces the whole
+        // metadata block, and `name` lives outside it precisely for this.
+        db::set_paper_name(&pool, &a.id, Some("AntiFuzz"))
+            .await
+            .unwrap();
 
         // Another paper already owns a DOI (for the conflict case).
         let b = paper(
@@ -579,6 +586,7 @@ mod tests {
         assert_eq!(got.meta.abstract_text.as_deref(), Some("kept abstract"));
         assert_eq!(got.cite_key.as_deref(), Some("guler2019antifuzz"));
         assert_eq!(got.rel_path, "guler2019antifuzz.pdf");
+        assert_eq!(got.name.as_deref(), Some("AntiFuzz"));
         assert!(library.join("guler2019antifuzz.pdf").exists());
 
         // Idempotent: re-applying the same match succeeds and changes nothing.

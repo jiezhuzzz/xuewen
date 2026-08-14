@@ -10,7 +10,7 @@ const detail = {
   id: 'p1', title: 'Attention', authors: ['Vaswani'], venue: 'NeurIPS', year: 2017,
   doi: null, arxiv_id: null, dblp_key: null, cite_key: 'vaswani2017', url: null,
   source: null, status: 'resolved', added_at: '2026-07-08T00:00:00Z',
-  abstract: 'Abs.', starred: false, tags: [], projects: [], summary: null,
+  abstract: 'Abs.', name: null, starred: false, tags: [], projects: [], summary: null,
 };
 
 beforeEach(() => {

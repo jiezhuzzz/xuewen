@@ -235,6 +235,19 @@ pub async fn set_paper_starred(pool: &SqlitePool, paper_id: &str, starred: bool)
         > 0)
 }
 
+/// Set (or clear, with `None`) a paper's manual name. Identify/refresh never
+/// touch this column (`update_paper` deliberately omits it — see
+/// `models::Paper::name`). Returns true if a row was updated.
+pub async fn set_paper_name(pool: &SqlitePool, paper_id: &str, name: Option<&str>) -> Result<bool> {
+    Ok(sqlx::query("UPDATE papers SET name = ? WHERE id = ?")
+        .bind(name)
+        .bind(paper_id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        > 0)
+}
+
 /// Find a paper by exact id, else by unique id prefix (active or trashed).
 pub async fn find_one(pool: &SqlitePool, id: &str) -> Result<Paper> {
     if let Some(p) = get_by_id(pool, id).await? {
@@ -579,6 +592,10 @@ pub async fn list_papers(
         Some("year_asc") => "year ASC NULLS LAST",
         Some("added_desc") => "added_at DESC",
         Some("title") => "title COLLATE NOCASE ASC",
+        // NULLS LAST (unlike title's arm): most papers have no name, and a
+        // name sort that buried every named paper below the unnamed tail
+        // would be useless. Title breaks ties so the tail stays stable.
+        Some("name") => "name COLLATE NOCASE ASC NULLS LAST, title COLLATE NOCASE ASC",
         Some("year_desc") => "year DESC",
         _ => "year DESC", // unknown values fall back to the default
     };
@@ -751,6 +768,7 @@ mod tests {
             added_at: "2026-07-06T00:00:00Z".to_string(),
             deleted_at: None,
             starred: false,
+            name: None,
             meta: PaperMeta {
                 title: Some("A Title".into()),
                 abstract_text: None,
@@ -1393,6 +1411,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn set_paper_name_sets_and_clears() {
+        let (_dir, pool) = temp_pool().await;
+        let pid = insert_test_paper(&pool).await;
+        assert!(set_paper_name(&pool, &pid, Some("RVSpec")).await.unwrap());
+        let got = get_by_id(&pool, &pid).await.unwrap().unwrap();
+        assert_eq!(got.name.as_deref(), Some("RVSpec"));
+        assert!(set_paper_name(&pool, &pid, None).await.unwrap());
+        let got = get_by_id(&pool, &pid).await.unwrap().unwrap();
+        assert_eq!(got.name, None);
+        // Unknown id: no row updated.
+        assert!(!set_paper_name(&pool, "nope", Some("X")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_papers_sorts_by_name_nulls_last() {
+        let (_dir, pool) = temp_pool().await;
+        let unnamed = sample_paper("01900000-0000-7000-8000-0000000000a1", "ha");
+        let mut beta = sample_paper("01900000-0000-7000-8000-0000000000b2", "hb");
+        beta.name = Some("beta".into());
+        let mut alpha = sample_paper("01900000-0000-7000-8000-0000000000c3", "hc");
+        alpha.name = Some("Alpha".into());
+        for p in [&unnamed, &beta, &alpha] {
+            insert_paper(&pool, p).await.unwrap();
+            if let Some(n) = &p.name {
+                set_paper_name(&pool, &p.id, Some(n)).await.unwrap();
+            }
+        }
+        let sorted = list_papers(&pool, None, None, Some("name"), None, None, None)
+            .await
+            .unwrap();
+        // Case-insensitive alphabetical, unnamed papers last.
+        assert_eq!(
+            sorted.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec![alpha.id.as_str(), beta.id.as_str(), unnamed.id.as_str()],
+        );
     }
 
     #[tokio::test]

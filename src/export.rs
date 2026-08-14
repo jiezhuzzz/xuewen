@@ -158,6 +158,7 @@ mod tests {
             added_at: "2026-07-09T00:00:00Z".into(),
             deleted_at: None,
             starred: false,
+            name: None,
             meta: PaperMeta {
                 title: Some("KGAT: Knowledge Graph Attention Network".into()),
                 abstract_text: None,

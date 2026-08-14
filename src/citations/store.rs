@@ -61,6 +61,7 @@ pub(crate) async fn tests_pool_with_paper(id: &str) -> sqlx::SqlitePool {
         added_at: "2026-07-13T00:00:00Z".into(),
         deleted_at: None,
         starred: false,
+        name: None,
         meta: PaperMeta {
             title: None,
             abstract_text: None,

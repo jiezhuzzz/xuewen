@@ -21,6 +21,8 @@ pub struct ProjectRef {
 #[derive(Serialize)]
 pub struct PaperSummary {
     pub id: String,
+    /// Manual "known as" name (e.g. "RVSpec"); see `models::Paper::name`.
+    pub name: Option<String>,
     pub title: Option<String>,
     pub authors: Vec<String>,
     pub venue: Option<String>,
@@ -42,6 +44,7 @@ impl From<&Paper> for PaperSummary {
     fn from(p: &Paper) -> Self {
         Self {
             id: p.id.clone(),
+            name: p.name.clone(),
             title: p.meta.title.clone(),
             authors: p.meta.authors.0.clone(),
             venue: p.meta.venue.clone(),
@@ -92,6 +95,13 @@ impl PaperDetail {
         self.summary.projects = projects;
         self
     }
+}
+
+/// PATCH /api/papers/{id}/name response: the normalized value as stored —
+/// the client treats this echo as authoritative, not its own input.
+#[derive(Serialize)]
+pub struct PaperNameResponse {
+    pub name: Option<String>,
 }
 
 /// Library counts for the header.

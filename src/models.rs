@@ -85,6 +85,11 @@ pub struct Paper {
     pub deleted_at: Option<String>,
     #[sqlx(default)]
     pub starred: bool,
+    /// Manual "known as" name (the system/tool the paper proposes, e.g.
+    /// "RVSpec"). Lives outside `PaperMeta` on purpose: identify/refresh
+    /// replace the whole metadata block, and this field must survive that.
+    #[sqlx(default)]
+    pub name: Option<String>,
     #[sqlx(flatten)]
     #[serde(flatten)]
     pub meta: PaperMeta,

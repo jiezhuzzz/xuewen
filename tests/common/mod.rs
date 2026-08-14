@@ -59,6 +59,7 @@ pub async fn pool_and_root_with_paper(id: &str) -> (sqlx::SqlitePool, PathBuf) {
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
         starred: false,
+        name: None,
         meta: PaperMeta {
             title: Some(format!("Paper {id}")),
             abstract_text: Some("An abstract.".into()),

@@ -18,6 +18,7 @@ function paper(overrides: Partial<PaperDetail> = {}): PaperDetail {
     source: null,
     status: 'resolved',
     added_at: '2024-01-01',
+    name: null,
     starred: false,
     tags: [],
     projects: [],

@@ -5,6 +5,7 @@
   import DeletePaperButton from './DeletePaperButton.svelte';
   import DockCode from './DockCode.svelte';
   import PaperMeta from './PaperMeta.svelte';
+  import PaperNameEditor from './PaperNameEditor.svelte';
   import PaperProjectEditor from './PaperProjectEditor.svelte';
   import PaperTagEditor from './PaperTagEditor.svelte';
   import Spinner from './Spinner.svelte';
@@ -70,6 +71,7 @@
       <section class={divider}>
         <h3 class={label}>Record</h3>
         <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-detail">
+          <PaperNameEditor {d} />
           {#if d.cite_key}
             <dt class="text-stone-500 dark:text-stone-400">Cite key</dt>
             <dd class="font-mono text-caption text-ink dark:text-stone-200">{d.cite_key}</dd>

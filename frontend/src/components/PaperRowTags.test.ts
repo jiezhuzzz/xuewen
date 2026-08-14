@@ -19,6 +19,7 @@ const paper: PaperSummary = {
   source: null,
   status: 'resolved',
   added_at: '',
+  name: null,
   starred: false,
   projects: [],
   tags: [

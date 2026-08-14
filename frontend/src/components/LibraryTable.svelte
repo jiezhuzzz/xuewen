@@ -285,6 +285,7 @@
       <colgroup>
         <col style={`width:${ICON_COLUMN_PX}px`} />
         <col style={`width:${ICON_COLUMN_PX}px`} />
+        <col style={`width:${columnWidths.name}px`} />
         <col style={`width:${columnWidths.title}px`} />
         <col style={`width:${columnWidths.firstAuthor}px`} />
         <col style={`width:${columnWidths.lastAuthor}px`} />
@@ -311,6 +312,22 @@
             />
           </th>
           <th></th>
+          <th
+            class={`${th} relative`}
+            data-col="name"
+            aria-sort={!searching && filters.sort === 'name' ? 'ascending' : undefined}
+          >
+            <button
+              type="button"
+              class={sortBtn}
+              disabled={searching}
+              title={searching ? 'Sorted by relevance during search' : undefined}
+              onclick={() => setSort('name')}
+            >
+              Name{#if !searching && filters.sort === 'name'}<ArrowUp size={11} />{/if}
+            </button>
+            {@render resizeHandle('name')}
+          </th>
           <th
             class={`${th} relative`}
             data-col="title"
@@ -419,6 +436,11 @@
               >
                 <Star size={14} fill={p.starred ? 'currentColor' : 'none'} />
               </button>
+            </td>
+            <td class={`${td} font-mono text-xs text-stone-600 dark:text-stone-300`}>
+              <div class="truncate" data-col="name" title={p.name ?? undefined}>
+                {#if p.name}{p.name}{:else}<span class="text-stone-300 dark:text-stone-600">—</span>{/if}
+              </div>
             </td>
             <td class={td}>
               <button

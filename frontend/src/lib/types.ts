@@ -10,6 +10,8 @@ export interface TagSummary extends Tag {
 
 export interface PaperSummary {
   id: string;
+  /** Manual "known as" name (e.g. "RVSpec"); set only from the Details dock. */
+  name: string | null;
   title: string | null;
   authors: string[];
   venue: string | null;
@@ -53,7 +55,7 @@ export interface Stats {
 }
 
 export type StatusFilter = 'all' | 'resolved' | 'needs_review';
-export type Sort = 'year_desc' | 'year_asc' | 'added_desc' | 'title';
+export type Sort = 'year_desc' | 'year_asc' | 'added_desc' | 'title' | 'name';
 export type BibFormat = 'bibtex' | 'biblatex';
 
 export interface Filters {

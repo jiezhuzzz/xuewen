@@ -9,8 +9,9 @@ use tower_http::services::ServeFile;
 use uuid::Uuid;
 
 use super::dto::{
-    Candidate, DailyPaperDto, DailyResponse, PaperDetail, PaperSummary, ProjectRef, SearchMatch,
-    SearchResponse, SearchResult, SearchStatus, SemanticAvailability, Stats, TagRef, TierCounts,
+    Candidate, DailyPaperDto, DailyResponse, PaperDetail, PaperNameResponse, PaperSummary,
+    ProjectRef, SearchMatch, SearchResponse, SearchResult, SearchStatus, SemanticAvailability,
+    Stats, TagRef, TierCounts,
 };
 use super::AppState;
 use crate::db;
@@ -880,6 +881,48 @@ async fn set_star(app: &AppState, id: &str, on: bool) -> Response {
         Ok(false) => not_found(),
         Err(e) => {
             tracing::error!("set_star: {e}");
+            internal_error()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetPaperNameBody {
+    /// Missing key, null, and whitespace-only all mean "clear".
+    pub name: Option<String>,
+}
+
+/// Longest accepted manual name — a short identifier like "RVSpec", not prose.
+const NAME_MAX_CHARS: usize = 200;
+
+pub async fn set_paper_name(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SetPaperNameBody>,
+) -> Response {
+    let name = body
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(n) = name {
+        if n.chars().count() > NAME_MAX_CHARS {
+            return bad_request("name is too long (max 200 characters)");
+        }
+        // The name renders in single-line chips/cells; an embedded newline or
+        // other control character would corrupt every one of them.
+        if n.chars().any(char::is_control) {
+            return bad_request("name must not contain control characters");
+        }
+    }
+    match db::set_paper_name(&app.pool, &id, name).await {
+        Ok(true) => Json(PaperNameResponse {
+            name: name.map(str::to_string),
+        })
+        .into_response(),
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("set_paper_name: {e}");
             internal_error()
         }
     }

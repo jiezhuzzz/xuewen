@@ -116,7 +116,7 @@ describe('global rename/delete clears the per-paper detail cache', () => {
       if (url.startsWith('/api/papers/') && !url.includes('/projects/') && !url.includes('/tags')) {
         return { id: 'x', title: 'X', authors: [], venue: null, year: null, doi: null,
           arxiv_id: null, dblp_key: null, cite_key: null, url: null, source: null,
-          status: 'resolved', added_at: '', starred: false, tags: [], projects: [], summary: null };
+          status: 'resolved', added_at: '', name: null, starred: false, tags: [], projects: [], summary: null };
       }
       return handler(url, init);
     });

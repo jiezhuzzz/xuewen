@@ -273,6 +273,7 @@ mod tests {
             added_at: "2026-01-01".into(),
             deleted_at: None,
             starred: false,
+            name: None,
             meta: crate::models::PaperMeta {
                 title: Some("A Great Paper".into()),
                 abstract_text: None,

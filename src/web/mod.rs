@@ -224,6 +224,10 @@ fn router_with(state: AppState) -> Router {
             "/api/papers/{id}/star",
             axum::routing::put(api::star_paper).delete(api::unstar_paper),
         )
+        .route(
+            "/api/papers/{id}/name",
+            axum::routing::patch(api::set_paper_name),
+        )
         .route("/api/search", get(api::search_papers))
         .route("/api/search/status", get(api::search_status))
         .route("/api/daily", get(api::daily_papers))

@@ -40,7 +40,7 @@ describe('TopBar counts', () => {
     library.papers = [
       { id: 'p1', title: 'A', authors: [], venue: null, year: null, doi: null,
         arxiv_id: null, dblp_key: null, cite_key: null, url: null, source: null,
-        status: 'resolved', added_at: '2026-01-01', starred: false, tags: [], projects: [] },
+        status: 'resolved', added_at: '2026-01-01', name: null, starred: false, tags: [], projects: [] },
     ];
     render(TopBar);
     expect(screen.getByText('1 match')).toBeInTheDocument();

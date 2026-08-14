@@ -22,7 +22,7 @@ function detail(overrides: Partial<PaperDetail> = {}): PaperDetail {
   return {
     id: 'p1', title: 't', authors: [], venue: null, year: null, doi: null, arxiv_id: null,
     dblp_key: null, cite_key: null, url: null, source: null, status: 'resolved', added_at: '',
-    starred: false, tags: [{ id: 't1', name: 'security/fuzzing' }], projects: [],
+    name: null, starred: false, tags: [{ id: 't1', name: 'security/fuzzing' }], projects: [],
     abstract: null, summary: null,
     ...overrides,
   };

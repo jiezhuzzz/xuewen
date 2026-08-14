@@ -9,7 +9,7 @@ import type { PaperSummary } from '../lib/types';
 const paper: PaperSummary = {
   id: 'p1', title: 'Attention Is All You Need', authors: ['Vaswani'], venue: 'NeurIPS',
   year: 2017, doi: null, arxiv_id: null, dblp_key: null, cite_key: null, url: null,
-  source: null, status: 'resolved', added_at: '', starred: false, tags: [], projects: [],
+  source: null, status: 'resolved', added_at: '', name: null, starred: false, tags: [], projects: [],
 };
 
 beforeEach(() => {
@@ -34,6 +34,21 @@ describe('PaperRow', () => {
     await userEvent.click(screen.getByRole('button', { name: /Attention/ }));
     expect(viewer.tabs).toHaveLength(1);
     expect(viewer.activeId).toBe('p1');
+  });
+
+  it('shows the name chip before the title when a name is set', () => {
+    render(PaperRow, { props: { paper: { ...paper, name: 'Transformer' } } });
+    const chip = screen.getByText('Transformer');
+    expect(chip).toBeInTheDocument();
+    // Chip and title share the title line, chip first.
+    const line = chip.parentElement!;
+    expect(line.textContent).toMatch(/^\s*Transformer\s*Attention Is All You Need/);
+  });
+
+  it('renders no chip when the paper has no name', () => {
+    render(PaperRow, { props: { paper } });
+    expect(screen.queryByText('Transformer')).not.toBeInTheDocument();
+    expect(screen.getByText(/Attention Is All You Need/)).toBeInTheDocument();
   });
 
   it('shows a lone author unchanged', () => {

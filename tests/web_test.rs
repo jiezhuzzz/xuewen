@@ -31,6 +31,7 @@ fn paper(id: &str, title: &str, status: PaperStatus) -> Paper {
         added_at: "2026-07-07T00:00:00Z".into(),
         deleted_at: None,
         starred: false,
+        name: None,
         meta: PaperMeta {
             title: Some(title.into()),
             abstract_text: Some("An abstract.".into()),
@@ -1245,6 +1246,58 @@ async fn star_and_unstar_paper() {
     // Starring a missing paper -> 404.
     server
         .put("/api/papers/nope/star")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn set_and_clear_paper_name() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(
+        &pool,
+        &paper("aaaa1111", "Deep Residual Learning", PaperStatus::Resolved),
+    )
+    .await
+    .unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    // Set -> 200 echoing the trimmed value; detail reflects it.
+    let res = server
+        .patch("/api/papers/aaaa1111/name")
+        .json(&serde_json::json!({ "name": "  ResNet  " }));
+    let res = res.await;
+    res.assert_status(axum::http::StatusCode::OK);
+    assert_eq!(res.json::<serde_json::Value>()["name"], "ResNet");
+    let detail: serde_json::Value = server.get("/api/papers/aaaa1111").await.json();
+    assert_eq!(detail["name"], "ResNet");
+
+    // Whitespace-only clears back to null.
+    let res = server
+        .patch("/api/papers/aaaa1111/name")
+        .json(&serde_json::json!({ "name": "   " }))
+        .await;
+    res.assert_status(axum::http::StatusCode::OK);
+    assert_eq!(
+        res.json::<serde_json::Value>()["name"],
+        serde_json::Value::Null
+    );
+    let detail: serde_json::Value = server.get("/api/papers/aaaa1111").await.json();
+    assert_eq!(detail["name"], serde_json::Value::Null);
+
+    // Over-length and control characters -> 400; missing paper -> 404.
+    server
+        .patch("/api/papers/aaaa1111/name")
+        .json(&serde_json::json!({ "name": "x".repeat(201) }))
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+    server
+        .patch("/api/papers/aaaa1111/name")
+        .json(&serde_json::json!({ "name": "two\nlines" }))
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+    server
+        .patch("/api/papers/nope/name")
+        .json(&serde_json::json!({ "name": "X" }))
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
 }

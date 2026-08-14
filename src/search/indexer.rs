@@ -245,6 +245,7 @@ mod tests {
             added_at: "2026-07-09T00:00:00Z".into(),
             deleted_at: None,
             starred: false,
+            name: None,
             meta: PaperMeta {
                 title: Some(title.into()),
                 abstract_text: Some("An abstract.".into()),
@@ -368,6 +369,7 @@ mod tests {
             added_at: "2026-07-09T00:00:00Z".into(),
             deleted_at: None,
             starred: false,
+            name: None,
             meta: PaperMeta {
                 title: Some("Fuzzing Firmware".into()),
                 abstract_text: Some("An abstract.".into()),

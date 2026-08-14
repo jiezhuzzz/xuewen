@@ -10,7 +10,7 @@ function paper(id: string): PaperSummary {
   return {
     id, title: id, authors: [], venue: null, year: null, doi: null, arxiv_id: null,
     dblp_key: null, cite_key: null, url: null, source: null, status: 'resolved',
-    added_at: '', starred: false, tags: [], projects: [],
+    added_at: '', name: null, starred: false, tags: [], projects: [],
   };
 }
 
@@ -52,7 +52,7 @@ function detail(id: string) {
     doi: '10.1/x', arxiv_id: '1706.03762', dblp_key: null, cite_key: 'vaswani2017',
     url: null, source: 'crossref', status: 'resolved', added_at: '2026-07-08T00:00:00Z',
     abstract: 'The dominant sequence transduction models…',
-    starred: false, tags: [], projects: [], summary: null,
+    name: null, starred: false, tags: [], projects: [], summary: null,
   };
 }
 
@@ -77,6 +77,13 @@ describe('DockDetails', () => {
     expect(screen.getByRole('link', { name: /DOI/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /arXiv/ })).toBeInTheDocument();
     expect(screen.getByText(/dominant sequence transduction/)).toBeInTheDocument();
+  });
+
+  it('renders the editable Name row in the Record section', async () => {
+    render(DockDetails, { props: { id: 'info1' } });
+    await screen.findByText('Attention');
+    expect(screen.getByText('Name')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit paper name' })).toBeInTheDocument();
   });
 
   it('collapses the abstract', async () => {

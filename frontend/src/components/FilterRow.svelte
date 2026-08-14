@@ -262,6 +262,7 @@
     <option value="year_asc">Oldest</option>
     <option value="added_desc">Recently added</option>
     <option value="title">Title A–Z</option>
+    <option value="name">Name A–Z</option>
   </select>
 </div>
 

@@ -10,7 +10,7 @@ import type { PaperSummary } from '../lib/types';
 const paper: PaperSummary = {
   id: 'p1', title: 'Attention Is All You Need', authors: ['Vaswani'], venue: 'NeurIPS',
   year: 2017, doi: '10.1/x', arxiv_id: '1706.03762', dblp_key: null, cite_key: 'v2017', url: null,
-  source: null, status: 'resolved', added_at: '', starred: false, tags: [], projects: [],
+  source: null, status: 'resolved', added_at: '', name: null, starred: false, tags: [], projects: [],
 };
 
 // Branch the fetch mock by URL/method so copyCitation (export text), delete

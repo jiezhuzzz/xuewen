@@ -28,7 +28,7 @@ import type { PaperSummary } from '../lib/types';
 
 function paper(id: string, title: string, extra: Partial<PaperSummary> = {}): PaperSummary {
   return {
-    id, title, authors: ['Ada Lovelace', 'Alan Turing', 'Grace Hopper'], venue: 'NDSS',
+    id, name: null, title, authors: ['Ada Lovelace', 'Alan Turing', 'Grace Hopper'], venue: 'NDSS',
     year: 2026, doi: null, arxiv_id: null, dblp_key: null, cite_key: null, url: null,
     source: null, status: 'resolved', added_at: '2026-07-01T00:00:00Z', starred: false,
     tags: [], projects: [], ...extra,
@@ -66,6 +66,26 @@ describe('LibraryTable', () => {
     expect(screen.getAllByText('Grace Hopper')).toHaveLength(2); // last-author column
     await userEvent.click(screen.getByRole('button', { name: 'First Paper' }));
     expect(viewer.activeId).toBe('p1');
+  });
+
+  it('renders the Name column: value when set, em-dash ghost when not', () => {
+    library.papers = [paper('p1', 'First Paper', { name: 'RVSpec' }), paper('p2', 'Second Paper')];
+    render(LibraryTable);
+    expect(screen.getByText('RVSpec')).toBeInTheDocument();
+    expect(screen.getByText('RVSpec').closest('[data-col="name"]')).not.toBeNull();
+    // p2 has no name -> its Name cell shows the ghost dash (venue/year cells
+    // are populated by the fixture, so at least one dash comes from Name).
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('the Name header sets the name sort (single direction) and reloads', async () => {
+    render(LibraryTable);
+    await userEvent.click(screen.getByRole('button', { name: /^name$/i }));
+    expect(filters.sort).toBe('name');
+    expect(api.listPapers as Mock).toHaveBeenCalled();
+    // Clicking again keeps it ascending — no toggle like Year.
+    await userEvent.click(screen.getByRole('button', { name: /^name$/i }));
+    expect(filters.sort).toBe('name');
   });
 
   it('the Year header toggles sort direction and reloads', async () => {
@@ -177,7 +197,7 @@ describe('LibraryTable', () => {
 
   it('renders one resize separator per pinned column', () => {
     render(LibraryTable);
-    expect(screen.getAllByRole('separator')).toHaveLength(6);
+    expect(screen.getAllByRole('separator')).toHaveLength(7);
   });
 
   it('dragging a handle commits and persists the width', async () => {

@@ -4,12 +4,19 @@
 /// module is only the single source of truth for widths, so the colgroup,
 /// drag-resize, auto-fit, and persistence all agree on one set of numbers.
 
-/// The six columns with a user-adjustable width. The two icon columns
+/// The seven columns with a user-adjustable width. The two icon columns
 /// (checkbox, star) are fixed, and Tags deliberately has no width at all:
 /// under `table-layout: fixed` the one width-less column soaks up whatever
 /// the pinned columns leave, which is what keeps the table filling the pane
 /// with zero JS reflow work.
-export type PinnedColumnKey = 'title' | 'firstAuthor' | 'lastAuthor' | 'venue' | 'year' | 'added';
+export type PinnedColumnKey =
+  | 'name'
+  | 'title'
+  | 'firstAuthor'
+  | 'lastAuthor'
+  | 'venue'
+  | 'year'
+  | 'added';
 
 export interface ColumnDef {
   label: string;
@@ -24,6 +31,7 @@ export interface ColumnDef {
 /// Text-heavy columns get generous caps; Year/Added stay tight because extra
 /// width there is only empty space.
 export const PINNED_COLUMNS: Record<PinnedColumnKey, ColumnDef> = {
+  name: { label: 'Name', defaultWidth: 110, minWidth: 64, maxWidth: 320 },
   title: { label: 'Title', defaultWidth: 320, minWidth: 140, maxWidth: 1200 },
   firstAuthor: { label: 'First author', defaultWidth: 130, minWidth: 70, maxWidth: 560 },
   lastAuthor: { label: 'Last author', defaultWidth: 130, minWidth: 70, maxWidth: 560 },
