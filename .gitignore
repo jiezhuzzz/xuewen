@@ -3,6 +3,9 @@
 library.db*
 /frontend/dist/
 /frontend/node_modules/
+# Vite scratch dirs, left behind when vitest/vite is run from the repo root
+# instead of frontend/ (see CLAUDE.md — a bare `npx vitest` here mis-resolves).
+/node_modules/
 /search-index/
 result
 result-*
@@ -11,3 +14,10 @@ deploy/k8s/secret.yaml
 
 # Local demo data (DB, PDFs, vectors, config)
 /demo/
+
+# Local Qdrant bootstrap marker
+/.qdrant-initialized
+
+# Upstream EmbedPDF checkout, cloned here for reading the viewer's sources
+# (the app depends on the published @embedpdf/* packages, not on this tree).
+/embed-pdf-viewer/
