@@ -3,6 +3,7 @@
   import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
   import { clickOutside } from '../lib/clickOutside';
+  import AnnotationHistory from './AnnotationHistory.svelte';
   import AnnotationTools from './AnnotationTools.svelte';
   import { DUR, dur, EASE } from '../lib/motion';
   import { cyclePdfAppearance, pdfAppearance, ui, viewer } from '../lib/state.svelte';
@@ -198,6 +199,7 @@
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
 
   <AnnotationTools {documentId} onHoldChange={(held) => (annotationMenuOpen = held)} />
+  <AnnotationHistory {documentId} />
 
   <span class="h-5 w-px shrink-0 bg-stone-200 dark:bg-stone-800"></span>
 

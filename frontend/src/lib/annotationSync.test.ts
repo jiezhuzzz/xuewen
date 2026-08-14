@@ -318,6 +318,35 @@ describe('deleting', () => {
   });
 });
 
+describe('undo and redo', () => {
+  it('restores the row on a redo that lands before the undo’s delete settles', async () => {
+    const h = harness();
+    await h.sync.start();
+    h.emit(created(mark('a1')));
+    await h.sync.flush();
+    // Undo, then redo a moment later — the plugin emits delete then create for
+    // the same id. The DELETE is still in flight when the create arrives, so a
+    // save that read the cache eagerly would find the row it is about to
+    // remove, call the mark unchanged, and skip the write.
+    h.emit(deleted(mark('a1')));
+    h.emit(created(mark('a1')));
+    await h.sync.flush();
+    expect(server['p1']['a1']).toBeDefined();
+    expect(annotationCount('p1')).toBe(1);
+  });
+
+  it('leaves the row deleted when the undo is not redone', async () => {
+    const h = harness();
+    await h.sync.start();
+    h.emit(created(mark('a1')));
+    await h.sync.flush();
+    h.emit(deleted(mark('a1')));
+    await h.sync.flush();
+    expect(server['p1']['a1']).toBeUndefined();
+    expect(annotationCount('p1')).toBe(0);
+  });
+});
+
 describe('closing the tab', () => {
   it('flushes a pending edit rather than losing it', async () => {
     vi.useFakeTimers();

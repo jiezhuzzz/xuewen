@@ -72,30 +72,48 @@ export function createAnnotationSync(opts: AnnotationSyncOptions): AnnotationSyn
     opts.onError?.((e as Error).message);
   }
 
-  function track(p: Promise<void>): void {
-    const done = p.then(
+  /// One mark's writes, in order. Undo and redo turn a create into a delete and
+  /// back within a click or two, and two requests racing on the same id could
+  /// land the PUT before the DELETE — leaving the reader looking at a mark the
+  /// sidecar has forgotten. Queued work reads the plugin and the cache when it
+  /// runs rather than when it was queued, so a save behind a delete sees the
+  /// row is gone and writes it back instead of calling it unchanged. A mark
+  /// with nothing pending still goes out synchronously.
+  const chains = new Map<string, Promise<void>>();
+
+  function enqueue(id: string, run: () => Promise<void>): void {
+    const prev = chains.get(id);
+    const done = (prev ? prev.then(run) : run()).then(
       () => {
         reportedError = false;
       },
       (e) => report(e),
     );
+    chains.set(id, done);
     inFlight.add(done);
-    void done.finally(() => inFlight.delete(done));
+    void done.finally(() => {
+      inFlight.delete(done);
+      // Only if nothing queued behind it — otherwise the next write would lose
+      // the predecessor it has to wait for.
+      if (chains.get(id) === done) chains.delete(id);
+    });
   }
 
   function write(id: string): void {
-    const tracked = scope.getAnnotationById(id);
-    // Gone between the edit and the flush — the delete path already ran.
-    if (!tracked) return;
-    const body = toWire({ annotation: tracked.object });
-    // Defense in depth: ownership should already have excluded this.
-    if (!body) return;
-    const stored = annotations.byPaper[paperId]?.[id];
-    // A move and a recolor both show up in the payload, so an unchanged mark
-    // really is unchanged — worth checking, since selecting a mark can emit an
-    // update that changes nothing.
-    if (stored && sameAsStored(body, stored)) return;
-    track(saveAnnotation(paperId, id, body));
+    enqueue(id, async () => {
+      const tracked = scope.getAnnotationById(id);
+      // Gone between the edit and the write — the delete path already ran.
+      if (!tracked) return;
+      const body = toWire({ annotation: tracked.object });
+      // Defense in depth: ownership should already have excluded this.
+      if (!body) return;
+      const stored = annotations.byPaper[paperId]?.[id];
+      // A move and a recolor both show up in the payload, so an unchanged mark
+      // really is unchanged — worth checking, since selecting a mark can emit
+      // an update that changes nothing.
+      if (stored && sameAsStored(body, stored)) return;
+      await saveAnnotation(paperId, id, body);
+    });
   }
 
   function schedule(id: string): void {
@@ -133,7 +151,7 @@ export function createAnnotationSync(opts: AnnotationSyncOptions): AnnotationSyn
     if (e.type === 'delete') {
       owned.delete(id);
       cancel(id);
-      track(removeAnnotation(paperId, id));
+      enqueue(id, () => removeAnnotation(paperId, id));
       return;
     }
     schedule(id);

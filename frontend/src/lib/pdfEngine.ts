@@ -78,6 +78,14 @@ export function viewerPlugins(): PluginBatchRegistrations {
   ];
 }
 
+/// The topic the annotation plugin files its undo/redo commands under. Scoping
+/// undo to it means the toolbar's undo can only ever take back a mark — never
+/// whatever a future plugin puts on the same global timeline. The plugin keeps
+/// this private (`ANNOTATION_HISTORY_TOPIC` in annotation-plugin.d.ts), so the
+/// string is version-pinned to @embedpdf/plugin-annotation 2.14.4; a rename
+/// upstream shows up as undo buttons that stay disabled, not as a wrong undo.
+export const ANNOTATION_HISTORY_TOPIC = 'annotations';
+
 /// Every tool we surface, seeded with the default palette color. The color is a
 /// live preference, so the toolbar pushes changes through `setToolDefaults`
 /// rather than this being the last word.
