@@ -60,8 +60,10 @@ async fn index_paper(
         return Ok(false); // purged since the plan was computed; tombstone next sweep
     };
 
-    let chunks = if work.fts {
-        // Full re-extract + re-chunk + Tantivy doc.
+    // Deriving the text and writing the Tantivy doc are separate steps: a note
+    // edit needs the second without the first, and `pdftotext` is by far the
+    // most expensive thing in this function.
+    let chunks = if work.reextract {
         let pdf_path = library_root.join(&paper.rel_path);
         let text = tokio::task::spawn_blocking(move || crate::pdf::extract_text_all(&pdf_path))
             .await
@@ -79,6 +81,12 @@ async fn index_paper(
             &store::meta_hash(&paper),
         )
         .await?;
+        chunks
+    } else {
+        store::chunks_for_paper(&svc.pool, &paper.id).await?
+    };
+
+    if work.fts {
         let body: String = chunks
             .iter()
             .filter(|c| c.seq >= 1)
@@ -86,6 +94,7 @@ async fn index_paper(
             .collect::<Vec<_>>()
             .join("\n\n");
         let notes = crate::annotations::store::notes_blob(&svc.pool, &paper.id).await?;
+        let notes_hash = store::notes_hash(&notes);
         svc.fts.upsert(&fts::PaperDoc {
             id: paper.id.clone(),
             title: paper.meta.title.clone().unwrap_or_default(),
@@ -95,11 +104,8 @@ async fn index_paper(
             body,
             notes,
         })?;
-        store::mark_fts_done(&svc.pool, &paper.id).await?;
-        chunks
-    } else {
-        store::chunks_for_paper(&svc.pool, &paper.id).await?
-    };
+        store::mark_fts_done(&svc.pool, &paper.id, &notes_hash).await?;
+    }
 
     if work.vectors {
         let Some(embedder) = &svc.embedder else {
@@ -295,6 +301,81 @@ mod tests {
         // Second sweep is a no-op.
         let s = sweep_in(&f).await.unwrap();
         assert_eq!(s.indexed + s.deindexed + s.failed, 0);
+    }
+
+    /// Attach a note to a paper, the way the annotations API does.
+    async fn add_note(f: &Fixture, paper_id: &str, id: &str, note: &str) {
+        crate::annotations::store::upsert(
+            &f.svc.pool,
+            paper_id,
+            id,
+            &crate::annotations::NewAnnotation {
+                page_index: 0,
+                kind: crate::annotations::AnnotationKind::Highlight,
+                color: crate::annotations::AnnotationColor::Amber,
+                quoted_text: Some("some quoted sentence".into()),
+                note: Some(note.into()),
+                payload: json!({ "annotation": { "type": 9 } }),
+            },
+            "2026-08-14T00:00:00Z",
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_new_note_reindexes_fts_without_touching_the_pdf() {
+        let f = fixture(None).await;
+        insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "the body words").await;
+        assert_eq!(sweep_in(&f).await.unwrap().indexed, 1);
+        assert!(f
+            .svc
+            .fts
+            .search("bisimulation", &fts::FieldSel::all(), 10)
+            .unwrap()
+            .is_empty());
+
+        // Delete the PDF: a re-extract would now fail loudly, so a green
+        // sweep proves the notes path reused the chunks already in SQLite.
+        std::fs::remove_file(f.library_root.join("p1.pdf")).unwrap();
+        add_note(&f, "p1", "a1", "this is really a bisimulation argument").await;
+
+        let s = sweep_in(&f).await.unwrap();
+        assert_eq!(s.indexed, 1);
+        assert_eq!(s.failed, 0, "the PDF must not be re-read for a note edit");
+
+        let mut sel = fts::FieldSel::none();
+        sel.notes = true;
+        let hits = f.svc.fts.search("bisimulation", &sel, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].paper_id, "p1");
+        // The body survived the rewrite — it came from the stored chunks.
+        assert_eq!(
+            f.svc
+                .fts
+                .search("body", &fts::FieldSel::all(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Third sweep is a no-op: the notes hash is stamped.
+        let s = sweep_in(&f).await.unwrap();
+        assert_eq!(s.indexed + s.deindexed + s.failed, 0);
+        assert_eq!(f.svc.status().await.unwrap().fts.pending, 0);
+    }
+
+    #[tokio::test]
+    async fn an_unstamped_note_shows_up_as_pending() {
+        let f = fixture(None).await;
+        insert_paper_with_pdf(&f, "p1", "Fuzzing Firmware", "the body words").await;
+        sweep_in(&f).await.unwrap();
+        add_note(&f, "p1", "a1", "worth revisiting").await;
+        assert_eq!(
+            f.svc.status().await.unwrap().fts.pending,
+            1,
+            "a note nobody has indexed yet is pending FTS work"
+        );
     }
 
     #[tokio::test]

@@ -11,6 +11,9 @@ pub struct IndexRow {
     pub paper_id: String,
     pub content_hash: String,
     pub meta_hash: String,
+    /// Hash of the annotation notes that went into the Tantivy doc, stamped
+    /// together with `fts_indexed_at`. Only the FTS tier carries notes.
+    pub notes_hash: String,
     pub chunk_count: i64,
     pub fts_indexed_at: Option<String>,
     pub vectors_indexed_at: Option<String>,
@@ -47,6 +50,16 @@ pub fn meta_hash(p: &Paper) -> String {
             .as_bytes(),
     );
     hex::encode(h.finalize())
+}
+
+/// Hash of a paper's joined annotation notes. Empty in, empty out: "no notes"
+/// is the empty stamp, which is also the column default, so a paper nobody has
+/// annotated never looks stale.
+pub fn notes_hash(blob: &str) -> String {
+    if blob.is_empty() {
+        return String::new();
+    }
+    hex::encode(Sha256::digest(blob.as_bytes()))
 }
 
 pub async fn all_index_rows(pool: &SqlitePool) -> Result<Vec<IndexRow>> {
@@ -119,12 +132,16 @@ pub async fn chunk_text(pool: &SqlitePool, paper_id: &str, seq: i64) -> Result<O
     Ok(row.map(|(seq, page, text)| Chunk { seq, page, text }))
 }
 
-pub async fn mark_fts_done(pool: &SqlitePool, paper_id: &str) -> Result<()> {
+/// Stamp the FTS tier. `notes_hash` is the hash of the notes blob that was
+/// actually written into the Tantivy doc — not of whatever is in the table
+/// now — so a note edited mid-sweep still reads as stale on the next pass.
+pub async fn mark_fts_done(pool: &SqlitePool, paper_id: &str, notes_hash: &str) -> Result<()> {
     sqlx::query(
-        "UPDATE search_index SET fts_indexed_at = ?, attempts = 0, last_error = NULL \
-         WHERE paper_id = ?",
+        "UPDATE search_index SET fts_indexed_at = ?, notes_hash = ?, \
+         attempts = 0, last_error = NULL WHERE paper_id = ?",
     )
     .bind(chrono::Utc::now().to_rfc3339())
+    .bind(notes_hash)
     .bind(paper_id)
     .execute(pool)
     .await?;
@@ -334,7 +351,7 @@ mod tests {
         assert_eq!(row.chunk_count, 2);
         assert!(row.fts_indexed_at.is_none() && row.vectors_indexed_at.is_none());
 
-        mark_fts_done(&pool, "p1").await.unwrap();
+        mark_fts_done(&pool, "p1", "").await.unwrap();
         mark_vectors_done(&pool, "p1", "text-embedding-3-small")
             .await
             .unwrap();
@@ -369,7 +386,7 @@ mod tests {
         assert_eq!(row.last_error.as_deref(), Some("boom2"));
         assert!(row.last_attempt_at.is_some());
 
-        mark_fts_done(&pool, "p1").await.unwrap();
+        mark_fts_done(&pool, "p1", "").await.unwrap();
         let row = &all_index_rows(&pool).await.unwrap()[0];
         assert_eq!(row.attempts, 0);
         assert!(row.last_error.is_none());
@@ -414,7 +431,7 @@ mod tests {
         replace_chunks(&pool, "p1", &two_chunks(), "h1", &meta_hash(&p))
             .await
             .unwrap();
-        mark_fts_done(&pool, "p1").await.unwrap();
+        mark_fts_done(&pool, "p1", "").await.unwrap();
         mark_vectors_done(&pool, "p1", "m").await.unwrap();
 
         clear_stamps(&pool, false, true).await.unwrap();

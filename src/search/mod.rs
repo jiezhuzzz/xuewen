@@ -305,12 +305,16 @@ impl SearchService {
         let papers = sqlx::query_as::<_, Paper>("SELECT * FROM papers")
             .fetch_all(&self.pool)
             .await?;
+        // One query for every paper's notes rather than one per paper: most
+        // papers have none, and this runs on every sweep.
+        let notes = crate::annotations::store::notes_by_paper(&self.pool).await?;
         Ok(papers
             .iter()
             .map(|p| planner::PaperState {
                 id: p.id.clone(),
                 content_hash: p.content_hash.clone(),
                 meta_hash: store::meta_hash(p),
+                notes_hash: store::notes_hash(notes.get(&p.id).map_or("", String::as_str)),
                 trashed: p.deleted_at.is_some(),
             })
             .collect())
@@ -330,7 +334,8 @@ impl SearchService {
             live_n += 1;
             if let Some(r) = by_id.get(p.id.as_str()) {
                 let content_ok = r.content_hash == p.content_hash && r.meta_hash == p.meta_hash;
-                if content_ok && r.fts_indexed_at.is_some() {
+                // Notes only affect the FTS tier — nothing embeds them.
+                if content_ok && r.notes_hash == p.notes_hash && r.fts_indexed_at.is_some() {
                     fts_indexed += 1;
                 }
                 if content_ok && r.vectors_indexed_at.is_some() && r.embed_model.as_deref() == model

@@ -9,6 +9,8 @@ pub struct PaperState {
     pub id: String,
     pub content_hash: String,
     pub meta_hash: String,
+    /// Hash of the paper's annotation notes, which the FTS tier indexes.
+    pub notes_hash: String,
     pub trashed: bool,
 }
 
@@ -16,7 +18,12 @@ pub struct PaperState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Work {
     pub paper_id: String,
+    /// The Tantivy doc must be rewritten.
     pub fts: bool,
+    /// The paper's text must be re-derived from its PDF (pdftotext + chunk).
+    /// Implies `fts`; a note edit rewrites the doc from the stored chunks
+    /// instead, which is the whole point of tracking a notes hash separately.
+    pub reextract: bool,
     pub vectors: bool,
 }
 
@@ -48,7 +55,12 @@ pub fn plan(
         let content_changed = row
             .map(|r| r.content_hash != p.content_hash || r.meta_hash != p.meta_hash)
             .unwrap_or(true);
-        let fts = content_changed || row.map(|r| r.fts_indexed_at.is_none()).unwrap_or(true);
+        let notes_changed = row.map(|r| r.notes_hash != p.notes_hash).unwrap_or(true);
+        // A missing FTS stamp still re-extracts: that is what makes `index
+        // rebuild` the escape hatch when the chunker itself changes, since
+        // nothing else ever re-derives the stored chunks.
+        let reextract = content_changed || row.map(|r| r.fts_indexed_at.is_none()).unwrap_or(true);
+        let fts = reextract || notes_changed;
         let vectors = embed_model.is_some()
             && (content_changed
                 || row
@@ -60,6 +72,7 @@ pub fn plan(
             out.index.push(Work {
                 paper_id: p.id.clone(),
                 fts,
+                reextract,
                 vectors,
             });
         }
@@ -100,6 +113,7 @@ mod tests {
             id: id.into(),
             content_hash: ch.into(),
             meta_hash: mh.into(),
+            notes_hash: String::new(),
             trashed,
         }
     }
@@ -109,6 +123,7 @@ mod tests {
             paper_id: id.into(),
             content_hash: ch.into(),
             meta_hash: mh.into(),
+            notes_hash: String::new(),
             chunk_count: 2,
             fts_indexed_at: Some("2026-07-09T00:00:00Z".into()),
             vectors_indexed_at: Some("2026-07-09T00:00:00Z".into()),
@@ -123,8 +138,41 @@ mod tests {
     fn new_paper_needs_both_tiers() {
         let p = plan(&[ps("a", "h", "m", false)], &[], Some("m1"), Utc::now());
         assert_eq!(p.index.len(), 1);
-        assert!(p.index[0].fts && p.index[0].vectors);
+        assert!(p.index[0].fts && p.index[0].reextract && p.index[0].vectors);
         assert!(p.deindex.is_empty());
+    }
+
+    #[test]
+    fn a_note_edit_rewrites_the_doc_without_re_extracting() {
+        let mut p = ps("a", "h", "m", false);
+        p.notes_hash = "n2".into();
+        let mut r = row("a", "h", "m");
+        r.notes_hash = "n1".into();
+        let plan = plan(&[p], &[r], Some("m1"), Utc::now());
+        assert_eq!(plan.index.len(), 1);
+        let w = &plan.index[0];
+        assert!(w.fts, "the Tantivy doc carries the notes");
+        assert!(!w.reextract, "the PDF did not change — reuse stored chunks");
+        assert!(!w.vectors, "nothing embeds notes");
+    }
+
+    #[test]
+    fn matching_notes_are_not_work() {
+        let mut p = ps("a", "h", "m", false);
+        p.notes_hash = "n1".into();
+        let mut r = row("a", "h", "m");
+        r.notes_hash = "n1".into();
+        assert!(plan(&[p], &[r], Some("m1"), Utc::now()).index.is_empty());
+    }
+
+    #[test]
+    fn a_missing_fts_stamp_still_re_extracts() {
+        // `index rebuild` clears the stamp; re-deriving the chunks is what
+        // makes it the escape hatch when the chunker itself changes.
+        let mut r = row("a", "h", "m");
+        r.fts_indexed_at = None;
+        let p = plan(&[ps("a", "h", "m", false)], &[r], None, Utc::now());
+        assert!(p.index[0].fts && p.index[0].reextract);
     }
 
     #[test]
@@ -160,7 +208,7 @@ mod tests {
             Utc::now(),
         );
         assert_eq!(p.index.len(), 1);
-        assert!(!p.index[0].fts && p.index[0].vectors);
+        assert!(!p.index[0].fts && !p.index[0].reextract && p.index[0].vectors);
     }
 
     #[test]
