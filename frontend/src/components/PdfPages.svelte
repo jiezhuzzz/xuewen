@@ -53,7 +53,18 @@
   // per mounted tab covers exactly one paper. Both capabilities start null and
   // settle once, so this effect runs at most twice; re-running is safe because
   // `destroy` flushes before it stops listening.
-  const annotationScope = useAnnotation(() => documentId);
+  //
+  // Withholding the id until the document is loaded is load-bearing. The
+  // plugin creates a document's annotation state in `onDocumentLoadingStarted`,
+  // and `useAnnotation`'s own effect calls `scope.getState()` eagerly — handed
+  // an id the plugin has not seen yet that throws "Annotation state not found
+  // for document: <id>" *inside* Svelte's effect flush, which aborts the rest
+  // of the flush and leaves the reader permanently blank (no page ever
+  // renders). PdfPages mounts as soon as its tab exists, well before PdfDeck's
+  // openDocumentUrl resolves, so it always lost that race. Passing '' takes
+  // the hook's own early-return path instead: the scope stays null until the
+  // document is ready, which the sync effect below already waits for.
+  const annotationScope = useAnnotation(() => (docState.current?.document ? documentId : ''));
   const annotationCap = useAnnotationCapability();
   $effect(() => {
     const scope = annotationScope.provides;
