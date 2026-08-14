@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ENGINE_OPTIONS, viewerPlugins } from './pdfEngine';
+import { ANNOTATION_OPTIONS, ENGINE_OPTIONS, viewerPlugins } from './pdfEngine';
+import { TOOL_BY_KIND } from './annotationAdapter';
+import { ANNOTATION_COLORS, colorHex } from './annotationPalette';
 
 describe('ENGINE_OPTIONS', () => {
   it('is offline + runs PDFium in a worker (load-bearing)', () => {
@@ -22,6 +24,7 @@ describe('viewerPlugins', () => {
     for (const id of [
       'viewport', 'scroll', 'render', 'selection', 'interaction-manager',
       'document-manager', 'tiling', 'search', 'thumbnail', 'bookmark',
+      'annotation', 'history',
     ]) {
       expect(ids).toContain(id);
     }
@@ -36,5 +39,40 @@ describe('viewerPlugins', () => {
     // keeps firing page changes). The side panel positions the pane once
     // when it opens instead.
     expect(thumbReg?.config?.autoScroll).toBe(false);
+  });
+
+  it('registers annotations with autoCommit off — the PDF is never written', () => {
+    const reg = viewerPlugins().find((r) => r.package.manifest.id === 'annotation');
+    // This is the setting the whole feature rests on: autoCommit would push
+    // marks back through PDFium and change the bytes under content_hash.
+    expect(reg?.config?.autoCommit).toBe(false);
+    expect(ANNOTATION_OPTIONS.autoCommit).toBe(false);
+  });
+
+  it("leaves link navigation to the reader's own citation popovers", () => {
+    expect(ANNOTATION_OPTIONS.autoOpenLinks).toBe(false);
+  });
+
+  it('keeps the tool armed after a mark so passages can be marked in a row', () => {
+    expect(ANNOTATION_OPTIONS.deactivateToolAfterCreate).toBe(false);
+    expect(ANNOTATION_OPTIONS.selectAfterCreate).toBe(true);
+  });
+
+  it('seeds every surfaced tool with a palette color', () => {
+    const byId = new Map(ANNOTATION_OPTIONS.tools.map((t) => [t.id, t.defaults]));
+    expect([...byId.keys()].sort()).toEqual(Object.values(TOOL_BY_KIND).sort());
+    const palette = ANNOTATION_COLORS.map(colorHex);
+    for (const [id, defaults] of byId) {
+      const used = Object.values(defaults);
+      expect(used.length, `${id} has no color`).toBeGreaterThan(0);
+      for (const hex of used) expect(palette, `${id} uses ${hex}`).toContain(hex);
+    }
+    // A sticky note is an icon: stroke only, no fill to color.
+    expect(byId.get(TOOL_BY_KIND.text_comment)).not.toHaveProperty('color');
+  });
+
+  it('names an author that is not the OS user', () => {
+    // An exported copy carries this; it must never leak a real name.
+    expect(ANNOTATION_OPTIONS.annotationAuthor).toBe('Xuewen');
   });
 });
