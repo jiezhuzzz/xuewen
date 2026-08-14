@@ -73,6 +73,11 @@ describe('LibraryTable', () => {
     render(LibraryTable);
     expect(screen.getByText('RVSpec')).toBeInTheDocument();
     expect(screen.getByText('RVSpec').closest('[data-col="name"]')).not.toBeNull();
+    // Mono semibold at full ink: the name is a handle to scan for, not the
+    // muted metadata the neighbouring columns are.
+    const cell = screen.getByText('RVSpec').closest('td')!;
+    expect(cell.className).toContain('font-semibold');
+    expect(cell.className).toContain('text-ink');
     // p2 has no name -> its Name cell shows the ghost dash (venue/year cells
     // are populated by the fixture, so at least one dash comes from Name).
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);

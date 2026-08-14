@@ -4,11 +4,11 @@ import TabBar from './TabBar.svelte';
 import { closeTab, openTab, ui, viewer } from '../lib/state.svelte';
 import type { PaperSummary } from '../lib/types';
 
-function paper(id: string, title: string): PaperSummary {
+function paper(id: string, title: string, name: string | null = null): PaperSummary {
   return {
     id, title, authors: [], venue: null, year: null, doi: null, arxiv_id: null,
     dblp_key: null, cite_key: null, url: null, source: null, status: 'resolved',
-    added_at: '', name: null, starred: false, tags: [], projects: [],
+    added_at: '', name, starred: false, tags: [], projects: [],
   };
 }
 
@@ -55,6 +55,16 @@ describe('TabBar', () => {
     expect(screen.getByTitle('A very long paper title')).toBeInTheDocument();
     const close = screen.getByRole('button', { name: 'Close tab' });
     expect(close.className).toContain('focus-visible:opacity-100');
+  });
+
+  it('labels a named paper by its name, keeping the full title as the tooltip', () => {
+    openTab(paper('a', 'Attention Is All You Need', 'Transformer'));
+    render(TabBar);
+    // The tooltip is the only place the full title can still be read, so it
+    // must stay the title even though the label no longer is.
+    const tab = screen.getByTitle('Attention Is All You Need');
+    expect(tab.textContent?.trim()).toBe('Transformer');
+    expect(tab.className).toContain('font-mono'); // same voice as the table's Name column
   });
 
   it('hosts no zen/info buttons (they live on the PDF toolbar)', async () => {

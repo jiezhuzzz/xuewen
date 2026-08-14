@@ -1,5 +1,6 @@
 <script lang="ts">
   import { setPaperName } from '../lib/state.svelte';
+  import { NAME_CHIP } from '../lib/nameChip';
   import type { PaperDetail } from '../lib/types';
 
   let { d }: { d: PaperDetail } = $props();
@@ -79,14 +80,18 @@
       <p class="mt-0.5 text-xs text-red-600 dark:text-red-400">{error}</p>
     {/if}
   {:else}
+    <!-- Set: the same chip the sidebar row wears, so a name looks like a name
+         everywhere — and so it stops being indistinguishable from the Cite key
+         row right below, which is the *other* mono identifier in this list.
+         Unset: the quiet dotted-underline prompt, unchanged. -->
     <button
       type="button"
       aria-label="Edit paper name"
       onclick={beginEdit}
-      class={`rounded text-left underline-offset-2 decoration-dotted hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-700 dark:focus-visible:outline-amber-500 ${
+      class={`text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-700 dark:focus-visible:outline-amber-500 ${
         d.name
-          ? 'font-mono text-caption text-ink dark:text-stone-200'
-          : 'text-caption text-stone-400 dark:text-stone-500'
+          ? `${NAME_CHIP} hover:bg-amber-700/20 dark:hover:bg-amber-500/25`
+          : 'rounded text-caption text-stone-400 underline-offset-2 decoration-dotted hover:underline dark:text-stone-500'
       }`}
     >
       {d.name ?? 'Add name…'}

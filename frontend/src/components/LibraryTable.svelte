@@ -455,9 +455,18 @@
                 <Star size={14} fill={p.starred ? 'currentColor' : 'none'} />
               </button>
             </td>
-            <td class={`${td} font-mono text-xs text-stone-600 dark:text-stone-300`}>
+            <!-- Mono semibold at full ink, not the muted stone the other
+                 metadata columns wear: the name is a handle you scan for, and
+                 mono lines "RVSpec", "SWE-bench" and "AntiFuzz" up like the
+                 identifiers they are. No amber here, unlike the sidebar chip —
+                 its own labelled column already says what it is, and a whole
+                 column of the app's action color would drown the selected row. -->
+            <td class={`${td} font-mono text-xs font-semibold text-ink dark:text-stone-100`}>
               <div class="truncate" data-col="name" title={p.name ?? undefined}>
-                {#if p.name}{p.name}{:else}<span class="text-stone-300 dark:text-stone-600">—</span>{/if}
+                <!-- font-normal on the dash only: the ghost em-dash is the
+                     table's shared empty-state idiom and shouldn't come out
+                     heavier here than in every other column. -->
+                {#if p.name}{p.name}{:else}<span class="font-normal text-stone-300 dark:text-stone-600">—</span>{/if}
               </div>
             </td>
             <td class={td}>

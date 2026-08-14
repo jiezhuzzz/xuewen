@@ -29,7 +29,7 @@ describe('PaperRow', () => {
   });
 
   it('opening an already-open paper activates its tab without duplicating', async () => {
-    viewer.tabs = [{ id: 'p1', title: 'Attention Is All You Need' }];
+    viewer.tabs = [{ id: 'p1', title: 'Attention Is All You Need', name: null }];
     render(PaperRow, { props: { paper } });
     await userEvent.click(screen.getByRole('button', { name: /Attention/ }));
     expect(viewer.tabs).toHaveLength(1);
@@ -43,6 +43,14 @@ describe('PaperRow', () => {
     // Chip and title share the title line, chip first.
     const line = chip.parentElement!;
     expect(line.textContent).toMatch(/^\s*Transformer\s*Attention Is All You Need/);
+    // Amber and mono: the name has to win the row's first glance, and mono is
+    // what keeps it apart from the tag chips below — those turn amber too
+    // while a tag filter is active.
+    expect(chip.className).toContain('text-amber-800');
+    expect(chip.className).toContain('font-mono');
+    // Inline, never inline-block: padding and borders on an inline box don't
+    // grow the line box, so the chip can't make the row taller.
+    expect(chip.className).not.toContain('inline-block');
   });
 
   it('renders no chip when the paper has no name', () => {

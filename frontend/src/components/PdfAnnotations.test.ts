@@ -113,7 +113,7 @@ beforeEach(() => {
   annotations.error = {};
   annotation.getAnnotationById.mockReturnValue(undefined);
   loadedHandler = null;
-  viewer.tabs = [{ id: 'p1', title: 'Attention Is All You Need' }];
+  viewer.tabs = [{ id: 'p1', title: 'Attention Is All You Need', name: null }];
   toasts.items = [];
 });
 

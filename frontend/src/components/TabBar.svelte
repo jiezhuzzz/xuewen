@@ -45,13 +45,21 @@
             : 'hover:bg-parchment/50 dark:hover:bg-stone-800/30'
         }`}
       >
+        <!-- A named paper labels its tab with the name: at max-w-52 a long
+             title truncates to a few useless words, while "RVSpec" is the
+             whole handle and fits. Mono semibold matches the library table's
+             Name column — a name reads as a name wherever it appears — and
+             unnamed tabs keep the serif title. Either way the tooltip is the
+             full title, which is the only place it can still be read. -->
         <button
           type="button"
           title={tab.title}
           onclick={() => activateTab(tab.id)}
-          class="min-w-0 truncate font-serif text-sm text-stone-700 dark:text-stone-200"
+          class={`min-w-0 truncate text-stone-700 dark:text-stone-200 ${
+            tab.name ? 'font-mono text-xs font-semibold' : 'font-serif text-sm'
+          }`}
         >
-          {tab.title}
+          {tab.name ?? tab.title}
         </button>
         <button
           type="button"

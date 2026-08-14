@@ -254,7 +254,7 @@ describe('handleKeydown', () => {
   });
 
   it('cmd+f opens the find bar for the active paper', () => {
-    viewer.tabs = [{ id: 'a', title: 'A' }];
+    viewer.tabs = [{ id: 'a', title: 'A', name: null }];
     viewer.activeId = 'a';
     const e = key('f', { metaKey: true, cancelable: true });
     handleKeydown(e);
@@ -270,7 +270,7 @@ describe('handleKeydown', () => {
   });
 
   it('cmd+f is inert while a modal is open', () => {
-    viewer.tabs = [{ id: 'a', title: 'A' }];
+    viewer.tabs = [{ id: 'a', title: 'A', name: null }];
     viewer.activeId = 'a';
     ui.importOpen = true;
     handleKeydown(key('f', { metaKey: true, cancelable: true }));

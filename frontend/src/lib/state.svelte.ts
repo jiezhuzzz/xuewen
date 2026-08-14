@@ -206,6 +206,12 @@ export async function loadSettings(): Promise<void> {
 export interface Tab {
   id: string;
   title: string;
+  /// The paper's manual "known as" name, when it has one. The strip labels the
+  /// tab with it — "RVSpec" beats a 15-word title truncated to nothing at
+  /// max-w-52 — while `title` stays the full title for the tooltip and for
+  /// everything else reading off the tab (the annotation export filename, the
+  /// reader toolbar).
+  name: string | null;
 }
 /// The content pane's tab strip. `activeId === null` means the permanent
 /// "Library" home tab is active (shows the Welcome panel); a string means
@@ -560,6 +566,13 @@ export async function setPaperName(paperId: string, name: string | null): Promis
   if (row) row.name = stored;
   const cached = detailCache.get(paperId);
   if (cached) cached.name = stored;
+  // The strip labels an open tab by its name, so a rename has to reach the tab
+  // too — otherwise the label stays stale until the next reload.
+  const tab = viewer.tabs.find((t) => t.id === paperId);
+  if (tab) {
+    tab.name = stored;
+    saveTabs();
+  }
   detailRefresh.n += 1;
   if (filters.sort === 'name') await loadPapers();
 }
@@ -652,7 +665,7 @@ export function setSearch(q: string): void {
 
 export function openTab(p: PaperSummary): void {
   if (!viewer.tabs.some((t) => t.id === p.id)) {
-    viewer.tabs.push({ id: p.id, title: p.title ?? p.cite_key ?? p.id });
+    viewer.tabs.push({ id: p.id, title: p.title ?? p.cite_key ?? p.id, name: p.name });
   }
   viewer.activeId = p.id;
   selection.id = p.id;
@@ -687,7 +700,7 @@ function saveTabs(): void {
     localStorage.setItem(
       TABS_KEY,
       JSON.stringify({
-        tabs: viewer.tabs.map((t) => ({ id: t.id, title: t.title })),
+        tabs: viewer.tabs.map((t) => ({ id: t.id, title: t.title, name: t.name })),
         activeId: viewer.activeId,
       }),
     );
@@ -710,10 +723,14 @@ export async function initTabs(): Promise<void> {
     return; // corrupted value — start with no tabs
   }
   const tabs = Array.isArray(parsed.tabs)
-    ? (parsed.tabs as unknown[]).filter(
-        (t): t is Tab =>
-          !!t && typeof (t as Tab).id === 'string' && typeof (t as Tab).title === 'string',
-      )
+    ? (parsed.tabs as unknown[]).flatMap((t): Tab[] => {
+        const r = t as Partial<Tab> | null;
+        if (!r || typeof r.id !== 'string' || typeof r.title !== 'string') return [];
+        // `name` post-dates this storage key, so a tab written by an older
+        // build simply has none — normalize rather than reject, or every
+        // remembered tab would vanish on the upgrade.
+        return [{ id: r.id, title: r.title, name: typeof r.name === 'string' ? r.name : null }];
+      })
     : [];
   if (tabs.length === 0) return;
   viewer.tabs = tabs;

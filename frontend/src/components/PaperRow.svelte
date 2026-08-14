@@ -4,6 +4,7 @@
   import { openTab, searchMeta, selectPaper, selection, toggleStar, viewer } from '../lib/state.svelte';
   import { abbreviateVenue } from '../lib/venue';
   import { authorLine } from '../lib/refFormat';
+  import { NAME_CHIP } from '../lib/nameChip';
   import PaperRowTags from './PaperRowTags.svelte';
   import StatusPill from './StatusPill.svelte';
 
@@ -75,14 +76,12 @@
     }`}
   >★</button>
   <div class="line-clamp-2 pr-5 font-serif text-sm font-medium text-ink dark:text-stone-100">
-    <!-- The manual "known as" name, as a leading chip. Same family as the
-         search-match field label below, but no `uppercase`: "SWE-bench"
-         casing is meaningful. A plain inline span, so line-clamp-2 wraps it
-         like an ordinary text run. -->
+    <!-- The manual "known as" name, as a leading chip (NAME_CHIP documents the
+         amber-and-mono choice). No `uppercase`: "SWE-bench" casing is
+         meaningful. A plain inline span, so line-clamp-2 wraps it like an
+         ordinary text run and its border stays out of the row's height. -->
     {#if paper.name}
-      <span
-        class="mr-1 rounded bg-parchment px-1 py-px align-middle font-mono text-[10px] text-stone-500 dark:bg-stone-800 dark:text-stone-400"
-      >{paper.name}</span>
+      <span class={`mr-1.5 align-middle ${NAME_CHIP}`}>{paper.name}</span>
     {/if}
     {paper.title ?? '(untitled)'}
     {#if isOpen}
