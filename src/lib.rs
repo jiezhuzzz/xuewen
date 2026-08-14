@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod annotations;
 pub mod chat;
 pub mod citations;
 pub mod config;
