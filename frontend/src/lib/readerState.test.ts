@@ -1,6 +1,15 @@
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { dropReaderState, openFind, reader, setFind, setPanelView, toggleSidebar } from './readerState.svelte';
+import {
+  dropReaderState,
+  openFind,
+  panelWidth,
+  reader,
+  setFind,
+  setPanelView,
+  toggleAnnotationsPanel,
+  toggleSidebar,
+} from './readerState.svelte';
 
 beforeEach(() => {
   for (const k of Object.keys(reader.find)) delete reader.find[k];
@@ -47,6 +56,35 @@ describe('toggleSidebar / setPanelView (global)', () => {
     setPanelView('outline');
     // One shared value applies to every open paper.
     expect(reader.panel).toBe('outline');
+  });
+});
+
+describe('toggleAnnotationsPanel', () => {
+  it('opens straight onto annotations from closed', () => {
+    toggleAnnotationsPanel();
+    expect(reader.panel).toBe('annotations');
+  });
+
+  it('switches to annotations when another view is open', () => {
+    setPanelView('outline');
+    toggleAnnotationsPanel();
+    expect(reader.panel).toBe('annotations');
+  });
+
+  it('closes only when annotations is already the open view', () => {
+    toggleAnnotationsPanel();
+    toggleAnnotationsPanel();
+    expect(reader.panel).toBe(null);
+    // and the sidebar button reopens there, not back at thumbnails
+    toggleSidebar();
+    expect(reader.panel).toBe('annotations');
+  });
+});
+
+describe('panelWidth', () => {
+  it('gives annotations more room than page numbers and headings', () => {
+    expect(panelWidth('thumbs')).toBe(panelWidth('outline'));
+    expect(panelWidth('annotations')).toBeGreaterThan(panelWidth('thumbs'));
   });
 });
 

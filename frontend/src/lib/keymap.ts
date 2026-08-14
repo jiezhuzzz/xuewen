@@ -21,6 +21,7 @@ export const SHORTCUT_GROUPS: ReadonlyArray<{ title: string; items: ShortcutItem
     items: [
       { keys: 'i', label: 'Details panel' },
       { keys: 'c', label: 'Ask panel' },
+      { keys: 'a', label: 'Annotations panel' },
       { keys: 'z', label: 'Zen mode' },
       { keys: 'x', label: 'Close tab' },
       { keys: '⌘F', label: 'Find in PDF' },

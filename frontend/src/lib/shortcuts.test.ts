@@ -36,6 +36,8 @@ beforeEach(() => {
   chat.available = false;
   localStorage.clear();
   for (const k of Object.keys(reader.find)) delete reader.find[k];
+  reader.panel = null;
+  reader.lastPanel = 'thumbs';
 });
 
 describe('isEditable', () => {
@@ -142,6 +144,25 @@ describe('handleKeydown', () => {
     expect(dock.tab).toBe('details');
     handleKeydown(key('i'));
     expect(dock.open).toBe(false);
+  });
+
+  it('a toggles the annotations panel only with an active tab', () => {
+    handleKeydown(key('a'));
+    expect(reader.panel).toBe(null); // no active paper — nowhere to show it
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    handleKeydown(key('a'));
+    expect(reader.panel).toBe('annotations');
+    handleKeydown(key('a'));
+    expect(reader.panel).toBe(null);
+  });
+
+  it('a switches an already-open panel to annotations rather than closing it', () => {
+    handleKeydown(key('j'));
+    handleKeydown(key('Enter'));
+    reader.panel = 'thumbs';
+    handleKeydown(key('a'));
+    expect(reader.panel).toBe('annotations');
   });
 
   it('Escape closes a dock opened directly (not via a shortcut) before exiting zen', () => {

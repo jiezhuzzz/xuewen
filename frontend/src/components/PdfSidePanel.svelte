@@ -3,9 +3,10 @@
   import { ThumbImg, ThumbnailsPane, useThumbnailPlugin } from '@embedpdf/plugin-thumbnail/svelte';
   import type { ThumbnailDocumentState } from '@embedpdf/plugin-thumbnail';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
-  import { LayoutGrid, List } from 'lucide-svelte';
-  import { reader, setPanelView } from '../lib/readerState.svelte';
+  import { Highlighter, LayoutGrid, List } from 'lucide-svelte';
+  import { panelWidth, reader, setPanelView } from '../lib/readerState.svelte';
   import PdfOutline from './PdfOutline.svelte';
+  import PdfAnnotations from './PdfAnnotations.svelte';
 
   let { documentId }: { documentId: string } = $props();
   const scroll = useScroll(() => documentId);
@@ -74,7 +75,10 @@
   });
 </script>
 
-<div class="flex w-44 shrink-0 flex-col border-r border-stone-200 bg-paper dark:border-stone-800 dark:bg-night">
+<div
+  class="flex shrink-0 flex-col border-r border-stone-200 bg-paper dark:border-stone-800 dark:bg-night"
+  style={`width:${panelWidth(tab)}px`}
+>
   <div class="border-b border-stone-200 p-1.5 dark:border-stone-800">
     <div class="flex gap-0.5 rounded-lg bg-stone-100 p-0.5 dark:bg-stone-900">
       <button
@@ -94,6 +98,15 @@
         onclick={() => setPanelView('outline')}
       >
         <List size={14} />
+      </button>
+      <button
+        type="button"
+        aria-label="Annotations"
+        aria-pressed={tab === 'annotations'}
+        class={seg(tab === 'annotations')}
+        onclick={() => setPanelView('annotations')}
+      >
+        <Highlighter size={14} />
       </button>
     </div>
   </div>
@@ -136,5 +149,7 @@
     </div>
   {:else if tab === 'outline'}
     <PdfOutline {documentId} />
+  {:else if tab === 'annotations'}
+    <PdfAnnotations {documentId} />
   {/if}
 </div>

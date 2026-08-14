@@ -1,6 +1,6 @@
 import { tick } from 'svelte';
 import { chat } from './chat.svelte';
-import { openFind } from './readerState.svelte';
+import { openFind, toggleAnnotationsPanel } from './readerState.svelte';
 import {
   closeDock,
   closeTab,
@@ -108,6 +108,11 @@ export function handleKeydown(e: KeyboardEvent): void {
       break;
     case 'i':
       toggleDock('details');
+      break;
+    case 'a':
+      // Reader-only: the panel lives inside the PDF view, and on the library
+      // this would open a panel nobody can see.
+      if (viewer.activeId) toggleAnnotationsPanel();
       break;
     case 'z':
       toggleZen();

@@ -31,7 +31,7 @@
   import { runWhenIdle } from '../lib/idle';
   import { mergeStructured } from '../lib/refMerge';
   import { resolveAuthorYearMarkers } from '../lib/textCitations';
-  import { reader } from '../lib/readerState.svelte';
+  import { panelWidth, reader } from '../lib/readerState.svelte';
   import { pdfAppearance } from '../lib/state.svelte';
   import { createPillHide } from '../lib/pillHide.svelte';
   import { Spring } from 'svelte/motion';
@@ -90,12 +90,12 @@
   // Animated panel push (the library-pane idiom — see App.svelte): the
   // wrapper's width springs 0↔PANEL_W so the PDF eases sideways instead of
   // jumping when the sidebar toggles.
-  const PANEL_W = 176; // = w-44
+  // Per-view (annotations need room for prose) — see readerState.svelte.ts.
   // svelte-ignore state_referenced_locally -- initial value only; the
   // $effect below drives every subsequent update via panelW.target.
-  const panelW = new Spring(reader.panel ? PANEL_W : 0, SPRINGS.pane);
+  const panelW = new Spring(reader.panel ? panelWidth(reader.panel) : 0, SPRINGS.pane);
   $effect(() => {
-    const target = reader.panel ? PANEL_W : 0;
+    const target = reader.panel ? panelWidth(reader.panel) : 0;
     if (import.meta.env.MODE === 'test' || prefersReducedMotion()) {
       panelW.set(target, { instant: true });
     } else {
@@ -286,7 +286,13 @@
             style={`width:${panelW.current}px`}
             inert={!reader.panel}
           >
-            <div class="absolute inset-y-0 left-0 flex w-44">
+            <!-- Fixed at the open view's own width, not the springing
+                 wrapper's, so the panel's contents don't reflow on every
+                 animation frame while it slides. -->
+            <div
+              class="absolute inset-y-0 left-0 flex"
+              style={`width:${panelWidth(reader.panel ?? reader.lastPanel)}px`}
+            >
               <PdfSidePanel {documentId} />
             </div>
           </div>
