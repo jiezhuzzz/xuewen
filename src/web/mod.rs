@@ -44,6 +44,9 @@ pub struct AppState {
     /// Always present: heuristic parsing needs no config; [ai.citations]
     /// adds the LLM fallback for entries heuristics can't parse.
     pub citations: Arc<crate::citations::CitationsService>,
+    /// Always present: reader annotations are plain storage with no `[ai.*]`
+    /// gate, so unlike the LLM-backed services this is never `Option`al.
+    pub annotations: Arc<crate::annotations::AnnotationsService>,
     /// Present when translate-on-selection is configured (`serve`). `None`
     /// -> /api/translate answers 503, /api/settings reports disabled.
     pub translate: Option<Arc<crate::translate::TranslateService>>,
@@ -58,6 +61,7 @@ impl AppState {
     /// `build_router*` helpers below flip on just what they need.
     fn base(pool: SqlitePool, library_root: PathBuf) -> Self {
         let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
+        let annotations = Arc::new(crate::annotations::AnnotationsService::new(pool.clone()));
         Self {
             pool,
             library_root,
@@ -67,6 +71,7 @@ impl AppState {
             daily: None,
             agent: None,
             citations,
+            annotations,
             translate: None,
             ui: crate::config::UiConfig::default(),
         }
@@ -240,6 +245,18 @@ fn router_with(state: AppState) -> Router {
         .route(
             "/api/papers/{id}/citations",
             axum::routing::post(api::parse_citations),
+        )
+        .route(
+            "/api/papers/{id}/annotations",
+            get(api::list_annotations).delete(api::clear_annotations),
+        )
+        // PUT (not POST): the reader's plugin mints the annotation id, so the
+        // id addresses the row and a retried save is idempotent.
+        .route(
+            "/api/papers/{paper_id}/annotations/{annotation_id}",
+            axum::routing::put(api::put_annotation)
+                .patch(api::patch_annotation)
+                .delete(api::delete_annotation),
         )
         .route(
             "/api/papers/{id}/code",

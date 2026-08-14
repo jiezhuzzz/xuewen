@@ -23,6 +23,7 @@ pub struct Services {
     pub daily: Option<Arc<DailyService>>,
     pub agent: Option<Arc<crate::agent::AgentService>>,
     pub citations: Arc<crate::citations::CitationsService>,
+    pub annotations: Arc<crate::annotations::AnnotationsService>,
     pub translate: Option<Arc<crate::translate::TranslateService>>,
 }
 
@@ -77,6 +78,8 @@ pub async fn spawn_services(cfg: &Config, pool: SqlitePool) -> Result<Services> 
         }
     }
     let citations = crate::citations::CitationsService::from_config(pool.clone(), cfg);
+    // No config to read: annotations are plain storage, always on.
+    let annotations = Arc::new(crate::annotations::AnnotationsService::new(pool.clone()));
     let translate = crate::translate::TranslateService::from_config(cfg).map(Arc::new);
     Ok(Services {
         ingest,
@@ -84,6 +87,7 @@ pub async fn spawn_services(cfg: &Config, pool: SqlitePool) -> Result<Services> 
         daily,
         agent,
         citations,
+        annotations,
         translate,
     })
 }
@@ -106,6 +110,7 @@ pub fn serve_on(
         daily: services.daily,
         agent: services.agent,
         citations: services.citations,
+        annotations: services.annotations,
         translate: services.translate,
         ui: cfg.ui.clone(),
     };

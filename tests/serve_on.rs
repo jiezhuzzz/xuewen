@@ -31,6 +31,9 @@ async fn serve_on_serves_api_on_an_ephemeral_port() {
         daily: None,
         agent: None,
         citations: xuewen::citations::CitationsService::from_config(pool.clone(), &cfg),
+        annotations: std::sync::Arc::new(xuewen::annotations::AnnotationsService::new(
+            pool.clone(),
+        )),
         translate: None,
         ui: cfg.ui.clone(),
     };

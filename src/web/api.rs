@@ -14,6 +14,7 @@ use super::dto::{
     Stats, TagRef, TierCounts,
 };
 use super::AppState;
+use crate::annotations::{AnnotationPatch, NewAnnotation};
 use crate::db;
 use crate::export;
 use crate::import::{self, ImportError};
@@ -1383,6 +1384,125 @@ pub async fn delete_paper_code(State(app): State<AppState>, Path(id): Path<Strin
         Ok(_) => not_found(),
         Err(e) => {
             tracing::error!("code paper lookup: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// Pre-check that a paper exists so a bad id is a clean 404 rather than an
+/// FK-violation 500. Trashed papers count: their annotations must survive a
+/// restore, so nothing here filters on `deleted_at`.
+async fn require_paper(app: &AppState, id: &str, tag: &str) -> Result<(), Response> {
+    match db::get_by_id(&app.pool, id).await {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(not_found()),
+        Err(e) => {
+            tracing::error!("{tag} paper lookup: {e}");
+            Err(internal_error())
+        }
+    }
+}
+
+/// GET /api/papers/{id}/annotations — every mark on a paper, in reading order.
+/// The reader replays these into the annotation plugin on open.
+pub async fn list_annotations(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    if let Err(resp) = require_paper(&app, &id, "list_annotations").await {
+        return resp;
+    }
+    match app.annotations.list(&id).await {
+        Ok(items) => Json(items).into_response(),
+        Err(e) => {
+            tracing::error!("list_annotations {id}: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// PUT /api/papers/{paper_id}/annotations/{annotation_id} — create or replace.
+/// Idempotent on purpose: the annotation id is minted by the reader's plugin,
+/// so a retried save re-sends the same address instead of duplicating a mark.
+pub async fn put_annotation(
+    State(app): State<AppState>,
+    Path((paper_id, annotation_id)): Path<(String, String)>,
+    Json(body): Json<NewAnnotation>,
+) -> Response {
+    if let Err(msg) = crate::annotations::validate_id(&annotation_id) {
+        return bad_request(&msg);
+    }
+    if let Err(msg) = crate::annotations::validate_new(&body) {
+        return bad_request(&msg);
+    }
+    if let Err(resp) = require_paper(&app, &paper_id, "put_annotation").await {
+        return resp;
+    }
+    match app.annotations.put(&paper_id, &annotation_id, body).await {
+        Ok(a) => {
+            // The note feeds the `notes` search field; nudge the sweep so the
+            // index catches up without waiting for its next poll.
+            app.wake_search();
+            Json(a).into_response()
+        }
+        Err(e) => {
+            tracing::error!("put_annotation {paper_id}/{annotation_id}: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// PATCH /api/papers/{paper_id}/annotations/{annotation_id} — recolor, edit
+/// the note, or replace the geometry payload. Absent fields are left alone.
+pub async fn patch_annotation(
+    State(app): State<AppState>,
+    Path((paper_id, annotation_id)): Path<(String, String)>,
+    Json(body): Json<AnnotationPatch>,
+) -> Response {
+    if let Err(msg) = crate::annotations::validate_patch(&body) {
+        return bad_request(&msg);
+    }
+    match app.annotations.patch(&paper_id, &annotation_id, body).await {
+        Ok(Some(a)) => {
+            app.wake_search();
+            Json(a).into_response()
+        }
+        Ok(None) => not_found(),
+        Err(e) => {
+            tracing::error!("patch_annotation {paper_id}/{annotation_id}: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// DELETE /api/papers/{paper_id}/annotations/{annotation_id}
+pub async fn delete_annotation(
+    State(app): State<AppState>,
+    Path((paper_id, annotation_id)): Path<(String, String)>,
+) -> Response {
+    match app.annotations.delete(&paper_id, &annotation_id).await {
+        Ok(true) => {
+            app.wake_search();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("delete_annotation {paper_id}/{annotation_id}: {e}");
+            internal_error()
+        }
+    }
+}
+
+/// DELETE /api/papers/{id}/annotations — clear every mark on a paper. Answers
+/// with the count rather than 204: "cleared 12 highlights" is worth surfacing.
+pub async fn clear_annotations(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+    if let Err(resp) = require_paper(&app, &id, "clear_annotations").await {
+        return resp;
+    }
+    match app.annotations.delete_all(&id).await {
+        Ok(n) => {
+            app.wake_search();
+            Json(serde_json::json!({ "deleted": n })).into_response()
+        }
+        Err(e) => {
+            tracing::error!("clear_annotations {id}: {e}");
             internal_error()
         }
     }
