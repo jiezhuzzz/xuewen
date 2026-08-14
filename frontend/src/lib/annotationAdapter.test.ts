@@ -1,0 +1,205 @@
+import { describe, expect, it } from 'vitest';
+import { PdfAnnotationSubtype } from '@embedpdf/models';
+import type { PdfAnnotationObject } from '@embedpdf/models';
+import {
+  TEXT_MARKUP_KINDS,
+  TOOL_BY_KIND,
+  fromWire,
+  kindOf,
+  safeColor,
+  sameAsStored,
+  toWire,
+} from './annotationAdapter';
+import { colorHex } from './annotationPalette';
+import type { Annotation } from './types';
+
+/** A highlight the way the plugin builds one from a text selection. */
+function mark(over: Partial<PdfAnnotationObject> = {}): PdfAnnotationObject {
+  return {
+    id: 'a1',
+    type: PdfAnnotationSubtype.HIGHLIGHT,
+    pageIndex: 3,
+    rect: { origin: { x: 10, y: 20 }, size: { width: 100, height: 12 } },
+    color: colorHex('green'),
+    strokeColor: colorHex('green'),
+    opacity: 0.4,
+    custom: { text: 'a quoted sentence' },
+    ...over,
+  } as PdfAnnotationObject;
+}
+
+function row(over: Partial<Annotation> = {}): Annotation {
+  return {
+    paper_id: 'p1',
+    id: 'a1',
+    page_index: 3,
+    kind: 'highlight',
+    color: 'green',
+    quoted_text: 'a quoted sentence',
+    note: null,
+    payload: { annotation: mark() },
+    created_at: '2026-08-14T00:00:00Z',
+    updated_at: '2026-08-14T00:00:00Z',
+    ...over,
+  };
+}
+
+describe('kindOf', () => {
+  it('maps the five subtypes we store', () => {
+    const cases: [PdfAnnotationSubtype, string][] = [
+      [PdfAnnotationSubtype.HIGHLIGHT, 'highlight'],
+      [PdfAnnotationSubtype.UNDERLINE, 'underline'],
+      [PdfAnnotationSubtype.STRIKEOUT, 'strikeout'],
+      [PdfAnnotationSubtype.SQUIGGLY, 'squiggly'],
+      [PdfAnnotationSubtype.TEXT, 'text_comment'],
+    ];
+    for (const [type, kind] of cases) expect(kindOf({ type })).toBe(kind);
+  });
+
+  it('refuses every other subtype', () => {
+    for (const type of [
+      PdfAnnotationSubtype.INK,
+      PdfAnnotationSubtype.FREETEXT,
+      PdfAnnotationSubtype.LINK,
+      PdfAnnotationSubtype.STAMP,
+      PdfAnnotationSubtype.CARET,
+      PdfAnnotationSubtype.UNKNOWN,
+    ]) {
+      expect(kindOf({ type })).toBeNull();
+    }
+  });
+});
+
+describe('toWire', () => {
+  it('projects the queryable fields and keeps the payload verbatim', () => {
+    const a = mark({ contents: 'worth revisiting' });
+    const w = toWire({ annotation: a })!;
+    expect(w).toMatchObject({
+      page_index: 3,
+      kind: 'highlight',
+      color: 'green',
+      quoted_text: 'a quoted sentence',
+      note: 'worth revisiting',
+    });
+    expect(w.payload).toEqual({ annotation: a });
+  });
+
+  it('keeps a field it has never heard of, through the payload', () => {
+    const a = mark({ someFutureField: 42 } as Partial<PdfAnnotationObject>);
+    const w = toWire({ annotation: a })!;
+    expect((w.payload as { annotation: Record<string, unknown> }).annotation.someFutureField).toBe(
+      42,
+    );
+  });
+
+  it('returns null for a subtype outside the whitelist', () => {
+    expect(toWire({ annotation: mark({ type: PdfAnnotationSubtype.INK }) })).toBeNull();
+  });
+
+  it('treats blank quotes and notes as absent', () => {
+    const w = toWire({ annotation: mark({ contents: '   ', custom: { text: '' } }) })!;
+    expect(w.quoted_text).toBeNull();
+    expect(w.note).toBeNull();
+  });
+
+  it('survives a custom field that is not the shape we expect', () => {
+    for (const custom of [null, 'a string', 7, { text: 99 }]) {
+      const w = toWire({ annotation: mark({ custom }) })!;
+      expect(w.quoted_text).toBeNull();
+    }
+  });
+
+  it('falls back to strokeColor, then to the default, for the palette name', () => {
+    const stroke = toWire({
+      annotation: mark({ color: undefined, strokeColor: colorHex('violet') }),
+    })!;
+    expect(stroke.color).toBe('violet');
+
+    // A highlight baked into the PDF by another reader: keep the mark, lose
+    // only the exact shade.
+    const foreign = toWire({
+      annotation: mark({ color: '#ffff00', strokeColor: '#ffff00' }),
+    })!;
+    expect(foreign.color).toBe('amber');
+  });
+
+  it('reads a sticky note from its stroke color', () => {
+    const w = toWire({
+      annotation: mark({
+        type: PdfAnnotationSubtype.TEXT,
+        color: undefined,
+        strokeColor: colorHex('rose'),
+        contents: 'a thought',
+      }),
+    })!;
+    expect(w).toMatchObject({ kind: 'text_comment', color: 'rose', note: 'a thought' });
+  });
+});
+
+describe('fromWire', () => {
+  it('round-trips a mark back to the plugin', () => {
+    const a = mark({ contents: 'note' });
+    const back = fromWire(row({ payload: { annotation: a } }));
+    expect(back).toEqual({ annotation: a });
+  });
+
+  it('is null when the backend degraded an unparseable payload', () => {
+    expect(fromWire(row({ payload: null }))).toBeNull();
+  });
+
+  it('is null for a payload that is not an annotation envelope', () => {
+    for (const payload of [{}, { annotation: null }, { annotation: 'x' }, 'x', 42]) {
+      expect(fromWire(row({ payload }))).toBeNull();
+    }
+  });
+
+  it('is null when the payload lost its id or type', () => {
+    const { id: _id, ...noId } = mark();
+    expect(fromWire(row({ payload: { annotation: noId } }))).toBeNull();
+    const { type: _t, ...noType } = mark();
+    expect(fromWire(row({ payload: { annotation: noType } }))).toBeNull();
+  });
+
+  it('refuses a payload whose subtype is outside the whitelist', () => {
+    // Defense in depth: the row said "highlight", the payload says ink.
+    const payload = { annotation: mark({ type: PdfAnnotationSubtype.INK }) };
+    expect(fromWire(row({ payload }))).toBeNull();
+  });
+});
+
+describe('sameAsStored', () => {
+  it('is true for an unchanged mark and false once anything moves', () => {
+    const a = toWire({ annotation: mark() })!;
+    expect(sameAsStored(a, toWire({ annotation: mark() })!)).toBe(true);
+    expect(sameAsStored(a, toWire({ annotation: mark({ pageIndex: 4 }) })!)).toBe(false);
+    expect(sameAsStored(a, toWire({ annotation: mark({ contents: 'new' }) })!)).toBe(false);
+    expect(sameAsStored(a, toWire({ annotation: mark({ color: colorHex('blue') }) })!)).toBe(false);
+    const moved = mark({ rect: { origin: { x: 0, y: 0 }, size: { width: 1, height: 1 } } });
+    expect(sameAsStored(a, toWire({ annotation: moved })!)).toBe(false);
+  });
+});
+
+describe('tool mapping', () => {
+  it('names a plugin tool for every kind', () => {
+    expect(TOOL_BY_KIND).toEqual({
+      highlight: 'highlight',
+      underline: 'underline',
+      strikeout: 'strikeout',
+      squiggly: 'squiggly',
+      text_comment: 'textComment',
+    });
+  });
+
+  it('marks the four selection-driven kinds', () => {
+    expect(TEXT_MARKUP_KINDS).toEqual(['highlight', 'underline', 'strikeout', 'squiggly']);
+    expect(TEXT_MARKUP_KINDS).not.toContain('text_comment');
+  });
+});
+
+describe('safeColor', () => {
+  it('passes palette names through and defaults anything else', () => {
+    expect(safeColor('blue')).toBe('blue');
+    expect(safeColor('chartreuse')).toBe('amber');
+    expect(safeColor(undefined)).toBe('amber');
+  });
+});

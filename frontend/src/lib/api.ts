@@ -1,9 +1,12 @@
 import type {
+  Annotation,
+  AnnotationPatch,
   BibFormat,
   Candidate,
   Filters,
   IdentifyBody,
   ImportResult,
+  NewAnnotation,
   PaperCodeStatus,
   PaperDetail,
   PaperSummary,
@@ -363,6 +366,61 @@ export async function setPaperCode(
 export async function removePaperCode(id: string): Promise<void> {
   const res = await fetch(`/api/papers/${encodeURIComponent(id)}/code`, { method: 'DELETE' });
   if (!res.ok) return errorFromResponse(res, 'removing the repo failed');
+}
+
+// --- annotations (highlights, underlines, sticky notes) ---
+
+function annotationUrl(paperId: string, annotationId?: string): string {
+  const base = `/api/papers/${encodeURIComponent(paperId)}/annotations`;
+  return annotationId === undefined ? base : `${base}/${encodeURIComponent(annotationId)}`;
+}
+
+export async function listAnnotations(paperId: string): Promise<Annotation[]> {
+  const res = await fetch(annotationUrl(paperId));
+  if (!res.ok) return errorFromResponse(res, 'loading annotations failed');
+  return res.json();
+}
+
+/** Create or replace one mark. Idempotent: the id addresses the row, so a
+ *  retried save after a dropped response can't duplicate it. */
+export async function putAnnotation(
+  paperId: string,
+  annotationId: string,
+  body: NewAnnotation,
+): Promise<Annotation> {
+  const res = await fetch(annotationUrl(paperId, annotationId), {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return errorFromResponse(res, 'saving the annotation failed');
+  return res.json();
+}
+
+export async function patchAnnotation(
+  paperId: string,
+  annotationId: string,
+  body: AnnotationPatch,
+): Promise<Annotation> {
+  const res = await fetch(annotationUrl(paperId, annotationId), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return errorFromResponse(res, 'updating the annotation failed');
+  return res.json();
+}
+
+export async function deleteAnnotation(paperId: string, annotationId: string): Promise<void> {
+  const res = await fetch(annotationUrl(paperId, annotationId), { method: 'DELETE' });
+  if (!res.ok) return errorFromResponse(res, 'deleting the annotation failed');
+}
+
+export async function clearAnnotations(paperId: string): Promise<number> {
+  const res = await fetch(annotationUrl(paperId), { method: 'DELETE' });
+  if (!res.ok) return errorFromResponse(res, 'clearing annotations failed');
+  const j = await res.json();
+  return typeof j.deleted === 'number' ? j.deleted : 0;
 }
 
 /** Parse extracted reference strings via the backend LLM service. Returns

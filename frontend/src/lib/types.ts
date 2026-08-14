@@ -160,6 +160,37 @@ export interface PaperCodeStatus {
   size_bytes: number | null;
 }
 
+/** One reader annotation (wire format shared with the `Annotation` struct in
+ *  src/annotations/mod.rs). `payload` is the plugin's own transfer item, stored
+ *  verbatim so a field this app doesn't know about survives a round trip; it is
+ *  `null` when the stored JSON failed to parse server-side. */
+export interface Annotation {
+  paper_id: string;
+  id: string;
+  page_index: number;
+  kind: 'highlight' | 'underline' | 'strikeout' | 'squiggly' | 'text_comment';
+  color: 'amber' | 'rose' | 'green' | 'blue' | 'violet';
+  quoted_text: string | null;
+  note: string | null;
+  payload: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The body of `PUT /api/papers/{id}/annotations/{annotation_id}`. The id is
+ *  the path, not a field — that is what makes a retried save idempotent. */
+export type NewAnnotation = Pick<
+  Annotation,
+  'page_index' | 'kind' | 'color' | 'quoted_text' | 'note' | 'payload'
+>;
+
+/** A partial update. An omitted field is left alone; `note: ''` clears it. */
+export interface AnnotationPatch {
+  color?: Annotation['color'];
+  note?: string;
+  payload?: unknown;
+}
+
 /** One bibliography entry parsed to fields by [ai.citations] (wire format
  *  shared with src/citations/mod.rs on the backend). */
 export interface StructuredReference {
