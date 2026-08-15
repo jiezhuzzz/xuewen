@@ -1,3 +1,5 @@
+import type { Spring } from 'svelte/motion';
+
 /// Shared motion vocabulary. Every animated surface derives its timing from
 /// these tokens so the whole UI moves with one accent — never hardcode a
 /// duration in a component.
@@ -19,10 +21,25 @@ export function prefersReducedMotion(): boolean {
   );
 }
 
-/// Resolve a duration. 0 under reduced motion (accessibility) and under
-/// vitest (jsdom runs transitions on rAF; non-zero durations leave outro
-/// elements lingering and make DOM assertions flaky).
+/// Whether motion should complete instantly: under reduced motion
+/// (accessibility) and under vitest (jsdom runs transitions on rAF; anything
+/// time-based leaves elements lingering and makes DOM assertions flaky).
+export function instantMotion(): boolean {
+  return import.meta.env.MODE === 'test' || prefersReducedMotion();
+}
+
+/// Resolve a duration. 0 under instantMotion().
 export function dur(ms: number): number {
-  if (import.meta.env.MODE === 'test' || prefersReducedMotion()) return 0;
-  return ms;
+  return instantMotion() ? 0 : ms;
+}
+
+/// Drive a Spring toward `target`, snapping instead of animating under
+/// instantMotion() — the one home for that branch, so every spring surface
+/// honors the same policy.
+export function springTo(spring: Spring<number>, target: number): void {
+  if (instantMotion()) {
+    void spring.set(target, { instant: true });
+  } else {
+    spring.target = target;
+  }
 }

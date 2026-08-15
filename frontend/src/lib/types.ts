@@ -1,3 +1,5 @@
+import type { FieldKey } from './searchQuery';
+
 export interface Tag {
   id: string;
   name: string;
@@ -25,8 +27,8 @@ export interface PaperSummary {
   status: string;
   added_at: string;
   starred: boolean;
-  tags: { id: string; name: string }[];
-  projects: { id: string; name: string }[];
+  tags: Tag[];
+  projects: ProjectRef[];
 }
 
 export interface PaperDetail extends PaperSummary {
@@ -47,6 +49,9 @@ export interface Project {
   name: string;
   paper_count: number;
 }
+
+/** A project as it rides on a paper row/detail — membership only, no count. */
+export type ProjectRef = Pick<Project, 'id' | 'name'>;
 
 export interface Stats {
   total: number;
@@ -83,6 +88,9 @@ export interface TranslateSettings {
 }
 
 export interface Settings {
+  /** Host of the configured EZproxy; null when the deployment has no [proxy]
+   *  (the import modal hides institutional access then). */
+  proxy: { host: string } | null;
   proxy_cookie_set: boolean;
   proxy_cookie_updated_at: string | null;
   fold_abstract: boolean;
@@ -120,7 +128,9 @@ export interface SearchOpts {
 
 export interface SearchMatch {
   engine: 'keyword' | 'semantic' | 'both';
-  field: string;
+  /** The backend only ever emits FieldKey values; `string & {}` keeps an
+   *  unknown future field assignable without collapsing the autocomplete. */
+  field: FieldKey | (string & {});
   snippet: string;
   page: number | null;
 }
@@ -184,11 +194,24 @@ export type NewAnnotation = Pick<
   'page_index' | 'kind' | 'color' | 'quoted_text' | 'note' | 'payload'
 >;
 
-/** A partial update. An omitted field is left alone; `note: ''` clears it. */
-export interface AnnotationPatch {
-  color?: Annotation['color'];
-  note?: string;
-  payload?: unknown;
+/** One selectable paper-chat model (wire format shared with the
+ *  /api/chat/models response in src/web/chat.rs). */
+export interface ChatModelInfo {
+  id: string;
+  label: string;
+}
+
+/** One stored chat turn as GET /api/papers/{id}/chat returns it (wire format
+ *  shared with `ChatTurn` in src/web/dto.rs). `tools` arrives structured —
+ *  the backend parses its stored tool log once; null when the turn used no
+ *  tools (or the stored log was unparseable). */
+export interface ChatTurnRow {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  model: string | null;
+  created_at: string;
+  tools: { name: string; detail: string }[] | null;
 }
 
 /** One bibliography entry parsed to fields by [ai.citations] (wire format

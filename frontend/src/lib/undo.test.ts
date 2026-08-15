@@ -12,7 +12,7 @@ vi.mock('./api', async (importOriginal) => {
 });
 
 import * as api from './api';
-import { library, removePaper, removePapers } from './state.svelte';
+import { library, removePaper, removePapers } from './library.svelte';
 import { toasts } from './toasts.svelte';
 import type { PaperSummary } from './types';
 
@@ -49,6 +49,32 @@ describe('paper delete undo', () => {
     await vi.waitFor(() => {
       expect((api.restorePaper as Mock).mock.calls.map(([id]) => id)).toEqual(['p1', 'p2']);
     });
+  });
+
+  it('a partial failure gets an error toast and an Undo covering only the deleted ids', async () => {
+    library.papers = [paper('p1'), paper('p2')];
+    (api.deletePaper as Mock)
+      .mockImplementationOnce(async () => {}) // p1 goes through
+      .mockRejectedValueOnce(new Error('boom')); // p2 fails
+    await removePapers(['p1', 'p2']);
+
+    expect(library.papers.map((p) => p.id)).toEqual(['p2']); // the failure stays put
+    expect(toasts.items.some((x) => /couldn't delete/i.test(x.message))).toBe(true);
+    const undoToast = toasts.items.find((x) => x.action);
+    expect(undoToast?.message).toBe('Paper deleted'); // counts only what succeeded
+    undoToast!.action!.run();
+    await vi.waitFor(() => {
+      // Undo must not "restore" the never-deleted p2.
+      expect((api.restorePaper as Mock).mock.calls.map(([id]) => id)).toEqual(['p1']);
+    });
+  });
+
+  it('an all-failed delete rejects nothing and shows no Undo', async () => {
+    (api.deletePaper as Mock).mockRejectedValueOnce(new Error('boom'));
+    await removePapers(['p1']); // must not throw (LibraryTable's run has no catch)
+    expect(library.papers.map((p) => p.id)).toEqual(['p1']);
+    expect(toasts.items.filter((x) => x.action)).toHaveLength(0);
+    expect(toasts.items.some((x) => /couldn't delete/i.test(x.message))).toBe(true);
   });
 
   it('running Undo restores the paper and reloads the list', async () => {

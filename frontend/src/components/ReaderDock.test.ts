@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ReaderDock from './ReaderDock.svelte';
 import { chat } from '../lib/chat.svelte';
 import { handleKeydown } from '../lib/shortcuts';
-import { appSettings, dock, ui, viewer } from '../lib/state.svelte';
+import { viewer } from '../lib/tabs.svelte';
+import { appSettings, dock, ui } from '../lib/ui.svelte';
 
 const detail = {
   id: 'p1', title: 'Attention', authors: ['Vaswani'], venue: 'NeurIPS', year: 2017,

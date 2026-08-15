@@ -6,13 +6,19 @@ use tauri::Manager;
 
 fn main() {
     if let Err(e) = run() {
-        rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Error)
-            .set_title("Xuewen failed to start")
-            .set_description(format!("{e:#}"))
-            .show();
+        show_fatal(&e);
         std::process::exit(1);
     }
+}
+
+/// Blocking error dialog — the only channel a GUI app has to a user whose
+/// terminal-less launch just failed.
+fn show_fatal(err: &anyhow::Error) {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Xuewen failed to start")
+        .set_description(format!("{err:#}"))
+        .show();
 }
 
 fn run() -> Result<()> {
@@ -35,7 +41,7 @@ fn run() -> Result<()> {
 
     // A GUI app has no terminal: log to ~/Library/Logs/Xuewen/.
     let file = tracing_appender::rolling::never(&dirs.logs, "xuewen-desktop.log");
-    let (writer, _log_guard) = tracing_appender::non_blocking(file);
+    let (writer, log_guard) = tracing_appender::non_blocking(file);
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -43,6 +49,13 @@ fn run() -> Result<()> {
         .with_writer(writer)
         .with_ansi(false)
         .init();
+    // The guard flushes and joins the log worker on drop, and process::exit
+    // runs no destructors — so the setup failure path below must drop it by
+    // hand or its one "startup failed" line can be lost. Shared, not moved:
+    // the setup closure is FnOnce and drops its captures when it returns, so
+    // moving the guard in would kill logging for the app's whole life on the
+    // success path too. run() keeps the Arc alive until Tauri exits.
+    let log_guard = std::sync::Arc::new(std::sync::Mutex::new(Some(log_guard)));
 
     let mut cfg = xuewen::config::Config::load(&cfg_path)
         .with_context(|| format!("config file: {}", cfg_path.display()))?;
@@ -64,6 +77,7 @@ fn run() -> Result<()> {
     // single-instance plugin before it ever touches the SQLite db, spawns
     // services, or binds a port.
     let setup_cfg_path = cfg_path.clone();
+    let setup_log_guard = log_guard.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // Second launch: focus the existing window instead of racing the
@@ -86,11 +100,10 @@ fn run() -> Result<()> {
                 )
             }) {
                 tracing::error!("startup failed: {e:#}");
-                rfd::MessageDialog::new()
-                    .set_level(rfd::MessageLevel::Error)
-                    .set_title("Xuewen failed to start")
-                    .set_description(format!("{e:#}"))
-                    .show();
+                // Flush before exiting, or the line above dies in the
+                // non-blocking writer's channel.
+                drop(setup_log_guard.lock().unwrap().take());
+                show_fatal(&e);
                 std::process::exit(1);
             }
             Ok(())

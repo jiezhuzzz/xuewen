@@ -46,10 +46,10 @@ async fn watcher_catches_up_and_watches_new_files() {
         let pool = db::connect(&db_url).await.unwrap();
         let ctx = IngestCtx {
             pool,
-            dirs: Libraries {
-                library_root: inbox_for_task.parent().unwrap().join("library"),
-                processed_dir: inbox_for_task.join("_processed"),
-            },
+            dirs: Libraries::under(
+                &inbox_for_task,
+                &inbox_for_task.parent().unwrap().join("library"),
+            ),
             resolver: offline_resolver(),
             grobid: None,
         };

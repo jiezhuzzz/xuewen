@@ -100,7 +100,17 @@ async fn ingest_with_retry(
             Ok(o) => return Ok(o),
             Err(e) => {
                 tracing::warn!("ingest attempt {attempt}/{} failed: {e}", cfg.max_attempts);
+                // pdftotext exiting non-zero is deterministic for the same
+                // (stabilized) bytes: retrying cannot succeed, so skip the
+                // backoff — which would block the sequential inbox queue —
+                // and let the caller quarantine now.
+                let permanent = e
+                    .chain()
+                    .any(|c| c.downcast_ref::<crate::pdf::PdftotextFailed>().is_some());
                 last_err = Some(e);
+                if permanent {
+                    break;
+                }
                 if attempt < cfg.max_attempts {
                     tokio::time::sleep(delay).await;
                     delay *= 2;
@@ -134,7 +144,7 @@ async fn process_one(ctx: &IngestCtx, failed_dir: &Path, cfg: &WatchConfig, path
 /// the process is stopped. Blocks (the `notify` watcher is held for the loop's life).
 pub async fn run(ctx: &IngestCtx, inbox: &Path) -> Result<()> {
     let cfg = WatchConfig::default();
-    let failed_dir = inbox.join("_failed");
+    let failed_dir = ctx.dirs.failed_dir.clone();
 
     // Catch-up: ingest anything already sitting in the inbox.
     for path in catch_up_scan(inbox)? {
@@ -270,10 +280,7 @@ mod tests {
         let pool = temp_pool(dir.path()).await;
         let ctx = IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: dir.path().join("library"),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &dir.path().join("library")),
             resolver: offline_resolver(),
             grobid: None,
         };
@@ -300,16 +307,25 @@ mod tests {
         let pool = temp_pool(dir.path()).await;
         let ctx = IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: dir.path().join("library"),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &dir.path().join("library")),
             resolver: offline_resolver(),
             grobid: None,
         };
         let failed = inbox.join("_failed");
 
-        process_one(&ctx, &failed, &fast_cfg(), &bad).await;
+        // A backoff so large the test would blow past its bound if the
+        // permanent-failure fast path (pdftotext exited non-zero → no retry)
+        // regressed into sleeping between attempts.
+        let cfg = WatchConfig {
+            retry_base_delay: Duration::from_secs(60),
+            ..fast_cfg()
+        };
+        let started = std::time::Instant::now();
+        process_one(&ctx, &failed, &cfg, &bad).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "an unreadable PDF must quarantine without retry backoff"
+        );
 
         assert!(failed.join("bad.pdf").exists(), "should be quarantined");
         assert!(!bad.exists());

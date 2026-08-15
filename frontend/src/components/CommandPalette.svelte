@@ -1,18 +1,15 @@
 <script lang="ts">
   import { ArrowRight, FileText, Search } from 'lucide-svelte';
   import { fade, fly } from 'svelte/transition';
+  import { listPapers } from '../lib/api';
   import { fuzzyScore } from '../lib/fuzzy';
+  import { SINGLE_KEYS } from '../lib/keymap';
   import { DUR, dur } from '../lib/motion';
-  import {
-    goHome,
-    library,
-    openImport,
-    openTab,
-    toggleSidebar,
-    toggleTheme,
-    toggleZen,
-    ui,
-  } from '../lib/state.svelte';
+  import { openImport } from '../lib/importQueue.svelte';
+  import { library } from '../lib/library.svelte';
+  import { goHome, openTab, toggleZen } from '../lib/tabs.svelte';
+  import { toggleTheme } from '../lib/theme.svelte';
+  import { toggleSidebar, ui } from '../lib/ui.svelte';
   import type { PaperSummary } from '../lib/types';
 
   let query = $state('');
@@ -21,6 +18,18 @@
 
   $effect(() => {
     input?.focus();
+  });
+
+  // The palette searches the WHOLE library: `library.papers` is only the
+  // sidebar's current view (a filter or search replaces it), and a ⌘K jump
+  // must reach papers outside that subset. Fetched fresh per open (the
+  // palette is `{#if}`-gated, so mount == open, and opens are rare); until
+  // it resolves — or if it fails — the filtered view stands in.
+  let corpus = $state<PaperSummary[] | null>(null);
+  $effect(() => {
+    void listPapers({ q: '', status: 'all', sort: 'added_desc', project: 'all' })
+      .then((papers) => (corpus = papers))
+      .catch(() => {});
   });
 
   function close() {
@@ -32,20 +41,24 @@
     | { kind: 'paper'; id: string; label: string; paper: PaperSummary; score: number }
     | { kind: 'action'; id: string; label: string; keys?: string; run: () => void; score: number };
 
-  // `keys` mirrors the single-key map in shortcuts.ts (see lib/keymap.ts) so
-  // the palette doubles as shortcut discovery.
+  // The key hints come from the single-key table in lib/keymap.ts (the same
+  // one the dispatcher runs), so the palette doubles as shortcut discovery
+  // without keeping its own copy of the map: an unbound key loses its hint.
+  const keyHint = (key: string): string | undefined =>
+    SINGLE_KEYS.some((b) => b.key === key) ? key : undefined;
+
   const ACTIONS: Array<{ id: string; label: string; keys?: string; run: () => void }> = [
     { id: 'import', label: 'Import papers…', run: () => openImport() },
     { id: 'home', label: 'Go to library', run: () => goHome() },
     { id: 'theme', label: 'Cycle theme', run: () => toggleTheme() },
-    { id: 'pane', label: 'Toggle list pane', keys: '[', run: () => toggleSidebar() },
-    { id: 'zen', label: 'Toggle zen mode', keys: 'z', run: () => toggleZen() },
-    { id: 'help', label: 'Keyboard shortcuts…', keys: '?', run: () => (ui.helpOpen = true) },
+    { id: 'pane', label: 'Toggle list pane', keys: keyHint('['), run: () => toggleSidebar() },
+    { id: 'zen', label: 'Toggle zen mode', keys: keyHint('z'), run: () => toggleZen() },
+    { id: 'help', label: 'Keyboard shortcuts…', keys: keyHint('?'), run: () => (ui.helpOpen = true) },
   ];
 
   const items = $derived.by((): Item[] => {
     const q = query.trim();
-    const papers: Item[] = library.papers
+    const papers: Item[] = (corpus ?? library.papers)
       .map((p) => ({
         p,
         score: fuzzyScore(q, `${p.name ?? ''} ${p.title ?? ''} ${p.authors.join(' ')} ${p.cite_key ?? ''}`),

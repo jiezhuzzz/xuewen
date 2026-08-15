@@ -50,12 +50,12 @@ const NUMBERED_START = /^\s*\[(\d{1,3})\]\s*/;
 
 /** Build Reference entries from entry-start line indexes: each entry spans
  *  its start line up to the next start, its raw text is the ws-collapsed
- *  join, and an in-PDF URL link near any of its lines (same page, y within
- *  2×LINE_TOLERANCE) becomes `externalUrl`. Shared by the numbered and
+ *  join, and an in-PDF URL link near any of its lines (same page, same
+ *  column, y within 2×LINE_TOLERANCE) becomes `externalUrl`. The column
+ *  check matters on two-column pages: a DOI link in the other column can
+ *  share a baseline with this entry's lines. Shared by the numbered and
  *  author-year segmentation paths, which differ only in how starts are
- *  found. NOTE: the URL match is y-proximity only (column-blind), unlike
- *  buildCitationData's column-aware predicate — a same-y URL in the other
- *  column of a two-column fallback PDF can mis-attach. */
+ *  found. */
 function refsFromStarts(lines: CmLine[], pages: PageText[], starts: number[]): Reference[] {
   return starts.map((from, refIndex) => {
     const to = refIndex + 1 < starts.length ? starts[refIndex + 1] : lines.length;
@@ -63,9 +63,15 @@ function refsFromStarts(lines: CmLine[], pages: PageText[], starts: number[]): R
     const rawText = span.map((l) => l.text).join(' ').replace(/\s+/g, ' ').trim();
     const first = lines[from];
     const page = pages.find((p) => p.pageIndex === first.pageIndex);
-    const externalUrl = page?.urlLinks.find((u) =>
-      span.some((l) => l.pageIndex === page.pageIndex && Math.abs(l.y - u.y) <= LINE_TOLERANCE * 2),
-    )?.url;
+    const externalUrl = page?.urlLinks.find((u) => {
+      const col = columnOfX(page.runs, page.width, u.x);
+      return span.some(
+        (l) =>
+          l.pageIndex === page.pageIndex &&
+          l.col === col &&
+          Math.abs(l.y - u.y) <= LINE_TOLERANCE * 2,
+      );
+    })?.url;
     return { index: refIndex, destPageIndex: first.pageIndex, destY: first.y, rawText, externalUrl };
   });
 }

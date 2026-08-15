@@ -72,10 +72,7 @@ async fn needs_review_reresolves_and_refiles() {
 
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver,
         grobid: None,
     };
@@ -127,10 +124,7 @@ async fn resolved_paper_refiles_without_reresolving() {
 
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver,
         grobid: None,
     };
@@ -186,10 +180,7 @@ async fn all_does_not_downgrade_resolved_on_failed_reresolve() {
 
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver,
         grobid: None,
     };
@@ -254,10 +245,7 @@ async fn refresh_by_id_prefix_targets_one() {
 
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver,
         grobid: None,
     };
@@ -316,10 +304,7 @@ async fn all_reresolves_resolved_paper() {
 
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver,
         grobid: None,
     };
@@ -392,10 +377,7 @@ async fn refiles_two_same_base_papers_with_distinct_keys() {
     .unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver,
         grobid: None,
     };
@@ -447,10 +429,7 @@ async fn refresh_skips_a_trashed_paper() {
     .unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver,
         grobid: None,
     };
@@ -494,10 +473,7 @@ async fn refile_copy_failure_keeps_db_and_file_consistent() {
         .await;
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver: Resolver::with_bases(None, server.uri(), server.uri()).unwrap(),
         grobid: None,
     };
@@ -557,10 +533,7 @@ async fn refile_rolls_back_copy_when_update_fails() {
         .await;
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: dir.path().join("_processed"),
-        },
+        dirs: Libraries::under(dir.path(), &library),
         resolver: Resolver::with_bases(None, server.uri(), server.uri()).unwrap(),
         grobid: None,
     };

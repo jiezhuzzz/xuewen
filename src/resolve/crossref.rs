@@ -1,12 +1,15 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::http::HttpClient;
-use super::{collapse_ws, strip_tags, ResolvedMetadata};
+use super::ResolvedMetadata;
+use crate::http::{encode_doi_path, HttpClient};
+use crate::text::{collapse_ws, strip_tags};
 
 /// Fetch the Crossref work record for a DOI from `{base}/works/{doi}`.
 pub async fn fetch(http: &HttpClient, base: &str, doi: &str) -> Result<String> {
-    let url = format!("{base}/works/{doi}");
+    // Crossref requires the DOI URL-encoded: a raw `#`/`?` (legal in DOIs)
+    // would truncate the request path.
+    let url = format!("{base}/works/{}", encode_doi_path(doi));
     http.get_text(&url).await
 }
 

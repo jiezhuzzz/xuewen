@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { annotationTools, setActiveTool } from './annotationState.svelte';
+import { library, removePaper } from './library.svelte';
 import {
   closeTab,
   goHome,
-  library,
   openTab,
-  removePaper,
   selection,
   selectPaper,
   toggleZen,
-  ui,
   viewer,
-} from './state.svelte';
+} from './tabs.svelte';
+import { ui } from './ui.svelte';
 import type { PaperSummary } from './types';
 
 function paper(id: string): PaperSummary {
@@ -27,6 +27,7 @@ beforeEach(() => {
   viewer.activeId = null;
   selection.id = null;
   ui.zen = false;
+  annotationTools.active = null;
   vi.stubGlobal(
     'fetch',
     vi.fn(async () =>
@@ -83,6 +84,18 @@ describe('zen mode', () => {
     toggleZen();
     closeTab('a');
     expect(ui.zen).toBe(false);
+  });
+
+  it('closing the last tab disarms the annotation tool', () => {
+    // A tool armed with no reader on screen would silently re-arm on the next
+    // opened tab (AnnotationTools re-applies the persisted tool per document).
+    openTab(paper('a'));
+    openTab(paper('b'));
+    setActiveTool('highlight');
+    closeTab('a');
+    expect(annotationTools.active).toBe('highlight'); // a reader is still up
+    closeTab('b');
+    expect(annotationTools.active).toBeNull();
   });
 
   it('goHome exits zen', () => {

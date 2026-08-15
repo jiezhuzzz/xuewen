@@ -4,14 +4,8 @@
 /// it, and `annotationSync` (which watches the PDF plugin) writes through it.
 /// Nothing else talks to `/api/papers/{id}/annotations` directly.
 
-import {
-  clearAnnotations,
-  deleteAnnotation,
-  listAnnotations,
-  patchAnnotation,
-  putAnnotation,
-} from './api';
-import type { Annotation, AnnotationPatch, NewAnnotation } from './types';
+import { deleteAnnotation, listAnnotations, putAnnotation } from './api';
+import type { Annotation, NewAnnotation } from './types';
 
 export const annotations = $state<{
   /// paper id → annotation id → row.
@@ -37,10 +31,6 @@ export function annotationList(paperId: string): Annotation[] {
       a.created_at.localeCompare(b.created_at) ||
       a.id.localeCompare(b.id),
   );
-}
-
-export function annotationCount(paperId: string): number {
-  return Object.keys(annotations.byPaper[paperId] ?? {}).length;
 }
 
 export function isLoaded(paperId: string): boolean {
@@ -71,34 +61,9 @@ export async function saveAnnotation(
   bucket(paperId)[id] = saved;
 }
 
-export async function patchAnnotationRow(
-  paperId: string,
-  id: string,
-  patch: AnnotationPatch,
-): Promise<void> {
-  const saved = await patchAnnotation(paperId, id, patch);
-  bucket(paperId)[id] = saved;
-}
-
-/// `''` clears the note — the backend reads an empty string as "make it NULL",
-/// which an omitted field would not.
-export function setNote(paperId: string, id: string, note: string): Promise<void> {
-  return patchAnnotationRow(paperId, id, { note });
-}
-
-export function recolor(paperId: string, id: string, color: Annotation['color']): Promise<void> {
-  return patchAnnotationRow(paperId, id, { color });
-}
-
 export async function removeAnnotation(paperId: string, id: string): Promise<void> {
   await deleteAnnotation(paperId, id);
   delete bucket(paperId)[id];
-}
-
-export async function removeAllAnnotations(paperId: string): Promise<number> {
-  const n = await clearAnnotations(paperId);
-  annotations.byPaper[paperId] = {};
-  return n;
 }
 
 /// Forget a closed tab's cache. The rows stay on the server; this only drops

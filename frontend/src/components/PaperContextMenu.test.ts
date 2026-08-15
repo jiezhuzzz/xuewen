@@ -3,7 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PaperContextMenu from './PaperContextMenu.svelte';
 import { closeContextMenu, contextMenu } from '../lib/contextMenu.svelte';
-import { identifyState, library, selection, viewer } from '../lib/state.svelte';
+import { identifyState } from '../lib/identify.svelte';
+import { library } from '../lib/library.svelte';
+import { selection, viewer } from '../lib/tabs.svelte';
 import { toasts } from '../lib/toasts.svelte';
 import type { PaperSummary } from '../lib/types';
 
@@ -91,6 +93,21 @@ describe('PaperContextMenu', () => {
     render(PaperContextMenu);
     await userEvent.keyboard('{Escape}');
     expect(contextMenu.open).toBe(false);
+  });
+
+  it('dismisses when a pane scrolls under it', async () => {
+    render(PaperContextMenu);
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: /copy bibtex/i })).toHaveFocus(),
+    );
+    // The list panes' scroll events don't bubble to window — the shell's
+    // capture-phase listener is what keeps the menu from floating detached
+    // from its row when the pane scrolls.
+    const pane = document.createElement('div');
+    document.body.appendChild(pane);
+    pane.dispatchEvent(new Event('scroll'));
+    expect(contextMenu.open).toBe(false);
+    pane.remove();
   });
 
   it('renders nothing when closed', () => {

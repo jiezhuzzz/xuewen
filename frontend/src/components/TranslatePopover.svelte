@@ -1,6 +1,7 @@
 <script lang="ts">
   import { closeTranslate, requestTranslate, translateBox } from '../lib/translate.svelte';
-  import { appSettings, copyText, openDock } from '../lib/state.svelte';
+  import { copyText } from '../lib/clipboard';
+  import { appSettings, openDock } from '../lib/ui.svelte';
   import { chat } from '../lib/chat.svelte';
   import { clickOutside } from '../lib/clickOutside';
   import { anchoredPosition } from '../lib/popoverPosition';

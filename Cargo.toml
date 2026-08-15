@@ -1,6 +1,6 @@
 [package]
 name = "xuewen"
-version = "0.1.2"
+version.workspace = true
 edition = "2021"
 license = "MIT"
 
@@ -37,6 +37,11 @@ brotli = "8"
 tantivy = "0.26"
 async-trait = "0.1.89"
 
+# Process-group kill for the agent runner: SIGKILL to the runner alone
+# orphans the SDKs' vendored-CLI grandchildren (src/agent/mod.rs).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 printpdf = "0.12"
@@ -45,6 +50,12 @@ axum-test = "17"
 
 [workspace]
 members = [".", "desktop"]
+
+# Single source of truth for the release version: both crates inherit it,
+# tauri.conf.json (no `version` key) falls back to the desktop crate's, and
+# flake.nix reads it with builtins.fromTOML.
+[workspace.package]
+version = "0.1.2"
 
 # Hashing and compression are the only places a dev build does real work per
 # request, and unoptimized they dominate it: rust-embed re-reads and SHA-256s

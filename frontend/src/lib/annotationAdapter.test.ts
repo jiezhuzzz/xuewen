@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PdfAnnotationSubtype } from '@embedpdf/models';
 import type { PdfAnnotationObject } from '@embedpdf/models';
 import {
-  TEXT_MARKUP_KINDS,
   TOOL_BY_KIND,
+  applyToolDefaults,
   canonicalJson,
   fromWire,
   kindOf,
@@ -220,9 +220,16 @@ describe('tool mapping', () => {
     });
   });
 
-  it('marks the four selection-driven kinds', () => {
-    expect(TEXT_MARKUP_KINDS).toEqual(['highlight', 'underline', 'strikeout', 'squiggly']);
-    expect(TEXT_MARKUP_KINDS).not.toContain('text_comment');
+  it('pushes a color into every tool default, stroke-only for the sticky note', () => {
+    const cap = { setToolDefaults: vi.fn() };
+    applyToolDefaults(cap, '#f59e0b');
+    expect(cap.setToolDefaults).toHaveBeenCalledTimes(5);
+    expect(cap.setToolDefaults).toHaveBeenCalledWith('highlight', {
+      color: '#f59e0b',
+      strokeColor: '#f59e0b',
+    });
+    // A sticky note is an icon: stroke only, no fill to color.
+    expect(cap.setToolDefaults).toHaveBeenCalledWith('textComment', { strokeColor: '#f59e0b' });
   });
 });
 

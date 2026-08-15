@@ -1,5 +1,40 @@
+//! Crate-wide HTTP transport: the retrying client shared by the resolvers,
+//! the LLM chat/embeddings clients, and the daily feed, plus the outbound
+//! user-agent and URL-encoding helpers those callers share.
+
 use anyhow::{anyhow, Result};
 use std::time::Duration;
+
+/// The polite user-agent for outbound API calls: `xuewen/<version>`, plus a
+/// `(mailto:…)` contact when one is configured — the mailto form is what
+/// routes Crossref/Unpaywall requests into their polite pools.
+pub fn user_agent(email: Option<&str>) -> String {
+    const BASE: &str = concat!("xuewen/", env!("CARGO_PKG_VERSION"));
+    match email {
+        Some(email) => format!("{BASE} (mailto:{email})"),
+        None => BASE.to_string(),
+    }
+}
+
+/// Percent-encode a DOI for embedding in a URL path. `/` stays literal (DOIs
+/// contain it structurally and the APIs accept it raw), so a plain DOI
+/// produces a byte-identical path; encoded are only the characters the URL
+/// parser cannot rescue — `#` (fragment cut), `?` (query cut), `%`
+/// (double-decode) — plus the parser-fragile CONTROLS/space/`"`/`<`/`>`/`` ` ``
+/// set. Legacy SICI DOIs (`10.1002/(SICI)…<1893::AID-APP1>…;2-9`) are real.
+pub fn encode_doi_path(doi: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+    const DOI_PATH: &AsciiSet = &CONTROLS
+        .add(b' ')
+        .add(b'"')
+        .add(b'#')
+        .add(b'<')
+        .add(b'>')
+        .add(b'?')
+        .add(b'`')
+        .add(b'%');
+    utf8_percent_encode(doi, DOI_PATH).to_string()
+}
 
 /// How `HttpClient` retries transient HTTP failures.
 #[derive(Debug, Clone)]
@@ -177,6 +212,31 @@ mod tests {
 
     fn client() -> HttpClient {
         HttpClient::new(reqwest::Client::new(), RetryPolicy::fast_for_tests())
+    }
+
+    #[test]
+    fn user_agent_carries_version_and_optional_mailto() {
+        let bare = user_agent(None);
+        assert_eq!(bare, format!("xuewen/{}", env!("CARGO_PKG_VERSION")));
+        assert_eq!(
+            user_agent(Some("me@uchicago.edu")),
+            format!("{bare} (mailto:me@uchicago.edu)")
+        );
+    }
+
+    #[test]
+    fn encode_doi_path_leaves_plain_dois_alone() {
+        assert_eq!(
+            encode_doi_path("10.1145/3292500.3330701"),
+            "10.1145/3292500.3330701"
+        );
+        // SICI-style reserved characters survive un-mangled…
+        assert_eq!(
+            encode_doi_path("10.1002/(SICI)1097-4628(19980620)68:12<1893::AID-APP1>3.0.CO;2-9"),
+            "10.1002/(SICI)1097-4628(19980620)68:12%3C1893::AID-APP1%3E3.0.CO;2-9"
+        );
+        // …and the truly path-breaking characters are encoded.
+        assert_eq!(encode_doi_path("10.1/a#b?c%d"), "10.1/a%23b%3Fc%25d");
     }
 
     #[tokio::test]

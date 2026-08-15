@@ -24,37 +24,20 @@ vi.mock('./api', () => ({
     (server[paperId] ??= {})[id] = saved;
     return saved;
   }),
-  patchAnnotation: vi.fn(async (paperId: string, id: string, patch: Record<string, unknown>) => {
-    const row = server[paperId]?.[id];
-    if (!row) throw new Error('not found: 404');
-    const note = 'note' in patch ? (patch.note as string) || null : row.note;
-    const saved = { ...row, ...patch, note, updated_at: '2026-08-14T02:00:00Z' } as Annotation;
-    server[paperId][id] = saved;
-    return saved;
-  }),
   deleteAnnotation: vi.fn(async (paperId: string, id: string) => {
     delete server[paperId]?.[id];
-  }),
-  clearAnnotations: vi.fn(async (paperId: string) => {
-    const n = Object.keys(server[paperId] ?? {}).length;
-    server[paperId] = {};
-    return n;
   }),
 }));
 
 import * as api from './api';
 import {
-  annotationCount,
   annotationList,
   annotations,
   dropAnnotations,
   isLoaded,
   loadAnnotations,
-  recolor,
-  removeAllAnnotations,
   removeAnnotation,
   saveAnnotation,
-  setNote,
 } from './annotationStore.svelte';
 
 function body(over: Partial<NewAnnotation> = {}): NewAnnotation {
@@ -94,7 +77,7 @@ describe('loading', () => {
     seed('p1', 'a1');
     await loadAnnotations('p1');
     expect(isLoaded('p1')).toBe(true);
-    expect(annotationCount('p1')).toBe(1);
+    expect(annotationList('p1')).toHaveLength(1);
     expect(annotations.error['p1']).toBeNull();
   });
 
@@ -129,7 +112,6 @@ describe('ordering', () => {
 
   it('is empty for a paper nobody has loaded', () => {
     expect(annotationList('nope')).toEqual([]);
-    expect(annotationCount('nope')).toBe(0);
   });
 });
 
@@ -144,30 +126,8 @@ describe('writing', () => {
   it('re-saving the same id replaces rather than duplicating', async () => {
     await saveAnnotation('p1', 'a1', body());
     await saveAnnotation('p1', 'a1', body({ color: 'blue' }));
-    expect(annotationCount('p1')).toBe(1);
+    expect(annotationList('p1')).toHaveLength(1);
     expect(annotationList('p1')[0].color).toBe('blue');
-  });
-
-  it('patches only the named field', async () => {
-    seed('p1', 'a1');
-    await loadAnnotations('p1');
-    await recolor('p1', 'a1', 'violet');
-    expect(annotationList('p1')[0]).toMatchObject({ color: 'violet', quoted_text: 'quoted' });
-  });
-
-  it('sends an empty string to clear a note, which is what NULLs it', async () => {
-    seed('p1', 'a1', { note: 'old' });
-    await loadAnnotations('p1');
-    await setNote('p1', 'a1', '');
-    expect(api.patchAnnotation).toHaveBeenCalledWith('p1', 'a1', { note: '' });
-    expect(annotationList('p1')[0].note).toBeNull();
-  });
-
-  it('leaves the cache alone when the server refuses', async () => {
-    seed('p1', 'a1');
-    await loadAnnotations('p1');
-    await expect(recolor('p1', 'missing', 'blue')).rejects.toThrow('404');
-    expect(annotationCount('p1')).toBe(1);
   });
 });
 
@@ -181,22 +141,15 @@ describe('removing', () => {
     expect(Object.keys(server['p1'])).toEqual(['a2']);
   });
 
-  it('clears a whole paper and reports the count', async () => {
-    seed('p1', 'a1');
-    seed('p1', 'a2');
-    await loadAnnotations('p1');
-    await expect(removeAllAnnotations('p1')).resolves.toBe(2);
-    expect(annotationCount('p1')).toBe(0);
-  });
-
   it('scopes every operation to its own paper', async () => {
     seed('p1', 'a1');
     seed('p2', 'a1'); // same annotation id, different paper
     await loadAnnotations('p1');
     await loadAnnotations('p2');
-    await removeAllAnnotations('p1');
-    expect(annotationCount('p1')).toBe(0);
-    expect(annotationCount('p2')).toBe(1);
+    await removeAnnotation('p1', 'a1');
+    expect(annotationList('p1')).toHaveLength(0);
+    expect(annotationList('p2')).toHaveLength(1);
+    expect(Object.keys(server['p2'])).toEqual(['a1']);
   });
 
   it('dropping a closed tab forgets the cache but not the server rows', async () => {
@@ -204,7 +157,7 @@ describe('removing', () => {
     await loadAnnotations('p1');
     dropAnnotations('p1');
     expect(isLoaded('p1')).toBe(false);
-    expect(annotationCount('p1')).toBe(0);
+    expect(annotationList('p1')).toHaveLength(0);
     expect(api.deleteAnnotation).not.toHaveBeenCalled();
     expect(Object.keys(server['p1'])).toEqual(['a1']);
   });

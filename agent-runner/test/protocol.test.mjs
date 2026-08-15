@@ -1,6 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composePrompt, toolDetail } from '../src/protocol.mjs';
+import { readFileSync } from 'node:fs';
+import { composePrompt, emit, toolDetail } from '../src/protocol.mjs';
+
+test('emit serializes each event type exactly as the shared fixture', () => {
+  // fixtures/events.jsonl is the wire contract's canonical form, asserted
+  // from both sides: here against `emit`, and in src/agent/mod.rs against
+  // the Rust AgentEvent deserializer — change fixture and both together.
+  const lines = readFileSync(new URL('./fixtures/events.jsonl', import.meta.url), 'utf8')
+    .trim()
+    .split('\n');
+  // One entry per event type, shaped exactly like the real emit call sites
+  // (claude.mjs / codex.mjs / runner.mjs).
+  const events = [
+    { type: 'delta', text: 'Hel' },
+    { type: 'tool', name: 'Read', detail: 'paper.txt' },
+    { type: 'done' },
+    { type: 'error', message: 'boom' },
+  ];
+  const out = [];
+  const original = process.stdout.write;
+  process.stdout.write = (s) => {
+    out.push(s);
+    return true;
+  };
+  try {
+    for (const ev of events) emit(ev);
+  } finally {
+    process.stdout.write = original;
+  }
+  assert.deepEqual(
+    out.map((s) => s.trimEnd()),
+    lines,
+  );
+});
 
 test('composePrompt lists workspace contents, paper, transcript, question', () => {
   const p = composePrompt({

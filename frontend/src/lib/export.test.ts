@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { exportUrl } from './api';
-import { bibFormat, copyCitation } from './state.svelte';
+import { copyCitation } from './clipboard';
+import { bibFormat } from './library.svelte';
 import type { Filters } from './types';
 
 const baseFilters: Filters = { q: '', status: 'all', sort: 'year_desc', project: 'all' };
@@ -20,6 +21,18 @@ describe('exportUrl', () => {
     expect(url).toContain('status=resolved');
     expect(url).toContain('project=p1');
     expect(url).toContain('format=biblatex');
+  });
+
+  it('strips a qualifier-only q and rides on the parsed filters instead', () => {
+    // A tag pill writes 'tag:nlp' into filters.q and the cached parse sets
+    // filters.tag; the endpoint would LIKE-match the literal 'tag:nlp' as q,
+    // so the export must travel as tag=, with q dropped.
+    const url = exportUrl(
+      { q: 'tag:nlp', status: 'all', sort: 'year_desc', project: 'all', tag: 'nlp' },
+      'bibtex',
+    );
+    expect(url).toContain('tag=nlp');
+    expect(url).not.toContain('q=');
   });
 });
 

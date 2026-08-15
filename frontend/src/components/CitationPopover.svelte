@@ -1,7 +1,13 @@
 <script lang="ts">
   import { Download, ExternalLink, BookOpen } from 'lucide-svelte';
-  import { citationHover, cancelHideCitation, hideCitationSoon } from '../lib/citationState.svelte';
-  import { enqueueUrl, openImport, openTab } from '../lib/state.svelte';
+  import {
+    citationHover,
+    cancelHideCitation,
+    hideCitationNow,
+    hideCitationSoon,
+  } from '../lib/citationState.svelte';
+  import { enqueueUrl, openImport } from '../lib/importQueue.svelte';
+  import { openTab } from '../lib/tabs.svelte';
   import { abbreviateVenue } from '../lib/venue';
   import { anchoredPosition } from '../lib/popoverPosition';
   import { authorLine, refLinks, titleCase } from '../lib/refFormat';
@@ -17,7 +23,7 @@
 
   function open() {
     if (c?.matchedPaper) openTab(c.matchedPaper);
-    citationHover.current = null;
+    hideCitationNow();
   }
 
   // A reference we can fetch but don't have: offer one-click import. The
@@ -28,7 +34,7 @@
     if (!importable) return;
     openImport(); // reset/open first, so the enqueue lands in the fresh session
     void enqueueUrl(importable);
-    citationHover.current = null;
+    hideCitationNow();
   }
 </script>
 

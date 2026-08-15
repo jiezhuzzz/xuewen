@@ -5,7 +5,11 @@ vi.mock('./api', async (importOriginal) => {
   return {
     ...mod,
     getPaper: vi.fn(async (id: string) => {
-      if (id === 'dead') throw new Error('404');
+      // The server positively saying "gone" — the only rejection that prunes.
+      if (id === 'dead') throw new mod.ApiError('paper not found', 404);
+      // Transient failures: the request never got an answer / a 500.
+      if (id === 'offline') throw new Error('fetch failed');
+      if (id === 'flaky') throw new mod.ApiError('detail failed: 500', 500);
       return { id } as never;
     }),
     // Echoes the name back the way the server does (it is authoritative about
@@ -14,15 +18,8 @@ vi.mock('./api', async (importOriginal) => {
   };
 });
 
-import {
-  activateTab,
-  closeTab,
-  goHome,
-  initTabs,
-  openTab,
-  setPaperName,
-  viewer,
-} from './state.svelte';
+import { setPaperName } from './library.svelte';
+import { activateTab, closeTab, goHome, initTabs, openTab, viewer } from './tabs.svelte';
 import type { PaperSummary } from './types';
 
 const TABS_KEY = 'xuewen-tabs';
@@ -113,6 +110,26 @@ describe('tab persistence', () => {
     expect(viewer.tabs.map((t) => t.id)).toEqual(['a']);
     expect(viewer.activeId).toBe(null); // the active tab died → land on home
     expect(saved().tabs.map((t) => t.id)).toEqual(['a']); // pruned set re-saved
+  });
+
+  it('initTabs keeps tabs whose validation failed transiently (network, 5xx)', async () => {
+    // Loading the UI while the backend restarts must not wipe the remembered
+    // workspace: only a definite 404/410 may prune, never a failed request.
+    localStorage.setItem(
+      TABS_KEY,
+      JSON.stringify({
+        tabs: [
+          { id: 'a', title: 'A' },
+          { id: 'offline', title: 'B' },
+          { id: 'flaky', title: 'C' },
+        ],
+        activeId: 'flaky',
+      }),
+    );
+    await initTabs();
+    expect(viewer.tabs.map((t) => t.id)).toEqual(['a', 'offline', 'flaky']);
+    expect(viewer.activeId).toBe('flaky');
+    expect(saved().tabs.map((t) => t.id)).toEqual(['a', 'offline', 'flaky']); // not re-saved pruned
   });
 
   it('initTabs tolerates corrupted or missing storage', async () => {

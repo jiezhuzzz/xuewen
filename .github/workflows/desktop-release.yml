@@ -38,8 +38,13 @@ jobs:
           brew install poppler dylibbundler
           bash desktop/scripts/prepare-sidecars.sh
 
+      # The Tauri CLI performs the bundling and ad-hoc signing, so it is
+      # pinned via desktop/package.json rather than floated with npx: two
+      # builds of the same tag must use the same tool.
       - name: Build .app and .dmg
-        run: npx --yes @tauri-apps/cli@^2 build
+        run: |
+          npm ci
+          npx tauri build
         working-directory: desktop
 
       # The dmg is published as a build artifact only. This repo enforces

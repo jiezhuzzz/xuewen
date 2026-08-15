@@ -32,7 +32,6 @@ fn turn(question: &str) -> TurnRequest {
             authors: vec![],
             venue: None,
             year: None,
-            cite_key: None,
         },
         transcript: vec![TurnMessage {
             role: "user".into(),
@@ -87,6 +86,56 @@ async fn run_turn_reports_silent_death_with_stderr() {
     assert!(
         matches!(evs.last().unwrap(), AgentEvent::Error { message } if message.contains("stub exploded"))
     );
+}
+
+/// Stop/timeout must kill the SDKs' grandchildren, not just the runner: the
+/// stub spawns a hanging grandchild and reports its pid; once the stream is
+/// dropped (after the timeout error) the whole process group must be gone.
+#[cfg(unix)]
+#[tokio::test]
+async fn run_turn_timeout_kills_grandchildren() {
+    let svc = AgentService::from_config(&stub_cfg(1)).unwrap();
+    let evs = collect(&svc, turn("orphan me")).await;
+    let pid: i32 = evs
+        .iter()
+        .find_map(|e| match e {
+            AgentEvent::Delta { text } => text.trim().parse().ok(),
+            _ => None,
+        })
+        .expect("stub reports the grandchild pid");
+    assert!(
+        matches!(evs.last().unwrap(), AgentEvent::Error { message } if message.contains("timed out"))
+    );
+    // The group kill fires when the stream drops; init still has to reap the
+    // orphan before kill(pid, 0) reports it gone, so poll briefly.
+    let mut dead = false;
+    for _ in 0..100 {
+        if unsafe { libc::kill(pid, 0) } == -1 {
+            dead = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    if !dead {
+        unsafe { libc::kill(pid, libc::SIGKILL) }; // don't leak it past the test
+    }
+    assert!(dead, "grandchild {pid} survived the process-group kill");
+}
+
+#[tokio::test]
+async fn preflight_passes_through_the_runner_preflight_mode() {
+    let svc = AgentService::from_config(&stub_cfg(30)).unwrap();
+    assert_eq!(svc.preflight().await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn preflight_reports_a_missing_runner() {
+    let mut cfg = stub_cfg(30);
+    cfg.runner = Some(PathBuf::from("/nonexistent/runner.mjs"));
+    let svc = AgentService::from_config(&cfg).unwrap();
+    let problems = svc.preflight().await;
+    assert_eq!(problems.len(), 1);
+    assert!(problems[0].contains("not found"), "got: {}", problems[0]);
 }
 
 #[tokio::test]

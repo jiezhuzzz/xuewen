@@ -11,13 +11,31 @@ cd "$(dirname "$0")/.."
 
 TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
 NODE_VERSION="${NODE_VERSION:-24.18.0}"
+# The download must match the triple the outputs are named after: a wrong-arch
+# node still passes tauri-build's existence check and only fails inside the
+# shipped .app, at runtime, with "Bad CPU type in executable".
+case "$TRIPLE" in
+  aarch64-apple-darwin) NODE_ARCH=darwin-arm64 ;;
+  x86_64-apple-darwin) NODE_ARCH=darwin-x64 ;;
+  *)
+    echo "unsupported host: $TRIPLE" >&2
+    exit 1
+    ;;
+esac
 mkdir -p binaries/libs
 
-echo "==> node v${NODE_VERSION} (${TRIPLE})"
-curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-arm64.tar.gz" \
-  -o /tmp/xuewen-node.tgz
-tar -xzf /tmp/xuewen-node.tgz -C /tmp
-cp "/tmp/node-v${NODE_VERSION}-darwin-arm64/bin/node" "binaries/node-${TRIPLE}"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+NODE_DIST="node-v${NODE_VERSION}-${NODE_ARCH}"
+echo "==> ${NODE_DIST} (${TRIPLE})"
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_DIST}.tar.gz" \
+  -o "${WORK}/${NODE_DIST}.tar.gz"
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+  -o "${WORK}/SHASUMS256.txt"
+(cd "$WORK" && grep " ${NODE_DIST}.tar.gz\$" SHASUMS256.txt | shasum -a 256 -c -)
+tar -xzf "${WORK}/${NODE_DIST}.tar.gz" -C "$WORK"
+cp "${WORK}/${NODE_DIST}/bin/node" "binaries/node-${TRIPLE}"
 
 echo "==> pdftotext from $(brew --prefix poppler)"
 cp "$(brew --prefix poppler)/bin/pdftotext" "binaries/pdftotext-${TRIPLE}"

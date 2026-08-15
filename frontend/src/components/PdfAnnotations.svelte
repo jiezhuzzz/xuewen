@@ -9,8 +9,9 @@
   import { buildAnnotatedPdf, exportErrorMessage } from '../lib/annotationExport';
   import { colorHex, colorLabel } from '../lib/annotationPalette';
   import { annotatedFilename, downloadBlob } from '../lib/download';
+  import { openDocumentFully } from '../lib/pdfDeck';
   import { pdfUrl } from '../lib/api';
-  import { viewer } from '../lib/state.svelte';
+  import { viewer } from '../lib/tabs.svelte';
   import { toast } from '../lib/toasts.svelte';
   import type { Annotation } from '../lib/types';
 
@@ -66,14 +67,9 @@
     exporting = true;
     try {
       const blob = await buildAnnotatedPdf(documentId, items, {
-        open: async (id) => {
-          // The outer task hands back the engine's task as soon as the id is
-          // assigned; the inner one is what resolves with the loaded document.
-          const opened = await docs
-            .openDocumentUrl({ url: pdfUrl(documentId), documentId: id, autoActivate: false })
-            .toPromise();
-          return opened.task.toPromise();
-        },
+        // openDocumentFully resolves with the LOADED document, not the
+        // synchronously-resolving outer open task (see lib/pdfDeck.ts).
+        open: (id) => openDocumentFully(docs, { url: pdfUrl(documentId), documentId: id }),
         close: (id) => void docs.closeDocument(id),
         scope: (id) => {
           const s = marks.forDocument(id);

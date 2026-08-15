@@ -9,7 +9,8 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 import * as api from '../lib/api';
 import TopBar from './TopBar.svelte';
-import { filters, stats } from '../lib/state.svelte';
+import { stats } from '../lib/library.svelte';
+import { filters } from '../lib/searchState.svelte';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -35,7 +36,7 @@ describe('TopBar review count', () => {
 
 describe('TopBar counts', () => {
   it('shows the match count instead of library total while searching', async () => {
-    const { library } = await import('../lib/state.svelte');
+    const { library } = await import('../lib/library.svelte');
     filters.q = 'fuzzing';
     library.papers = [
       { id: 'p1', title: 'A', authors: [], venue: null, year: null, doi: null,
@@ -50,7 +51,7 @@ describe('TopBar counts', () => {
 
 describe('TopBar theme toggle', () => {
   it('theme button names current and next mode', async () => {
-    const { theme } = await import('../lib/state.svelte');
+    const { theme } = await import('../lib/theme.svelte');
     theme.mode = 'light';
     render(TopBar);
     expect(screen.getByRole('button', { name: /theme: light/i }).title)

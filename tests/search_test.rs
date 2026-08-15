@@ -5,7 +5,7 @@ use std::path::Path;
 
 use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::resolve::Resolver;
-use xuewen::search::{fts, indexer, vector, SearchRequest, SearchService};
+use xuewen::search::{fts, indexer, SearchRequest, SearchService};
 
 /// Two text lines: a title-looking first line, then the body phrase. If the
 /// ingest heuristics take the first line as the title, the search phrase
@@ -67,10 +67,7 @@ async fn imported_pdf_becomes_keyword_searchable_by_body_text() {
     );
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library_root.clone(),
-            processed_dir: inbox.join("_processed"),
-        },
+        dirs: Libraries::under(&inbox, &library_root),
         resolver: offline_resolver(),
         grobid: None,
     };
@@ -79,8 +76,7 @@ async fn imported_pdf_becomes_keyword_searchable_by_body_text() {
     // 2. One indexer sweep (keyword tier only; no embedder configured).
     let idx_dir = dir.path().join("search-index");
     let (fts_idx, _) = fts::FtsIndex::open(&idx_dir).unwrap();
-    let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
-    let svc = SearchService::open_with(pool, fts_idx, vectors, None);
+    let svc = SearchService::open_with(pool, fts_idx, None);
     let summary = indexer::sweep(&svc, &library_root).await.unwrap();
     assert_eq!(summary.indexed, 1);
     assert_eq!(summary.failed, 0);
@@ -104,7 +100,7 @@ async fn imported_pdf_becomes_keyword_searchable_by_body_text() {
     assert_eq!(out.results.len(), 1);
     let (paper, m) = &out.results[0];
     assert!(paper.rel_path.ends_with(".pdf"));
-    assert_eq!(m.field, "body");
+    assert_eq!(m.field, fts::FieldName::Body);
     assert!(
         m.snippet.contains("<mark>zanzibar</mark>"),
         "got: {}",

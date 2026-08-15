@@ -1,12 +1,17 @@
 use anyhow::Result;
 
-use super::http::HttpClient;
-use super::{collapse_ws, ResolvedMetadata};
+use super::ResolvedMetadata;
+use crate::http::HttpClient;
+use crate::text::collapse_ws;
 
 /// Fetch the Atom response for a single arXiv id from `{base}/api/query`.
 pub async fn fetch(http: &HttpClient, base: &str, id: &str) -> Result<String> {
-    let url = format!("{base}/api/query?id_list={id}");
-    http.get_text(&url).await
+    // `.query()` percent-encodes the id; a hand-formatted `?id_list={id}`
+    // would embed user-supplied characters raw.
+    let req = http
+        .get(&format!("{base}/api/query"))
+        .query(&[("id_list", id)]);
+    http.send_text(req).await
 }
 
 /// Parse an arXiv Atom feed into metadata. Returns `Ok(None)` if there is no entry.

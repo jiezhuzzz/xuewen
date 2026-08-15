@@ -1,8 +1,8 @@
 import { PINNED_COLUMNS, PINNED_KEYS, type PinnedColumnKey } from './tableColumns';
 
 /// Persisted library-table column widths (px). Same localStorage shape as
-/// `dock`/`pdfAppearance` in state.svelte.ts, in its own module because only
-/// LibraryTable reads it. One deliberate difference from that pattern: a
+/// `dock` (ui.svelte.ts) / `pdfAppearance` (theme.svelte.ts), in its own
+/// module because only LibraryTable reads it. One deliberate difference: a
 /// drag fires pointermove at 60–120Hz, so the live update (`setColumnWidth`,
 /// in-memory only) and the storage write (`commitColumnWidth`, once per
 /// gesture) are split instead of mutate-and-save-together.

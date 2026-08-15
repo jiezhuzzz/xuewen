@@ -7,6 +7,7 @@ pub mod daily;
 pub mod db;
 pub mod export;
 pub mod hash;
+pub mod http;
 pub mod identify;
 pub mod import;
 pub mod llm;
@@ -20,6 +21,9 @@ pub mod resolve;
 pub mod search;
 pub mod server;
 pub mod summary;
+#[cfg(test)]
+pub(crate) mod testutil;
+pub mod text;
 pub mod translate;
 pub mod watcher;
 pub mod web;

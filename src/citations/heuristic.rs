@@ -151,10 +151,18 @@ pub(super) fn looks_like_name(a: &str) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Style {
-    Ieee = 0,
-    Acm = 1,
-    Lncs = 2,
-    Plain = 3,
+    Ieee,
+    Acm,
+    Lncs,
+    Plain,
+}
+
+impl Style {
+    /// Every variant, so `detect_style` can tally votes without an
+    /// enum-as-index invariant. A variant missing here panics the vote
+    /// (`position(..).expect`) the first time that style is seen — which the
+    /// per-style detection tests do on every run.
+    pub(super) const ALL: [Style; 4] = [Style::Ieee, Style::Acm, Style::Lncs, Style::Plain];
 }
 
 /// IEEE titles are quoted (straight or curly).
@@ -204,14 +212,17 @@ pub(super) fn detect_style(entries: &[&str], venue: Option<&str>) -> Option<Styl
     if entries.is_empty() {
         return None;
     }
-    let mut counts = [0usize; 4];
+    let mut counts = [0usize; Style::ALL.len()];
     for e in entries {
-        counts[style_of_entry(e) as usize] += 1;
+        let style = style_of_entry(e);
+        counts[Style::ALL
+            .iter()
+            .position(|&s| s == style)
+            .expect("Style::ALL lists every variant")] += 1;
     }
-    let styles = [Style::Ieee, Style::Acm, Style::Lncs, Style::Plain];
     let (best, &max) = counts.iter().enumerate().max_by_key(|(_, c)| **c).unwrap();
     if max * 10 >= entries.len() * 6 {
-        return Some(styles[best]);
+        return Some(Style::ALL[best]);
     }
     venue.and_then(venue_family_style)
 }

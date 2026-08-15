@@ -121,18 +121,6 @@ pub struct NewAnnotation {
     pub payload: serde_json::Value,
 }
 
-/// A partial update. An absent field is left alone; `note: ""` clears the
-/// note (stored as NULL). Geometry changes arrive as a whole new `payload`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-pub struct AnnotationPatch {
-    #[serde(default)]
-    pub color: Option<AnnotationColor>,
-    #[serde(default)]
-    pub note: Option<String>,
-    #[serde(default)]
-    pub payload: Option<serde_json::Value>,
-}
-
 /// Longest accepted note or quoted-text field. Generous for commentary while
 /// still bounding what one mark can push into the search index.
 pub const MAX_TEXT_LEN: usize = 10_000;
@@ -164,19 +152,6 @@ pub fn validate_new(a: &NewAnnotation) -> Result<(), String> {
     check_payload(&a.payload)
 }
 
-/// Validate a partial update. An empty patch is rejected: it is always a
-/// client bug, and accepting it would bump `updated_at` for no change.
-pub fn validate_patch(p: &AnnotationPatch) -> Result<(), String> {
-    if p.color.is_none() && p.note.is_none() && p.payload.is_none() {
-        return Err("patch must set at least one of color, note, payload".into());
-    }
-    check_text("note", p.note.as_deref())?;
-    match &p.payload {
-        Some(v) => check_payload(v),
-        None => Ok(()),
-    }
-}
-
 fn check_text(field: &str, v: Option<&str>) -> Result<(), String> {
     match v {
         Some(s) if s.chars().count() > MAX_TEXT_LEN => {
@@ -197,16 +172,12 @@ fn check_payload(v: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Empty strings normalize to `None` so "cleared" and "never set" are the
-/// same NULL in storage, and neither reaches the search index as blank text.
-fn blank_to_none(s: Option<String>) -> Option<String> {
-    s.filter(|v| !v.trim().is_empty())
-}
-
 /// Annotation persistence. Always available — annotations need no `[ai.*]`
 /// configuration, so unlike the LLM-backed services this is never `Option`al
-/// on `AppState`. The type exists to keep validation, timestamp stamping and
-/// storage in one place, so the web API and the CLI cannot drift apart.
+/// on `AppState`. The type exists to keep timestamp stamping and storage in
+/// one place, so the web API and the CLI cannot drift apart. Input validation
+/// is the handlers' job — the pure `validate_*` functions above are the one
+/// rule set they share.
 pub struct AnnotationsService {
     pool: SqlitePool,
 }
@@ -230,29 +201,7 @@ impl AnnotationsService {
     /// across the overwrite.
     pub async fn put(&self, paper_id: &str, id: &str, new: NewAnnotation) -> Result<Annotation> {
         let now = chrono::Utc::now().to_rfc3339();
-        store::upsert(
-            &self.pool,
-            paper_id,
-            id,
-            &NewAnnotation {
-                quoted_text: blank_to_none(new.quoted_text),
-                note: blank_to_none(new.note),
-                ..new
-            },
-            &now,
-        )
-        .await
-    }
-
-    /// Apply a partial update. `None` when the annotation does not exist.
-    pub async fn patch(
-        &self,
-        paper_id: &str,
-        id: &str,
-        patch: AnnotationPatch,
-    ) -> Result<Option<Annotation>> {
-        let now = chrono::Utc::now().to_rfc3339();
-        store::patch(&self.pool, paper_id, id, &patch, &now).await
+        store::upsert(&self.pool, paper_id, id, &new, &now).await
     }
 
     /// Whether a row was actually removed.
@@ -380,31 +329,5 @@ mod tests {
             ..new_annotation()
         };
         assert!(validate_new(&ok).is_ok());
-    }
-
-    #[test]
-    fn empty_patch_is_rejected() {
-        assert!(validate_patch(&AnnotationPatch::default()).is_err());
-    }
-
-    #[test]
-    fn patch_with_any_single_field_is_accepted() {
-        assert!(validate_patch(&AnnotationPatch {
-            note: Some(String::new()), // clearing the note
-            ..Default::default()
-        })
-        .is_ok());
-        assert!(validate_patch(&AnnotationPatch {
-            color: Some(AnnotationColor::Rose),
-            ..Default::default()
-        })
-        .is_ok());
-    }
-
-    #[test]
-    fn blank_text_normalizes_to_none() {
-        assert_eq!(blank_to_none(Some("  ".into())), None);
-        assert_eq!(blank_to_none(Some("hi".into())), Some("hi".into()));
-        assert_eq!(blank_to_none(None), None);
     }
 }

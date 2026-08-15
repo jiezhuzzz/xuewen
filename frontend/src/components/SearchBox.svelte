@@ -11,7 +11,7 @@
     setSearch,
     toggleSearchEngine,
     toggleSearchField,
-  } from '../lib/state.svelte';
+  } from '../lib/searchState.svelte';
 
   let optionsOpen = $state(false);
   const FIELDS = [

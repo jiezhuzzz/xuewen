@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import FilterRow from './FilterRow.svelte';
-import { filters, projects, tags } from '../lib/state.svelte';
+import { projects, tags } from '../lib/library.svelte';
+import { filters } from '../lib/searchState.svelte';
 
 const project = { id: 'pr1', name: 'NLP', paper_count: 3 };
 const tag = { id: 't1', name: 'nlp/eval', paper_count: 2, created_at: '' };
@@ -142,6 +143,21 @@ describe('FilterRow pill context menu', () => {
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'NLP 3' }));
     await userEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
     expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled();
+  });
+
+  it('stays open through a pane scroll — even mid-rename', async () => {
+    render(FilterRow);
+    await openProjects();
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'NLP 3' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    // The pill bar sits above the scrolling panes, so a pane scroll never
+    // moves the menu's anchor — unlike PaperContextMenu, dismissing here
+    // would only discard the in-progress rename.
+    const pane = document.createElement('div');
+    document.body.appendChild(pane);
+    pane.dispatchEvent(new Event('scroll'));
+    expect(screen.getByRole('textbox', { name: 'Rename NLP' })).toBeInTheDocument();
+    pane.remove();
   });
 
   it('right-clicking another pill moves the menu to it', async () => {

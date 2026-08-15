@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { cyclePdfAppearance, initPdfAppearance, pdfAppearance } from './state.svelte';
+import { cyclePdfAppearance, initPdfAppearance, pdfAppearance } from './theme.svelte';
 
 beforeEach(() => {
   localStorage.clear();

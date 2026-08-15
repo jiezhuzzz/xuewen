@@ -1,26 +1,26 @@
+use anyhow::Context as _;
 use axum::extract::multipart::MultipartError;
 use axum::extract::{Multipart, Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::Deserialize;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
-use uuid::Uuid;
 
 use super::dto::{
-    Candidate, DailyPaperDto, DailyResponse, PaperDetail, PaperNameResponse, PaperSummary,
-    ProjectRef, SearchMatch, SearchResponse, SearchResult, SearchStatus, SemanticAvailability,
-    Stats, TagRef, TierCounts,
+    Candidate, CodeAttachment, DailyPaperDto, DailyResponse, ImportOutcome, PaperDetail,
+    PaperNameResponse, PaperSummary, ProjectRef, ProxySettings, SearchMatch, SearchResponse,
+    SearchResult, SearchStatus, SemanticAvailability, Settings, Stats, TagRef, TierCounts,
+    TranslateSettings, TranslationDto,
 };
+use super::error::ApiError;
 use super::AppState;
-use crate::annotations::{AnnotationPatch, NewAnnotation};
+use crate::annotations::NewAnnotation;
 use crate::db;
 use crate::export;
 use crate::import::{self, ImportError};
-use crate::models::Identifier;
 use crate::pipeline::{IdentifyOutcome, Outcome};
-use crate::search::fts::FieldSel;
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -32,230 +32,219 @@ pub struct ListParams {
     pub starred: Option<bool>,
 }
 
-/// Fill each row's `tags`/`projects` from its memberships. A per-paper loop is
-/// acceptable at library scale (no need for a batched IN query).
+impl ListParams {
+    /// The shared filter portion (`q`/`sort` travel separately into
+    /// `db::list_papers`).
+    fn filter(&self) -> db::PaperFilter {
+        db::PaperFilter {
+            status: self.status.clone(),
+            project: self.project.clone(),
+            tag: self.tag.clone(),
+            starred: self.starred,
+        }
+    }
+}
+
+/// Whether an endpoint accepts a trashed paper. Named at every `fetch_paper`
+/// call site so each route's trash policy is a decision, not an accident of
+/// which query it happened to use.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Trash {
+    /// Trashed papers 404: the UI no longer shows the paper (chat, code).
+    Deny,
+    /// Trashed papers still resolve: an open reader tab on a just-trashed
+    /// paper keeps working, and annotations must survive a restore.
+    Allow,
+}
+
+/// Look up a paper and apply the caller's trash policy. Doing this before a
+/// write makes a bad id a clean 404 rather than an FK-violation 500.
+pub(super) async fn fetch_paper(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    trash: Trash,
+    ctx: &'static str,
+) -> Result<crate::models::Paper, ApiError> {
+    match db::get_by_id(pool, id)
+        .await
+        .with_context(|| format!("{ctx} paper lookup"))?
+    {
+        Some(p) if trash == Trash::Allow || p.deleted_at.is_none() => Ok(p),
+        _ => Err(ApiError::NotFound),
+    }
+}
+
+/// Fill each row's `tags`/`projects` from its memberships — two batched
+/// queries total, not two per row (`/api/papers` and `/api/search` both run
+/// this over every result).
 async fn attach_row_extras(
     pool: &sqlx::SqlitePool,
     rows: &mut [PaperSummary],
 ) -> anyhow::Result<()> {
+    let ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
+    let mut tags = db::tags_for_papers(pool, &ids).await?;
+    let mut projects = db::projects_for_papers(pool, &ids).await?;
     for r in rows.iter_mut() {
-        r.tags = db::tags_for_paper(pool, &r.id)
-            .await?
+        r.tags = tags
+            .remove(&r.id)
+            .unwrap_or_default()
             .into_iter()
-            .map(|t| TagRef {
-                id: t.id,
-                name: t.name,
-            })
+            .map(TagRef::from)
             .collect();
-        r.projects = db::projects_for_paper(pool, &r.id)
-            .await?
+        r.projects = projects
+            .remove(&r.id)
+            .unwrap_or_default()
             .into_iter()
-            .map(|p| ProjectRef {
-                id: p.id,
-                name: p.name,
-            })
+            .map(ProjectRef::from)
             .collect();
     }
     Ok(())
 }
 
 /// A single paper's tag and project memberships, as wire refs.
-async fn paper_extras(pool: &sqlx::SqlitePool, paper_id: &str) -> (Vec<TagRef>, Vec<ProjectRef>) {
-    let tags = db::tags_for_paper(pool, paper_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| TagRef {
-            id: t.id,
-            name: t.name,
-        })
-        .collect();
-    let projects = db::projects_for_paper(pool, paper_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|p| ProjectRef {
-            id: p.id,
-            name: p.name,
-        })
-        .collect();
-    (tags, projects)
+async fn paper_refs(
+    pool: &sqlx::SqlitePool,
+    paper_id: &str,
+) -> anyhow::Result<(Vec<TagRef>, Vec<ProjectRef>)> {
+    let ids = [paper_id.to_string()];
+    let mut tags = db::tags_for_papers(pool, &ids).await?;
+    let mut projects = db::projects_for_papers(pool, &ids).await?;
+    Ok((
+        tags.remove(paper_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(TagRef::from)
+            .collect(),
+        projects
+            .remove(paper_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(ProjectRef::from)
+            .collect(),
+    ))
 }
 
-pub async fn list_papers(State(app): State<AppState>, Query(p): Query<ListParams>) -> Response {
-    match db::list_papers(
-        &app.pool,
-        p.q.as_deref(),
-        p.status.as_deref(),
-        p.sort.as_deref(),
-        p.project.as_deref(),
-        p.tag.as_deref(),
-        p.starred,
-    )
-    .await
-    {
-        Ok(papers) => {
-            let mut out: Vec<PaperSummary> = papers.iter().map(PaperSummary::from).collect();
-            if let Err(e) = attach_row_extras(&app.pool, &mut out).await {
-                tracing::error!("list_papers row extras: {e}");
-                return internal_error();
-            }
-            Json(out).into_response()
-        }
-        Err(e) => {
-            tracing::error!("list_papers: {e}");
-            internal_error()
-        }
-    }
+pub async fn list_papers(
+    State(app): State<AppState>,
+    Query(p): Query<ListParams>,
+) -> Result<Response, ApiError> {
+    let papers = db::list_papers(&app.pool, p.q.as_deref(), p.sort.as_deref(), &p.filter())
+        .await
+        .context("list_papers")?;
+    let mut out: Vec<PaperSummary> = papers.iter().map(PaperSummary::from).collect();
+    attach_row_extras(&app.pool, &mut out)
+        .await
+        .context("list_papers row extras")?;
+    Ok(Json(out).into_response())
 }
 
-pub async fn get_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(p)) => {
-            let (tags, projects) = paper_extras(&app.pool, &p.id).await;
-            let mut detail = PaperDetail::from(&p).attach(tags, projects);
-            detail.ai_summary = match crate::summary::store::get(&app.pool, &p.id).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("get_paper summary for {}: {e}", p.id);
-                    None
-                }
-            };
-            Json(detail).into_response()
-        }
-        Ok(None) => not_found(),
+pub async fn get_paper(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let p = fetch_paper(&app.pool, &id, Trash::Allow, "get_paper").await?;
+    let (tags, projects) = paper_refs(&app.pool, &p.id)
+        .await
+        .context("get_paper refs")?;
+    let mut detail = PaperDetail::from(&p).attach(tags, projects);
+    detail.ai_summary = match crate::summary::store::get(&app.pool, &p.id).await {
+        Ok(s) => s,
         Err(e) => {
-            tracing::error!("get_paper: {e}");
-            internal_error()
+            tracing::warn!("get_paper summary for {}: {e}", p.id);
+            None
         }
-    }
+    };
+    Ok(Json(detail).into_response())
 }
 
 /// Soft-delete a paper (web mutation): flag it deleted; the file is untouched.
 /// Purge (permanent removal) is CLI-only. Idempotent on an already-trashed paper.
-pub async fn delete_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(_)) => match db::soft_delete(&app.pool, &id).await {
-            Ok(_) => {
-                app.wake_search();
-                Json(serde_json::json!({ "deleted": true })).into_response()
-            }
-            Err(e) => {
-                tracing::error!("delete_paper: {e}");
-                internal_error()
-            }
-        },
-        Ok(None) => not_found(),
-        Err(e) => {
-            tracing::error!("delete_paper lookup: {e}");
-            internal_error()
-        }
-    }
+pub async fn delete_paper(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    fetch_paper(&app.pool, &id, Trash::Allow, "delete_paper").await?;
+    db::soft_delete(&app.pool, &id)
+        .await
+        .context("delete_paper")?;
+    app.wake_search();
+    Ok(Json(serde_json::json!({ "deleted": true })).into_response())
 }
 
 /// Un-trash a paper (the Undo behind the web UI's delete toast). 404 when the
 /// paper doesn't exist or isn't trashed — `db::restore` only flips trashed rows.
-pub async fn restore_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    match db::restore(&app.pool, &id).await {
-        Ok(true) => {
-            app.wake_search();
-            Json(serde_json::json!({ "restored": true })).into_response()
-        }
-        Ok(false) => not_found(),
-        Err(e) => {
-            tracing::error!("restore_paper: {e}");
-            internal_error()
-        }
+pub async fn restore_paper(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    if !db::restore(&app.pool, &id).await.context("restore_paper")? {
+        return Err(ApiError::NotFound);
     }
+    app.wake_search();
+    Ok(Json(serde_json::json!({ "restored": true })).into_response())
 }
 
 /// Import a single uploaded PDF: validate, stage into `inbox_dir/_uploads`, and
 /// run the ingest pipeline. One PDF per request (the frontend uploads files one
 /// at a time). Returns `ingested` (with title/status), `duplicate`, or an error.
-pub async fn import_paper(State(app): State<AppState>, mut multipart: Multipart) -> Response {
-    let ingest = match &app.ingest {
-        Some(i) => i.clone(),
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "import not configured"})),
-            )
-                .into_response()
-        }
-    };
+pub async fn import_paper(
+    State(app): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Response, ApiError> {
+    let ingest = app
+        .ingest
+        .clone()
+        .ok_or(ApiError::Unavailable("import not configured"))?;
 
     // Take the first file part; skip any non-file fields.
     loop {
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
-            Ok(None) => return bad_request("no file"),
-            Err(e) => return multipart_error(e),
+            Ok(None) => return Err(ApiError::BadRequest("no file".into())),
+            Err(e) => return Ok(multipart_error(e)),
         };
         let Some(filename) = field.file_name().map(|s| s.to_string()) else {
             continue;
         };
         let data = match field.bytes().await {
             Ok(b) => b,
-            Err(e) => return multipart_error(e),
+            Err(e) => return Ok(multipart_error(e)),
         };
         if !data.starts_with(b"%PDF") {
-            return bad_request("not a PDF");
+            return Err(ApiError::BadRequest("not a PDF".into()));
         }
 
-        let resp = stage_and_ingest(&ingest, data.as_ref(), &filename, None).await;
+        let resp = ingest_response(
+            &ingest.ctx.pool,
+            ingest
+                .ctx
+                .ingest_bytes(data.as_ref(), &filename, None)
+                .await,
+        )
+        .await;
         app.wake_search();
-        return resp;
+        return Ok(resp);
     }
 }
 
-/// Stage `bytes` under a sanitized, collision-safe name in the staging dir, run
-/// the ingest pipeline (optionally with an identifier hint), and map the outcome
-/// to the shared `ImportResult` JSON. Shared by file upload and URL import.
-async fn stage_and_ingest(
-    ingest: &super::Ingest,
-    bytes: &[u8],
-    filename: &str,
-    hint: Option<Identifier>,
-) -> Response {
-    let stem = std::path::Path::new(filename)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("import.pdf");
-    let staged = ingest
-        .staging_dir
-        .join(format!("{}-{stem}", Uuid::now_v7()));
-    if let Err(e) = tokio::fs::create_dir_all(&ingest.staging_dir).await {
-        tracing::error!("import staging dir: {e}");
-        return internal_error();
-    }
-    if let Err(e) = tokio::fs::write(&staged, bytes).await {
-        tracing::error!("import stage write: {e}");
-        return internal_error();
-    }
-    match ingest.ctx.ingest_file_with_hint(&staged, hint).await {
+/// Map an ingest result to the shared `ImportOutcome` JSON (`Ingested`
+/// enriched with title/status), or a failed ingest to the "import failed" 500
+/// — not the generic "internal error": "import failed" is the body the
+/// frontend has always surfaced. Shared by file upload and URL import.
+async fn ingest_response(pool: &sqlx::SqlitePool, result: anyhow::Result<Outcome>) -> Response {
+    match result {
         Ok(Outcome::Ingested(id)) => {
-            let (title, status) = match db::get_by_id(&ingest.ctx.pool, &id).await {
-                Ok(Some(p)) => (serde_json::json!(p.meta.title), p.meta.status),
-                _ => (
-                    serde_json::Value::Null,
-                    crate::models::PaperStatus::NeedsReview,
-                ),
+            let (title, status) = match db::get_by_id(pool, &id).await {
+                Ok(Some(p)) => (p.meta.title, p.meta.status),
+                _ => (None, crate::models::PaperStatus::NeedsReview),
             };
-            Json(serde_json::json!({
-                "outcome": "ingested", "id": id, "title": title, "status": status,
-            }))
-            .into_response()
+            Json(ImportOutcome::Ingested { id, title, status }).into_response()
         }
-        Ok(Outcome::Duplicate) => Json(serde_json::json!({"outcome": "duplicate"})).into_response(),
-        Ok(Outcome::SameWork(id)) => {
-            Json(serde_json::json!({"outcome": "same_work", "id": id})).into_response()
-        }
-        Ok(Outcome::InTrash(id)) => {
-            Json(serde_json::json!({"outcome": "in_trash", "id": id})).into_response()
-        }
+        Ok(Outcome::Duplicate(id)) => Json(ImportOutcome::Duplicate { id }).into_response(),
+        Ok(Outcome::SameWork(id)) => Json(ImportOutcome::SameWork { id }).into_response(),
+        Ok(Outcome::InTrash(id)) => Json(ImportOutcome::InTrash { id }).into_response(),
         Err(e) => {
             tracing::error!("import ingest: {e}");
-            let _ = tokio::fs::remove_file(&staged).await;
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "import failed"})),
@@ -265,32 +254,24 @@ async fn stage_and_ingest(
     }
 }
 
-pub async fn stats(State(app): State<AppState>) -> Response {
-    match db::stats(&app.pool).await {
-        Ok((total, resolved, needs_review)) => Json(Stats {
-            total: total as usize,
-            resolved: resolved as usize,
-            needs_review: needs_review as usize,
-        })
-        .into_response(),
-        Err(e) => {
-            tracing::error!("stats: {e}");
-            internal_error()
-        }
-    }
+pub async fn stats(State(app): State<AppState>) -> Result<Response, ApiError> {
+    let (total, resolved, needs_review) = db::stats(&app.pool).await.context("stats")?;
+    Ok(Json(Stats {
+        total: total as usize,
+        resolved: resolved as usize,
+        needs_review: needs_review as usize,
+    })
+    .into_response())
 }
 
 /// Stream a paper's PDF from the library. Range-aware (via `ServeFile`) and
 /// path-safe: the resolved file must live under `library_root`.
-pub async fn pdf(State(app): State<AppState>, Path(id): Path<String>, req: Request) -> Response {
-    let paper = match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return not_found(),
-        Err(e) => {
-            tracing::error!("pdf lookup: {e}");
-            return internal_error();
-        }
-    };
+pub async fn pdf(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    req: Request,
+) -> Result<Response, ApiError> {
+    let paper = fetch_paper(&app.pool, &id, Trash::Allow, "pdf").await?;
     let path = app.library_root.join(&paper.rel_path);
     // Defense in depth: the canonical file must live under the library root.
     let under_root = {
@@ -306,15 +287,13 @@ pub async fn pdf(State(app): State<AppState>, Path(id): Path<String>, req: Reque
         .unwrap_or(false)
     };
     if !under_root {
-        return not_found();
+        return Err(ApiError::NotFound);
     }
-    match ServeFile::new(&path).oneshot(req).await {
-        Ok(resp) => resp.map(axum::body::Body::new).into_response(),
-        Err(e) => {
-            tracing::error!("serve pdf: {e}");
-            internal_error()
-        }
-    }
+    let resp = ServeFile::new(&path)
+        .oneshot(req)
+        .await
+        .context("serve pdf")?;
+    Ok(resp.map(axum::body::Body::new).into_response())
 }
 
 #[derive(Deserialize)]
@@ -326,20 +305,19 @@ pub struct IdentifyQuery {
 pub async fn identify_search(
     State(app): State<AppState>,
     Query(p): Query<IdentifyQuery>,
-) -> Response {
-    let Some(ingest) = &app.ingest else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "identify not configured"})),
-        )
-            .into_response();
-    };
-    let Some(q) = p.q.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
-        return bad_request("missing query");
-    };
+) -> Result<Response, ApiError> {
+    let ingest = app
+        .ingest
+        .as_ref()
+        .ok_or(ApiError::Unavailable("identify not configured"))?;
+    let q =
+        p.q.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ApiError::BadRequest("missing query".into()))?;
     let cands = ingest.ctx.resolver.search_candidates(q).await;
     let out: Vec<Candidate> = cands.iter().map(Candidate::from).collect();
-    Json(out).into_response()
+    Ok(Json(out).into_response())
 }
 
 #[derive(Deserialize)]
@@ -356,74 +334,73 @@ pub async fn identify_paper(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<IdentifyBody>,
-) -> Response {
-    let Some(ingest) = &app.ingest else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "identify not configured"})),
-        )
-            .into_response();
-    };
+) -> Result<Response, ApiError> {
+    let ingest = app
+        .ingest
+        .as_ref()
+        .ok_or(ApiError::Unavailable("identify not configured"))?;
     let selectors =
         body.doi.is_some() as u8 + body.arxiv_id.is_some() as u8 + body.candidate.is_some() as u8;
     if selectors != 1 {
-        return bad_request("provide exactly one of doi, arxiv_id, candidate");
+        return Err(ApiError::BadRequest(
+            "provide exactly one of doi, arxiv_id, candidate".into(),
+        ));
     }
 
     // Read through the ctx pool: same handle the apply path writes with
-    // (matches the pool-locality convention set in import_paper).
-    let mut paper = match db::get_by_id(&ingest.ctx.pool, &id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return not_found(),
-        Err(e) => {
-            tracing::error!("identify lookup: {e}");
-            return internal_error();
-        }
-    };
+    // (matches the pool-locality convention set in import_paper). Trash is
+    // Allow here only because `apply_match` itself answers a trashed paper
+    // with the 409 below — the pipeline owns that policy.
+    let mut paper = fetch_paper(&ingest.ctx.pool, &id, Trash::Allow, "identify").await?;
     let md = if let Some(c) = body.candidate {
         Some(c.into_metadata())
     } else if let Some(doi) = &body.doi {
         ingest
             .ctx
             .resolver
-            .resolve(&crate::models::Identifier::Doi(doi.clone()), None)
+            .resolve(&crate::models::Identifier::doi(doi.clone()), None)
             .await
     } else if let Some(axv) = &body.arxiv_id {
         ingest
             .ctx
             .resolver
-            .resolve(&crate::models::Identifier::Arxiv(axv.clone()), None)
+            .resolve(&crate::models::Identifier::arxiv(axv.clone()), None)
             .await
     } else {
         unreachable!("selector count checked above")
     };
     let Some(md) = md else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "identifier not found — not registered with Crossref/arXiv; try a title search"
-            })),
-        )
-            .into_response();
+        return Err(ApiError::NotFoundMsg(
+            "identifier not found — not registered with Crossref/arXiv; try a title search".into(),
+        ));
     };
 
     let (md_doi, md_arxiv) = (md.doi.clone(), md.arxiv_id.clone());
     match ingest.ctx.apply_match(&mut paper, md).await {
         Ok(IdentifyOutcome::Applied) => {
             app.wake_search();
-            let (tags, projects) = paper_extras(&ingest.ctx.pool, &paper.id).await;
-            Json(PaperDetail::from(&paper).attach(tags, projects)).into_response()
+            // The identify has already committed and the indexer been woken;
+            // failing the response over chip enrichment would misreport a
+            // completed identify as a 500 (and invite a client retry), so a
+            // refs error degrades to empty tags/projects — unlike get_paper,
+            // which propagates.
+            let (tags, projects) = match paper_refs(&ingest.ctx.pool, &paper.id).await {
+                Ok(refs) => refs,
+                Err(e) => {
+                    tracing::warn!("identify refs for {}: {e}", paper.id);
+                    (Vec::new(), Vec::new())
+                }
+            };
+            Ok(Json(PaperDetail::from(&paper).attach(tags, projects)).into_response())
         }
-        Ok(IdentifyOutcome::SameWork(other)) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": format!("same work as {other}"), "id": other})),
-        )
-            .into_response(),
-        Ok(IdentifyOutcome::Trashed) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "paper is in the trash"})),
-        )
-            .into_response(),
+        Ok(IdentifyOutcome::SameWork(other)) => Err(ApiError::Conflict {
+            message: format!("same work as {other}"),
+            id: Some(other),
+        }),
+        Ok(IdentifyOutcome::Trashed) => Err(ApiError::Conflict {
+            message: "paper is in the trash".into(),
+            id: None,
+        }),
         Err(e) => {
             // Lost a race: something claimed this identifier between the guard and
             // the update. Report it as the conflict it is, mirroring ingest.
@@ -432,18 +409,13 @@ pub async fn identify_paper(
                     db::find_by_identifier(&ingest.ctx.pool, md_doi.as_deref(), md_arxiv.as_deref())
                         .await
                 {
-                    return (
-                        StatusCode::CONFLICT,
-                        Json(serde_json::json!({
-                            "error": format!("same work as {}", existing.id),
-                            "id": existing.id,
-                        })),
-                    )
-                        .into_response();
+                    return Err(ApiError::Conflict {
+                        message: format!("same work as {}", existing.id),
+                        id: Some(existing.id),
+                    });
                 }
             }
-            tracing::error!("identify apply: {e}");
-            internal_error()
+            Err(ApiError::Internal(e.context("identify apply")))
         }
     }
 }
@@ -454,61 +426,50 @@ pub struct ImportUrlBody {
 }
 
 /// Import from a URL/DOI/arXiv id: fetch the PDF (arXiv/proxy/OA), then ingest.
-pub async fn import_url(State(app): State<AppState>, Json(body): Json<ImportUrlBody>) -> Response {
-    let Some(ingest) = app.ingest.clone() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "import not configured"})),
-        )
-            .into_response();
-    };
-    let fetcher = match import::Fetcher::new(app.proxy_login_url.clone()) {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::error!("build fetcher: {e}");
-            return internal_error();
-        }
-    };
+pub async fn import_url(
+    State(app): State<AppState>,
+    Json(body): Json<ImportUrlBody>,
+) -> Result<Response, ApiError> {
+    let ingest = app
+        .ingest
+        .clone()
+        .ok_or(ApiError::Unavailable("import not configured"))?;
     let cookie = db::get_setting(&ingest.ctx.pool, "proxy_cookie")
         .await
-        .ok()
-        .flatten();
-    match import::import_source(
-        &fetcher,
-        &ingest.ctx.resolver,
+        .context("import proxy cookie")?;
+    let outcome = match import::fetch_stage_ingest(
+        &ingest.ctx,
+        &ingest.fetcher,
         &body.input,
         cookie.as_deref(),
     )
     .await
     {
-        Ok(fetched) => {
-            let resp = stage_and_ingest(&ingest, &fetched.bytes, "import.pdf", fetched.hint).await;
-            app.wake_search();
-            resp
+        Ok(outcome) => Ok(outcome),
+        Err(ImportError::Ingest(e)) => Err(e),
+        Err(ImportError::Unsupported) => {
+            return Err(ApiError::BadRequest("unsupported input".into()))
         }
-        Err(ImportError::Unsupported) => bad_request("unsupported input"),
-        Err(ImportError::CookieExpired) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": "proxy session expired — refresh your cookie"})),
-        )
-            .into_response(),
+        Err(ImportError::CookieExpired) => {
+            return Err(ApiError::BadGateway(
+                "proxy session expired — refresh your cookie",
+            ))
+        }
         Err(ImportError::Unfetched { metadata }) => {
             let (title, doi) = match metadata {
-                Some(m) => (serde_json::json!(m.title), serde_json::json!(m.doi)),
-                None => (serde_json::Value::Null, serde_json::Value::Null),
+                Some(m) => (m.title, m.doi),
+                None => (None, None),
             };
-            Json(serde_json::json!({"outcome": "unfetched", "title": title, "doi": doi}))
-                .into_response()
+            return Ok(Json(ImportOutcome::Unfetched { title, doi }).into_response());
         }
         Err(ImportError::Network(e)) => {
             tracing::error!("import fetch: {e}");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": "fetch failed"})),
-            )
-                .into_response()
+            return Err(ApiError::BadGateway("fetch failed"));
         }
-    }
+    };
+    let resp = ingest_response(&ingest.ctx.pool, outcome).await;
+    app.wake_search();
+    Ok(resp)
 }
 
 #[derive(Deserialize)]
@@ -517,36 +478,33 @@ pub struct ProxyCookieBody {
 }
 
 /// Report whether a proxy cookie is stored (never the value itself).
-pub async fn get_settings(State(app): State<AppState>) -> Response {
+pub async fn get_settings(State(app): State<AppState>) -> Result<Response, ApiError> {
     let set = db::get_setting(&app.pool, "proxy_cookie")
         .await
-        .ok()
-        .flatten()
+        .context("settings proxy cookie")?
         .is_some();
     let updated = db::setting_updated_at(&app.pool, "proxy_cookie")
         .await
-        .ok()
-        .flatten();
+        .context("settings cookie timestamp")?;
     let translate = match app.translate.as_ref() {
-        None => serde_json::json!({ "enabled": false }),
-        Some(svc) => serde_json::json!({
-            "enabled": true,
-            "providers": svc.providers().iter().map(|p| provider_name(*p)).collect::<Vec<_>>(),
-            "default_provider": provider_name(svc.default_provider()),
-            "target_lang": svc.target_lang(),
-            "trigger": match svc.trigger() {
-                crate::config::TranslateTrigger::Auto => "auto",
-                crate::config::TranslateTrigger::Manual => "manual",
-            },
-        }),
+        None => TranslateSettings::disabled(),
+        Some(svc) => TranslateSettings::from(svc.as_ref()),
     };
-    Json(serde_json::json!({
-        "proxy_cookie_set": set,
-        "proxy_cookie_updated_at": updated,
-        "fold_abstract": app.ui.fold_abstract,
-        "translate": translate,
-    }))
-    .into_response()
+    let proxy = app
+        .ingest
+        .as_ref()
+        .and_then(|i| i.fetcher.proxy_host())
+        .map(|h| ProxySettings {
+            host: h.to_string(),
+        });
+    Ok(Json(Settings {
+        proxy,
+        proxy_cookie_set: set,
+        proxy_cookie_updated_at: updated,
+        fold_abstract: app.ui.fold_abstract,
+        translate,
+    })
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -561,50 +519,33 @@ pub struct TranslateBody {
 /// Translate arbitrary text via the configured provider. 503 when
 /// translate-on-selection isn't configured; 400 on empty text or an unknown
 /// provider name; 502 when the upstream provider call fails.
-pub async fn translate(State(app): State<AppState>, Json(body): Json<TranslateBody>) -> Response {
-    let Some(svc) = app.translate.as_ref() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "translate is not configured"})),
-        )
-            .into_response();
-    };
+pub async fn translate(
+    State(app): State<AppState>,
+    Json(body): Json<TranslateBody>,
+) -> Result<Response, ApiError> {
+    let svc = app
+        .translate
+        .as_ref()
+        .ok_or(ApiError::Unavailable("translate is not configured"))?;
     let text = body.text.trim();
     if text.is_empty() {
-        return bad_request("empty text");
+        return Err(ApiError::BadRequest("empty text".into()));
     }
     let provider = match body.provider.as_deref() {
         None => None,
         Some("llm") => Some(crate::config::TranslateProvider::Llm),
         Some("deepl") => Some(crate::config::TranslateProvider::Deepl),
-        Some(other) => return bad_request(&format!("unknown provider `{other}`")),
+        Some(other) => return Err(ApiError::BadRequest(format!("unknown provider `{other}`"))),
     };
     match svc
         .translate(text, body.target_lang.as_deref(), provider)
         .await
     {
-        Ok(t) => Json(serde_json::json!({
-            "translation": t.text,
-            "provider": provider_name(t.provider),
-            "source_lang": t.source_lang,
-            "target_lang": t.target_lang,
-        }))
-        .into_response(),
+        Ok(t) => Ok(Json(TranslationDto::from(t)).into_response()),
         Err(e) => {
             tracing::error!("translate: {e}");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": "translation failed"})),
-            )
-                .into_response()
+            Err(ApiError::BadGateway("translation failed"))
         }
-    }
-}
-
-fn provider_name(p: crate::config::TranslateProvider) -> &'static str {
-    match p {
-        crate::config::TranslateProvider::Llm => "llm",
-        crate::config::TranslateProvider::Deepl => "deepl",
     }
 }
 
@@ -612,29 +553,23 @@ fn provider_name(p: crate::config::TranslateProvider) -> &'static str {
 pub async fn set_proxy_cookie(
     State(app): State<AppState>,
     Json(body): Json<ProxyCookieBody>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let cookie = body.cookie.trim();
     if cookie.is_empty() {
-        return bad_request("empty cookie");
+        return Err(ApiError::BadRequest("empty cookie".into()));
     }
-    match db::set_setting(&app.pool, "proxy_cookie", cookie).await {
-        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
-        Err(e) => {
-            tracing::error!("set proxy cookie: {e}");
-            internal_error()
-        }
-    }
+    db::set_setting(&app.pool, "proxy_cookie", cookie)
+        .await
+        .context("set proxy cookie")?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
 /// Clear the stored EZproxy cookie.
-pub async fn clear_proxy_cookie(State(app): State<AppState>) -> Response {
-    match db::delete_setting(&app.pool, "proxy_cookie").await {
-        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
-        Err(e) => {
-            tracing::error!("clear proxy cookie: {e}");
-            internal_error()
-        }
-    }
+pub async fn clear_proxy_cookie(State(app): State<AppState>) -> Result<Response, ApiError> {
+    db::delete_setting(&app.pool, "proxy_cookie")
+        .await
+        .context("clear proxy cookie")?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
 #[derive(Deserialize)]
@@ -647,35 +582,28 @@ pub struct UpdateProjectBody {
     pub name: Option<String>,
 }
 
-pub async fn list_projects(State(app): State<AppState>) -> Response {
-    match db::list_projects(&app.pool).await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!("list_projects: {e}");
-            internal_error()
-        }
-    }
+pub async fn list_projects(State(app): State<AppState>) -> Result<Response, ApiError> {
+    let list = db::list_projects(&app.pool)
+        .await
+        .context("list_projects")?;
+    Ok(Json(list).into_response())
 }
 
 pub async fn create_project(
     State(app): State<AppState>,
     Json(body): Json<CreateProjectBody>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let name = body.name.trim();
     if name.is_empty() {
-        return bad_request("empty name");
+        return Err(ApiError::BadRequest("empty name".into()));
     }
     match db::create_project(&app.pool, name).await {
-        Ok(project) => (StatusCode::CREATED, Json(project)).into_response(),
-        Err(e) if db::is_unique_violation(&e) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "a project with that name already exists"})),
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::error!("create_project: {e}");
-            internal_error()
-        }
+        Ok(project) => Ok((StatusCode::CREATED, Json(project)).into_response()),
+        Err(e) => Err(ApiError::from_db_conflict(
+            e,
+            "create_project",
+            "a project with that name already exists",
+        )),
     }
 }
 
@@ -683,102 +611,73 @@ pub async fn update_project(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<UpdateProjectBody>,
-) -> Response {
-    let existing = match db::get_project(&app.pool, &id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return not_found(),
-        Err(e) => {
-            tracing::error!("update_project lookup: {e}");
-            return internal_error();
-        }
-    };
-    // Merge: an omitted/blank name keeps the old one.
+) -> Result<Response, ApiError> {
+    // Merge: an omitted/blank name keeps the old one. Blankness is decided
+    // here with `str::trim` (all Unicode whitespace), not SQL `TRIM` (spaces
+    // only) — a tab-only name must keep the old name, not be stored.
     let name = body
         .name
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&existing.name);
+        .filter(|s| !s.is_empty());
     match db::update_project(&app.pool, &id, name).await {
-        Ok(_) => match db::get_project(&app.pool, &id).await {
-            Ok(Some(p)) => Json(p).into_response(),
-            _ => internal_error(),
-        },
-        Err(e) if db::is_unique_violation(&e) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "a project with that name already exists"})),
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::error!("update_project: {e}");
-            internal_error()
-        }
+        Ok(Some(p)) => Ok(Json(p).into_response()),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(ApiError::from_db_conflict(
+            e,
+            "update_project",
+            "a project with that name already exists",
+        )),
     }
 }
 
-pub async fn delete_project(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    match db::delete_project(&app.pool, &id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found(),
-        Err(e) => {
-            tracing::error!("delete_project: {e}");
-            internal_error()
-        }
+pub async fn delete_project(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    if !db::delete_project(&app.pool, &id)
+        .await
+        .context("delete_project")?
+    {
+        return Err(ApiError::NotFound);
     }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub async fn add_paper_to_project(
     State(app): State<AppState>,
     Path((paper_id, project_id)): Path<(String, String)>,
-) -> Response {
+) -> Result<Response, ApiError> {
     // Pre-check both ids so a bad request is a clean 404 (not an FK error).
-    match db::get_by_id(&app.pool, &paper_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return not_found(),
-        Err(e) => {
-            tracing::error!("membership paper lookup: {e}");
-            return internal_error();
-        }
-    }
-    match db::get_project(&app.pool, &project_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return not_found(),
-        Err(e) => {
-            tracing::error!("membership project lookup: {e}");
-            return internal_error();
-        }
-    }
-    match db::add_paper_to_project(&app.pool, &paper_id, &project_id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            tracing::error!("add membership: {e}");
-            internal_error()
-        }
-    }
+    fetch_paper(&app.pool, &paper_id, Trash::Allow, "membership").await?;
+    db::get_project(&app.pool, &project_id)
+        .await
+        .context("membership project lookup")?
+        .ok_or(ApiError::NotFound)?;
+    db::add_paper_to_project(&app.pool, &paper_id, &project_id)
+        .await
+        .context("add membership")?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub async fn remove_paper_from_project(
     State(app): State<AppState>,
     Path((paper_id, project_id)): Path<(String, String)>,
-) -> Response {
-    match db::remove_paper_from_project(&app.pool, &paper_id, &project_id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found(),
-        Err(e) => {
-            tracing::error!("remove membership: {e}");
-            internal_error()
-        }
+) -> Result<Response, ApiError> {
+    if !db::remove_paper_from_project(&app.pool, &paper_id, &project_id)
+        .await
+        .context("remove membership")?
+    {
+        return Err(ApiError::NotFound);
     }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-pub async fn list_tags(State(app): State<AppState>) -> Response {
-    match db::list_tags_with_counts(&app.pool).await {
-        Ok(tags) => Json(tags).into_response(),
-        Err(e) => {
-            tracing::error!("list_tags: {e}");
-            internal_error()
-        }
-    }
+pub async fn list_tags(State(app): State<AppState>) -> Result<Response, ApiError> {
+    let tags = db::list_tags_with_counts(&app.pool)
+        .await
+        .context("list_tags")?;
+    Ok(Json(tags).into_response())
 }
 
 #[derive(Deserialize)]
@@ -790,101 +689,82 @@ pub async fn add_paper_tag(
     State(app): State<AppState>,
     Path(paper_id): Path<String>,
     Json(body): Json<TagNameBody>,
-) -> Response {
+) -> Result<Response, ApiError> {
     if body.name.trim().is_empty() {
-        return bad_request("empty name");
+        return Err(ApiError::BadRequest("empty name".into()));
     }
     // Pre-check the paper so a bad id is a clean 404, not an FK-violation 500.
-    match db::get_by_id(&app.pool, &paper_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return not_found(),
-        Err(e) => {
-            tracing::error!("add_paper_tag paper lookup: {e}");
-            return internal_error();
-        }
-    }
-    match db::add_paper_tag(&app.pool, &paper_id, &body.name).await {
-        Ok(t) => Json(TagRef {
-            id: t.id,
-            name: t.name,
-        })
-        .into_response(),
-        Err(e) => {
-            tracing::error!("add_paper_tag: {e}");
-            internal_error()
-        }
-    }
+    fetch_paper(&app.pool, &paper_id, Trash::Allow, "add_paper_tag").await?;
+    let t = db::add_paper_tag(&app.pool, &paper_id, &body.name)
+        .await
+        .context("add_paper_tag")?;
+    Ok(Json(TagRef::from(t)).into_response())
 }
 
 pub async fn remove_paper_tag(
     State(app): State<AppState>,
     Path((paper_id, tag_id)): Path<(String, String)>,
-) -> Response {
-    match db::remove_paper_tag(&app.pool, &paper_id, &tag_id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found(),
-        Err(e) => {
-            tracing::error!("remove_paper_tag: {e}");
-            internal_error()
-        }
+) -> Result<Response, ApiError> {
+    if !db::remove_paper_tag(&app.pool, &paper_id, &tag_id)
+        .await
+        .context("remove_paper_tag")?
+    {
+        return Err(ApiError::NotFound);
     }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub async fn rename_tag(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<TagNameBody>,
-) -> Response {
+) -> Result<Response, ApiError> {
     if body.name.trim().is_empty() {
-        return bad_request("empty name");
+        return Err(ApiError::BadRequest("empty name".into()));
     }
     match db::rename_tag(&app.pool, &id, &body.name).await {
-        Ok(Some(t)) => Json(TagRef {
-            id: t.id,
-            name: t.name,
-        })
-        .into_response(),
-        Ok(None) => not_found(),
-        Err(e) if db::is_unique_violation(&e) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "a tag with that name already exists"})),
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::error!("rename_tag: {e}");
-            internal_error()
-        }
+        Ok(Some(t)) => Ok(Json(TagRef::from(t)).into_response()),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(ApiError::from_db_conflict(
+            e,
+            "rename_tag",
+            "a tag with that name already exists",
+        )),
     }
 }
 
-pub async fn delete_tag(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    match db::delete_tag(&app.pool, &id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found(),
-        Err(e) => {
-            tracing::error!("delete_tag: {e}");
-            internal_error()
-        }
+pub async fn delete_tag(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    if !db::delete_tag(&app.pool, &id).await.context("delete_tag")? {
+        return Err(ApiError::NotFound);
     }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-pub async fn star_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+pub async fn star_paper(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
     set_star(&app, &id, true).await
 }
 
-pub async fn unstar_paper(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+pub async fn unstar_paper(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
     set_star(&app, &id, false).await
 }
 
-async fn set_star(app: &AppState, id: &str, on: bool) -> Response {
-    match db::set_paper_starred(&app.pool, id, on).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found(),
-        Err(e) => {
-            tracing::error!("set_star: {e}");
-            internal_error()
-        }
+async fn set_star(app: &AppState, id: &str, on: bool) -> Result<Response, ApiError> {
+    if !db::set_paper_starred(&app.pool, id, on)
+        .await
+        .context("set_star")?
+    {
+        return Err(ApiError::NotFound);
     }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 #[derive(Deserialize)]
@@ -900,7 +780,7 @@ pub async fn set_paper_name(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<SetPaperNameBody>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let name = body
         .name
         .as_deref()
@@ -908,41 +788,33 @@ pub async fn set_paper_name(
         .filter(|s| !s.is_empty());
     if let Some(n) = name {
         if n.chars().count() > NAME_MAX_CHARS {
-            return bad_request("name is too long (max 200 characters)");
+            return Err(ApiError::BadRequest(
+                "name is too long (max 200 characters)".into(),
+            ));
         }
         // The name renders in single-line chips/cells; an embedded newline or
         // other control character would corrupt every one of them.
         if n.chars().any(char::is_control) {
-            return bad_request("name must not contain control characters");
+            return Err(ApiError::BadRequest(
+                "name must not contain control characters".into(),
+            ));
         }
     }
-    match db::set_paper_name(&app.pool, &id, name).await {
-        Ok(true) => Json(PaperNameResponse {
-            name: name.map(str::to_string),
-        })
-        .into_response(),
-        Ok(false) => not_found(),
-        Err(e) => {
-            tracing::error!("set_paper_name: {e}");
-            internal_error()
-        }
+    if !db::set_paper_name(&app.pool, &id, name)
+        .await
+        .context("set_paper_name")?
+    {
+        return Err(ApiError::NotFound);
     }
+    Ok(Json(PaperNameResponse {
+        name: name.map(str::to_string),
+    })
+    .into_response())
 }
 
 #[derive(Deserialize)]
 pub struct FormatParam {
     pub format: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct ExportParams {
-    pub format: Option<String>,
-    pub q: Option<String>,
-    pub status: Option<String>,
-    pub sort: Option<String>,
-    pub project: Option<String>,
-    pub tag: Option<String>,
-    pub starred: Option<bool>,
 }
 
 fn parse_format(s: Option<&str>) -> export::BibFormat {
@@ -958,60 +830,43 @@ pub async fn export_paper(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Query(p): Query<FormatParam>,
-) -> Response {
-    match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(paper)) => {
-            let body = export::format_entry(&paper, parse_format(p.format.as_deref()));
-            (
-                [(
-                    axum::http::header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8",
-                )],
-                body,
-            )
-                .into_response()
-        }
-        Ok(None) => not_found(),
-        Err(e) => {
-            tracing::error!("export_paper: {e}");
-            internal_error()
-        }
-    }
+) -> Result<Response, ApiError> {
+    let paper = fetch_paper(&app.pool, &id, Trash::Allow, "export_paper").await?;
+    let body = export::format_entry(&paper, parse_format(p.format.as_deref()));
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response())
 }
 
-/// The current filtered set as a downloadable `.bib` file. Same filter semantics
-/// as `GET /api/papers`.
-pub async fn export_papers(State(app): State<AppState>, Query(p): Query<ExportParams>) -> Response {
-    match db::list_papers(
-        &app.pool,
-        p.q.as_deref(),
-        p.status.as_deref(),
-        p.sort.as_deref(),
-        p.project.as_deref(),
-        p.tag.as_deref(),
-        p.starred,
-    )
-    .await
-    {
-        Ok(papers) => {
-            let body = export::format_entries(&papers, parse_format(p.format.as_deref()));
+/// The current filtered set as a downloadable `.bib` file. Same filter
+/// semantics as `GET /api/papers` by construction: the query string is
+/// extracted twice (`Query` reads request parts, so this composes) — once as
+/// the same `ListParams` the list endpoint uses, once for `format`.
+pub async fn export_papers(
+    State(app): State<AppState>,
+    Query(f): Query<FormatParam>,
+    Query(p): Query<ListParams>,
+) -> Result<Response, ApiError> {
+    let papers = db::list_papers(&app.pool, p.q.as_deref(), p.sort.as_deref(), &p.filter())
+        .await
+        .context("export_papers")?;
+    let body = export::format_entries(&papers, parse_format(f.format.as_deref()));
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/x-bibtex"),
             (
-                [
-                    (axum::http::header::CONTENT_TYPE, "application/x-bibtex"),
-                    (
-                        axum::http::header::CONTENT_DISPOSITION,
-                        "attachment; filename=\"xuewen.bib\"",
-                    ),
-                ],
-                body,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("export_papers: {e}");
-            internal_error()
-        }
-    }
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"xuewen.bib\"",
+            ),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -1027,87 +882,63 @@ pub struct SearchParams {
 
 /// Hybrid search. `fields`/`engines` are CSV lists; absent or unknown-only
 /// values fall back to "all" (mirrors the whitelisting style elsewhere).
-pub async fn search_papers(State(app): State<AppState>, Query(p): Query<SearchParams>) -> Response {
-    let Some(svc) = &app.search else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "search not configured"})),
-        )
-            .into_response();
-    };
+pub async fn search_papers(
+    State(app): State<AppState>,
+    Query(p): Query<SearchParams>,
+) -> Result<Response, ApiError> {
+    let svc = app
+        .search
+        .as_ref()
+        .ok_or(ApiError::Unavailable("search not configured"))?;
     let (keyword, semantic) = parse_engines(p.engines.as_deref());
-    let parsed = crate::search::query::parse(p.q.as_deref().unwrap_or(""));
-    // `project:` carries a NAME; resolve to an id. An unknown name filters to
-    // zero results (bind the name itself — it can never equal a project id).
-    let project = match parsed.project {
-        Some(name) => Some(
-            crate::db::find_project_by_name(&app.pool, &name)
-                .await
-                .ok()
-                .flatten()
-                .map(|pr| pr.id)
-                .unwrap_or(name),
-        ),
-        None => p.project,
-    };
-    let req = crate::search::SearchRequest {
-        q: parsed.text,
-        author_terms: parsed.authors,
-        fields: parsed
-            .fields
-            .unwrap_or_else(|| FieldSel::parse(p.fields.as_deref())),
-        keyword,
-        semantic,
-        status: parsed.status.or(p.status),
-        project,
-        tag: parsed.tag.or(p.tag),
-        starred: if parsed.starred {
-            Some(true)
-        } else {
-            p.starred
+    let req = crate::search::SearchRequest::assemble(
+        &app.pool,
+        p.q.as_deref().unwrap_or(""),
+        crate::search::RequestOverrides {
+            keyword,
+            semantic,
+            fields: p.fields,
+            status: p.status,
+            project: p.project,
+            tag: p.tag,
+            starred: p.starred,
         },
-    };
-    match svc.search(&req).await {
-        Ok(out) => {
-            // Same enrichment as list_papers: without it, search rows
-            // serialize empty tags/projects and the table's chips vanish
-            // whenever a query is active.
-            let mut summaries: Vec<PaperSummary> = out
-                .results
-                .iter()
-                .map(|(paper, _)| PaperSummary::from(paper))
-                .collect();
-            if let Err(e) = attach_row_extras(&app.pool, &mut summaries).await {
-                tracing::error!("search row extras: {e}");
-                return internal_error();
-            }
-            let results: Vec<SearchResult> = summaries
-                .into_iter()
-                .zip(out.results.iter())
-                .map(|(paper, (_, m))| SearchResult {
-                    paper,
-                    match_info: SearchMatch {
-                        engine: m.engine.clone(),
-                        field: m.field.clone(),
-                        snippet: m.snippet.clone(),
-                        page: m.page,
-                    },
-                })
-                .collect();
-            Json(SearchResponse {
-                semantic: SemanticAvailability {
-                    available: out.semantic.available,
-                    reason: out.semantic.reason,
-                },
-                results,
-            })
-            .into_response()
-        }
-        Err(e) => {
-            tracing::error!("search: {e}");
-            internal_error()
-        }
-    }
+    )
+    .await
+    .context("search request")?;
+    let out = svc.search(&req).await.context("search")?;
+    // Same enrichment as list_papers: without it, search rows serialize
+    // empty tags/projects and the table's chips vanish whenever a query is
+    // active.
+    let mut summaries: Vec<PaperSummary> = out
+        .results
+        .iter()
+        .map(|(paper, _)| PaperSummary::from(paper))
+        .collect();
+    attach_row_extras(&app.pool, &mut summaries)
+        .await
+        .context("search row extras")?;
+    let results: Vec<SearchResult> = summaries
+        .into_iter()
+        .zip(out.results.iter())
+        .map(|(paper, (_, m))| SearchResult {
+            paper,
+            match_info: SearchMatch {
+                engine: m.engine.as_str().to_string(),
+                field: m.field.as_str().to_string(),
+                snippet: m.snippet.clone(),
+                page: m.page,
+            },
+        })
+        .collect();
+    Ok(Json(SearchResponse {
+        semantic: SemanticAvailability {
+            available: out.semantic.available,
+            reason: out.semantic.reason,
+        },
+        results,
+    })
+    .into_response())
 }
 
 fn parse_engines(csv: Option<&str>) -> (bool, bool) {
@@ -1126,59 +957,27 @@ fn parse_engines(csv: Option<&str>) -> (bool, bool) {
     }
 }
 
-pub async fn search_status(State(app): State<AppState>) -> Response {
-    let Some(svc) = &app.search else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "search not configured"})),
-        )
-            .into_response();
-    };
-    match svc.status().await {
-        Ok(st) => Json(SearchStatus {
-            fts: TierCounts {
-                indexed: st.fts.indexed,
-                pending: st.fts.pending,
-                failed: st.fts.failed,
-            },
-            vectors: TierCounts {
-                indexed: st.vectors.indexed,
-                pending: st.vectors.pending,
-                failed: st.vectors.failed,
-            },
-            semantic_available: st.semantic_available,
-            reason: st.reason,
-        })
-        .into_response(),
-        Err(e) => {
-            tracing::error!("search status: {e}");
-            internal_error()
-        }
-    }
-}
-
-pub(super) fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({"error": "not found"})),
-    )
-        .into_response()
-}
-
-pub(super) fn internal_error() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({"error": "internal error"})),
-    )
-        .into_response()
-}
-
-pub(super) fn bad_request(msg: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": msg })),
-    )
-        .into_response()
+pub async fn search_status(State(app): State<AppState>) -> Result<Response, ApiError> {
+    let svc = app
+        .search
+        .as_ref()
+        .ok_or(ApiError::Unavailable("search not configured"))?;
+    let st = svc.status().await.context("search status")?;
+    Ok(Json(SearchStatus {
+        fts: TierCounts {
+            indexed: st.fts.indexed,
+            pending: st.fts.pending,
+            failed: st.fts.failed,
+        },
+        vectors: TierCounts {
+            indexed: st.vectors.indexed,
+            pending: st.vectors.pending,
+            failed: st.vectors.failed,
+        },
+        semantic_available: st.semantic_available,
+        reason: st.reason,
+    })
+    .into_response())
 }
 
 /// Map a multipart read error to its proper status (e.g. 413 when the body
@@ -1195,55 +994,44 @@ fn multipart_error(e: MultipartError) -> Response {
 }
 
 /// GET /api/daily — the latest non-empty daily batch for the Glance widget.
-pub async fn daily_papers(State(app): State<AppState>) -> Response {
+pub async fn daily_papers(State(app): State<AppState>) -> Result<Response, ApiError> {
     if app.daily.is_none() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "daily papers not configured"})),
-        )
-            .into_response();
+        return Err(ApiError::Unavailable("daily papers not configured"));
     }
-    match crate::daily::store::latest_batch(&app.pool).await {
-        Ok(Some((date, papers))) => Json(DailyResponse {
+    let resp = match crate::daily::store::latest_batch(&app.pool)
+        .await
+        .context("daily papers")?
+    {
+        Some((date, papers)) => DailyResponse {
             date: Some(date),
             papers: papers.iter().map(DailyPaperDto::from).collect(),
-        })
-        .into_response(),
-        Ok(None) => Json(DailyResponse {
+        },
+        None => DailyResponse {
             date: None,
             papers: Vec::new(),
-        })
-        .into_response(),
-        Err(e) => {
-            tracing::error!("daily papers: {e}");
-            internal_error()
-        }
-    }
+        },
+    };
+    Ok(Json(resp).into_response())
 }
 
 /// POST /api/daily/run — manual trigger; 202 started, 409 already running.
-pub async fn run_daily(State(app): State<AppState>) -> Response {
-    let Some(svc) = &app.daily else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "daily papers not configured"})),
-        )
-            .into_response();
-    };
+pub async fn run_daily(State(app): State<AppState>) -> Result<Response, ApiError> {
+    let svc = app
+        .daily
+        .as_ref()
+        .ok_or(ApiError::Unavailable("daily papers not configured"))?;
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    if svc.spawn_run(today) {
-        (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({"status": "started"})),
-        )
-            .into_response()
-    } else {
-        (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "a daily run is already in flight"})),
-        )
-            .into_response()
+    if !svc.spawn_run(today) {
+        return Err(ApiError::Conflict {
+            message: "a daily run is already in flight".into(),
+            id: None,
+        });
     }
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({"status": "started"})),
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -1259,31 +1047,24 @@ pub async fn parse_citations(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<ParseCitationsBody>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let total: usize = body.references.iter().map(|r| r.len()).sum();
     if body.references.is_empty() || body.references.len() > 500 || total > 200_000 {
-        return bad_request("references must be 1..=500 entries and under 200kB");
+        return Err(ApiError::BadRequest(
+            "references must be 1..=500 entries and under 200kB".into(),
+        ));
     }
     // The paper's venue seeds the style vote's tie-breaker.
-    let venue = match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(p)) => p.meta.venue,
-        Ok(None) => return not_found(),
-        Err(e) => {
-            tracing::error!("parse_citations lookup {id}: {e}");
-            return internal_error();
-        }
-    };
-    match app
+    let venue = fetch_paper(&app.pool, &id, Trash::Allow, "parse_citations")
+        .await?
+        .meta
+        .venue;
+    let parsed = app
         .citations
         .parse(&id, &body.references, venue.as_deref())
         .await
-    {
-        Ok(parsed) => Json(serde_json::json!({ "references": parsed })).into_response(),
-        Err(e) => {
-            tracing::error!("parse_citations {id}: {e}");
-            internal_error()
-        }
-    }
+        .with_context(|| format!("parse_citations {id}"))?;
+    Ok(Json(serde_json::json!({ "references": parsed })).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -1297,39 +1078,18 @@ pub async fn set_paper_code(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<CodeBody>,
-) -> Response {
-    let Some(agent) = app.agent.clone() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "agent ask is not configured"})),
-        )
-            .into_response();
-    };
-    let paper = match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(p)) if p.deleted_at.is_none() => p,
-        Ok(_) => return not_found(),
-        Err(e) => {
-            tracing::error!("code paper lookup: {e}");
-            return internal_error();
-        }
-    };
-    if let Err(msg) =
-        crate::agent::code::validate_repo_url(&body.repo_url, &agent.clone_allowed_hosts)
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({"error": msg})),
-        )
-            .into_response();
-    }
+) -> Result<Response, ApiError> {
+    let agent = app
+        .agent
+        .clone()
+        .ok_or(ApiError::Unavailable("agent ask is not configured"))?;
+    let paper = fetch_paper(&app.pool, &id, Trash::Deny, "code").await?;
+    crate::agent::code::validate_repo_url(&body.repo_url, &agent.clone_allowed_hosts)
+        .map_err(ApiError::Unprocessable)?;
     let clone_gen =
-        match db::upsert_paper_code_cloning(&app.pool, &paper.id, body.repo_url.trim()).await {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::error!("paper_code upsert: {e}");
-                return internal_error();
-            }
-        };
+        crate::agent::store::upsert_paper_code_cloning(&app.pool, &paper.id, body.repo_url.trim())
+            .await
+            .context("paper_code upsert")?;
     crate::agent::code::spawn_clone(
         app.pool.clone(),
         app.library_root.clone(),
@@ -1338,84 +1098,59 @@ pub async fn set_paper_code(
         agent.max_repo_mb,
         clone_gen,
     );
-    match db::get_paper_code(&app.pool, &paper.id).await {
-        Ok(code) => (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({ "attached": true, "code": code })),
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::error!("paper_code read-back: {e}");
-            internal_error()
-        }
-    }
+    let code = crate::agent::store::get_paper_code(&app.pool, &paper.id)
+        .await
+        .context("paper_code read-back")?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CodeAttachment {
+            attached: true,
+            code,
+        }),
+    )
+        .into_response())
 }
 
-pub async fn get_paper_code(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(p)) if p.deleted_at.is_none() => match db::get_paper_code(&app.pool, &p.id).await {
-            Ok(code) => Json(serde_json::json!({ "attached": code.is_some(), "code": code }))
-                .into_response(),
-            Err(e) => {
-                tracing::error!("paper_code get: {e}");
-                internal_error()
-            }
-        },
-        Ok(_) => not_found(),
-        Err(e) => {
-            tracing::error!("code paper lookup: {e}");
-            internal_error()
-        }
-    }
+pub async fn get_paper_code(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let p = fetch_paper(&app.pool, &id, Trash::Deny, "code").await?;
+    let code = crate::agent::store::get_paper_code(&app.pool, &p.id)
+        .await
+        .context("paper_code get")?;
+    Ok(Json(CodeAttachment {
+        attached: code.is_some(),
+        code,
+    })
+    .into_response())
 }
 
-pub async fn delete_paper_code(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    match db::get_by_id(&app.pool, &id).await {
-        Ok(Some(p)) if p.deleted_at.is_none() => {
-            crate::agent::code::remove_checkout(&app.library_root, &p.id).await;
-            match db::delete_paper_code(&app.pool, &p.id).await {
-                Ok(()) => StatusCode::NO_CONTENT.into_response(),
-                Err(e) => {
-                    tracing::error!("paper_code delete: {e}");
-                    internal_error()
-                }
-            }
-        }
-        Ok(_) => not_found(),
-        Err(e) => {
-            tracing::error!("code paper lookup: {e}");
-            internal_error()
-        }
-    }
-}
-
-/// Pre-check that a paper exists so a bad id is a clean 404 rather than an
-/// FK-violation 500. Trashed papers count: their annotations must survive a
-/// restore, so nothing here filters on `deleted_at`.
-async fn require_paper(app: &AppState, id: &str, tag: &str) -> Result<(), Response> {
-    match db::get_by_id(&app.pool, id).await {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(not_found()),
-        Err(e) => {
-            tracing::error!("{tag} paper lookup: {e}");
-            Err(internal_error())
-        }
-    }
+pub async fn delete_paper_code(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let p = fetch_paper(&app.pool, &id, Trash::Deny, "code").await?;
+    crate::agent::code::remove_checkout(&app.library_root, &p.id).await;
+    crate::agent::store::delete_paper_code(&app.pool, &p.id)
+        .await
+        .context("paper_code delete")?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// GET /api/papers/{id}/annotations — every mark on a paper, in reading order.
 /// The reader replays these into the annotation plugin on open.
-pub async fn list_annotations(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    if let Err(resp) = require_paper(&app, &id, "list_annotations").await {
-        return resp;
-    }
-    match app.annotations.list(&id).await {
-        Ok(items) => Json(items).into_response(),
-        Err(e) => {
-            tracing::error!("list_annotations {id}: {e}");
-            internal_error()
-        }
-    }
+pub async fn list_annotations(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    fetch_paper(&app.pool, &id, Trash::Allow, "list_annotations").await?;
+    let items = app
+        .annotations
+        .list(&id)
+        .await
+        .with_context(|| format!("list_annotations {id}"))?;
+    Ok(Json(items).into_response())
 }
 
 /// PUT /api/papers/{paper_id}/annotations/{annotation_id} — create or replace.
@@ -1425,85 +1160,50 @@ pub async fn put_annotation(
     State(app): State<AppState>,
     Path((paper_id, annotation_id)): Path<(String, String)>,
     Json(body): Json<NewAnnotation>,
-) -> Response {
-    if let Err(msg) = crate::annotations::validate_id(&annotation_id) {
-        return bad_request(&msg);
-    }
-    if let Err(msg) = crate::annotations::validate_new(&body) {
-        return bad_request(&msg);
-    }
-    if let Err(resp) = require_paper(&app, &paper_id, "put_annotation").await {
-        return resp;
-    }
-    match app.annotations.put(&paper_id, &annotation_id, body).await {
-        Ok(a) => {
-            // The note feeds the `notes` search field; nudge the sweep so the
-            // index catches up without waiting for its next poll.
-            app.wake_search();
-            Json(a).into_response()
-        }
-        Err(e) => {
-            tracing::error!("put_annotation {paper_id}/{annotation_id}: {e}");
-            internal_error()
-        }
-    }
-}
-
-/// PATCH /api/papers/{paper_id}/annotations/{annotation_id} — recolor, edit
-/// the note, or replace the geometry payload. Absent fields are left alone.
-pub async fn patch_annotation(
-    State(app): State<AppState>,
-    Path((paper_id, annotation_id)): Path<(String, String)>,
-    Json(body): Json<AnnotationPatch>,
-) -> Response {
-    if let Err(msg) = crate::annotations::validate_patch(&body) {
-        return bad_request(&msg);
-    }
-    match app.annotations.patch(&paper_id, &annotation_id, body).await {
-        Ok(Some(a)) => {
-            app.wake_search();
-            Json(a).into_response()
-        }
-        Ok(None) => not_found(),
-        Err(e) => {
-            tracing::error!("patch_annotation {paper_id}/{annotation_id}: {e}");
-            internal_error()
-        }
-    }
+) -> Result<Response, ApiError> {
+    crate::annotations::validate_id(&annotation_id).map_err(ApiError::BadRequest)?;
+    crate::annotations::validate_new(&body).map_err(ApiError::BadRequest)?;
+    fetch_paper(&app.pool, &paper_id, Trash::Allow, "put_annotation").await?;
+    let a = app
+        .annotations
+        .put(&paper_id, &annotation_id, body)
+        .await
+        .with_context(|| format!("put_annotation {paper_id}/{annotation_id}"))?;
+    // The note feeds the `notes` search field; nudge the sweep so the
+    // index catches up without waiting for its next poll.
+    app.wake_search();
+    Ok(Json(a).into_response())
 }
 
 /// DELETE /api/papers/{paper_id}/annotations/{annotation_id}
 pub async fn delete_annotation(
     State(app): State<AppState>,
     Path((paper_id, annotation_id)): Path<(String, String)>,
-) -> Response {
-    match app.annotations.delete(&paper_id, &annotation_id).await {
-        Ok(true) => {
-            app.wake_search();
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => not_found(),
-        Err(e) => {
-            tracing::error!("delete_annotation {paper_id}/{annotation_id}: {e}");
-            internal_error()
-        }
+) -> Result<Response, ApiError> {
+    if !app
+        .annotations
+        .delete(&paper_id, &annotation_id)
+        .await
+        .with_context(|| format!("delete_annotation {paper_id}/{annotation_id}"))?
+    {
+        return Err(ApiError::NotFound);
     }
+    app.wake_search();
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// DELETE /api/papers/{id}/annotations — clear every mark on a paper. Answers
 /// with the count rather than 204: "cleared 12 highlights" is worth surfacing.
-pub async fn clear_annotations(State(app): State<AppState>, Path(id): Path<String>) -> Response {
-    if let Err(resp) = require_paper(&app, &id, "clear_annotations").await {
-        return resp;
-    }
-    match app.annotations.delete_all(&id).await {
-        Ok(n) => {
-            app.wake_search();
-            Json(serde_json::json!({ "deleted": n })).into_response()
-        }
-        Err(e) => {
-            tracing::error!("clear_annotations {id}: {e}");
-            internal_error()
-        }
-    }
+pub async fn clear_annotations(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    fetch_paper(&app.pool, &id, Trash::Allow, "clear_annotations").await?;
+    let n = app
+        .annotations
+        .delete_all(&id)
+        .await
+        .with_context(|| format!("clear_annotations {id}"))?;
+    app.wake_search();
+    Ok(Json(serde_json::json!({ "deleted": n })).into_response())
 }

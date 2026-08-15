@@ -9,10 +9,8 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::daily::{self, DailyService};
-use crate::pipeline::{IngestCtx, Libraries};
-use crate::resolve::grobid::Grobid;
-use crate::resolve::http::RetryPolicy;
-use crate::resolve::Resolver;
+use crate::http::RetryPolicy;
+use crate::pipeline::IngestCtx;
 use crate::search::{indexer, SearchService};
 use crate::web;
 
@@ -31,22 +29,11 @@ pub struct Services {
 /// scheduler, summary worker). Interactive retry policy: uploads answer
 /// synchronously, so keep resolver retries short.
 pub async fn spawn_services(cfg: &Config, pool: SqlitePool) -> Result<Services> {
-    let resolver =
-        Resolver::new_with_policy(cfg.contact_email.as_deref(), RetryPolicy::interactive())?;
-    let grobid = cfg.grobid_url.as_deref().map(Grobid::new).transpose()?;
-    let ctx = IngestCtx {
-        pool: pool.clone(),
-        dirs: Libraries {
-            library_root: cfg.library_root.clone(),
-            processed_dir: cfg.inbox_dir.join("_processed"),
-        },
-        resolver,
-        grobid,
-    };
-    let ingest = Arc::new(web::Ingest {
-        ctx,
-        staging_dir: cfg.inbox_dir.join("_uploads"),
-    });
+    let ctx = IngestCtx::from_config(cfg, pool.clone(), RetryPolicy::interactive())?;
+    // Built once: the Fetcher's reqwest clients hold connection pools that
+    // per-request construction would throw away.
+    let fetcher = crate::import::Fetcher::new(cfg.proxy.as_ref().map(|p| p.login_url.clone()))?;
+    let ingest = Arc::new(web::Ingest { ctx, fetcher });
     let search = match SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await {
         Ok(s) => Some(s),
         Err(e) => {
@@ -77,6 +64,9 @@ pub async fn spawn_services(cfg: &Config, pool: SqlitePool) -> Result<Services> 
             }
         }
     }
+    // Unconditional (rows and staging dirs can predate an [ai.agent] removal):
+    // resolve 'cloning' rows a crash stranded and sweep orphaned staging dirs.
+    crate::agent::code::reconcile_startup(&pool, &cfg.library_root).await;
     let citations = crate::citations::CitationsService::from_config(pool.clone(), cfg);
     // No config to read: annotations are plain storage, always on.
     let annotations = Arc::new(crate::annotations::AnnotationsService::new(pool.clone()));
@@ -105,7 +95,6 @@ pub fn serve_on(
         pool,
         library_root: cfg.library_root.clone(),
         ingest: Some(services.ingest),
-        proxy_login_url: cfg.proxy.as_ref().map(|p| p.login_url.clone()),
         search: services.search,
         daily: services.daily,
         agent: services.agent,

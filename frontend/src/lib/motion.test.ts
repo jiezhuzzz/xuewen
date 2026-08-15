@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DUR, EASE, SPRINGS, dur, prefersReducedMotion } from './motion';
+import type { Spring } from 'svelte/motion';
+import { DUR, EASE, SPRINGS, dur, instantMotion, prefersReducedMotion, springTo } from './motion';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -32,5 +33,18 @@ describe('motion tokens', () => {
 
   it('dur is 0 under vitest so transitions never linger in DOM tests', () => {
     expect(dur(250)).toBe(0);
+  });
+
+  it('instantMotion holds under vitest (the same decision dur makes)', () => {
+    expect(instantMotion()).toBe(true);
+  });
+
+  it('springTo snaps straight to the target under instantMotion', () => {
+    // A stub Spring: importing the real one needs matchMedia at module load,
+    // which jsdom lacks; the contract under test is only which arm runs.
+    const s = { target: 0, set: vi.fn(async () => {}) } as unknown as Spring<number>;
+    springTo(s, 304);
+    expect(s.set).toHaveBeenCalledWith(304, { instant: true });
+    expect(s.target).toBe(0); // the animated arm was not taken
   });
 });

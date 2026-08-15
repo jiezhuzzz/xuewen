@@ -13,9 +13,12 @@
       .then((res) => {
         if (!res.ok) failed = true;
       })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        failed = true;
+      .catch(() => {
+        // Only a definitive !res.ok marks the tab failed. A network-level
+        // probe error (server restarting, transient offline) says nothing
+        // about the PDF, and latching `failed` on it would permanently
+        // replace a working viewer with the fallback; the real open surfaces
+        // genuine failures via doc.isError.
       });
     return () => controller.abort();
   });

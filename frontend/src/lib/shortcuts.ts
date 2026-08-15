@@ -1,22 +1,9 @@
-import { tick } from 'svelte';
-import { chat } from './chat.svelte';
+import { identifyState } from './identify.svelte';
+import { openSelected, SINGLE_KEYS } from './keymap';
 import { copyPdfSelection, pdfSelectionHasText } from './pdfCopy';
-import { openFind, toggleAnnotationsPanel } from './readerState.svelte';
-import {
-  closeDock,
-  closeTab,
-  dock,
-  identifyState,
-  library,
-  openTab,
-  selection,
-  selectPaper,
-  toggleDock,
-  toggleSidebar,
-  toggleZen,
-  ui,
-  viewer,
-} from './state.svelte';
+import { openFind } from './readerState.svelte';
+import { viewer } from './tabs.svelte';
+import { closeDock, dock, ui } from './ui.svelte';
 
 export function isEditable(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;
@@ -44,34 +31,12 @@ function hasDomSelection(): boolean {
   return (document.getSelection()?.toString() ?? '').trim() !== '';
 }
 
-function moveSelection(delta: number): void {
-  const papers = library.papers;
-  if (papers.length === 0) return;
-  const idx = papers.findIndex((p) => p.id === selection.id);
-  const next = idx === -1 ? (delta > 0 ? 0 : papers.length - 1) : Math.min(papers.length - 1, Math.max(0, idx + delta));
-  selectPaper(papers[next].id);
-}
-
-function openSelected(): void {
-  const p = library.papers.find((x) => x.id === selection.id);
-  if (p) openTab(p);
-}
-
-/// `/` must work even while the pane is collapsed or zen hides it (the
-/// pane subtree is inert in both states): leave zen, open the pane, then
-/// focus after the DOM update.
-function focusSearch(): void {
-  ui.zen = false;
-  ui.sidebarOpen = true;
-  void tick().then(() => {
-    document.querySelector<HTMLInputElement>('[data-search-input]')?.focus();
-  });
-}
-
-/// Global keymap. Modals own their Esc (Modal.svelte stops propagation);
-/// everything except ⌘K is inert while a modal is open or focus is in a
-/// text control. Spec deviation: close-tab is `x`, not ⌘W — browsers
-/// reserve ⌘W/Ctrl+W for closing the browser tab.
+/// Global keymap driver. The single-key bindings live as data in keymap.ts
+/// (SINGLE_KEYS); this dispatches them after the gating below. Modals own
+/// their Esc (Modal.svelte stops propagation); everything except ⌘K is inert
+/// while a modal is open or focus is in a text control. Spec deviation:
+/// close-tab is `x`, not ⌘W — browsers reserve ⌘W/Ctrl+W for closing the
+/// browser tab.
 export function handleKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
@@ -122,46 +87,19 @@ export function handleKeydown(e: KeyboardEvent): void {
   // dead-key a shortcut (`Z`/`X` would otherwise miss `z`/`x`). Named keys
   // (Enter, ArrowUp, …) are longer than one char and keep their exact spelling.
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  switch (key) {
-    case '/':
-      e.preventDefault();
-      focusSearch();
-      break;
-    case '?':
-      e.preventDefault();
-      ui.helpOpen = true;
-      break;
-    case '[':
-      toggleSidebar();
-      break;
-    case 'c':
-      if (chat.available) toggleDock('ask');
-      break;
-    case 'i':
-      toggleDock('details');
-      break;
-    case 'a':
-      // Reader-only: the panel lives inside the PDF view, and on the library
-      // this would open a panel nobody can see.
-      if (viewer.activeId) toggleAnnotationsPanel();
-      break;
-    case 'z':
-      toggleZen();
-      break;
-    case 'x':
-      if (viewer.activeId) closeTab(viewer.activeId);
-      break;
-    case 'j':
-      moveSelection(1);
-      break;
-    case 'k':
-      moveSelection(-1);
-      break;
-    case 'Enter':
-      // Enter on a focused control activates that control — it must not
-      // also open the selected paper.
-      if (e.target instanceof HTMLElement && e.target.closest('button, a, summary')) break;
-      openSelected();
-      break;
+  const binding = SINGLE_KEYS.find((b) => b.key === key);
+  if (binding) {
+    if (binding.when && !binding.when()) return;
+    if (binding.preventDefault) e.preventDefault();
+    binding.run();
+    return;
+  }
+  if (key === 'Enter') {
+    // Enter on a focused control activates that control — it must not also
+    // open the selected paper. Checked against the composed-path target, so
+    // a button inside the viewer's shadow DOM counts too (raw e.target would
+    // be its never-matching host).
+    if (realTarget instanceof HTMLElement && realTarget.closest('button, a, summary')) return;
+    openSelected();
   }
 }

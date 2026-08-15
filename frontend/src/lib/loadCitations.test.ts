@@ -188,6 +188,31 @@ describe('text-layer fallback (no hyperlinks)', () => {
     expect(data.pendingAuthorYear).toHaveLength(1);
   });
 
+  it('does not re-read pages the hyperlink path already fetched', async () => {
+    const calls: number[] = [];
+    const eng: EngineLike = {
+      // A GoTo link exists, so the hyperlink path reads the destination pages —
+      // but no heading is found and it falls through to the text fallback,
+      // which rescans those same pages.
+      getPageAnnotations: (_d, page: any) => task(
+        page.index === 0
+          ? [{ type: 2, rect: { origin: { x: 90, y: 100 }, size: { width: 12, height: 12 } },
+               target: { type: 'destination',
+                 destination: { pageIndex: 1, view: [], zoom: { mode: PdfZoomMode.XYZ, params: { x: 50, y: 370, zoom: 0 } } } } }]
+          : [],
+      ),
+      getPageTextRuns: (_d, page: any) => {
+        calls.push(page.index);
+        return task({ runs: [{ text: 'no heading here', rect: { origin: { x: 50, y: 100 }, size: { width: 120, height: 12 } } }] });
+      },
+    };
+    const data = await loadCitations(eng, doc);
+    expect(data.references).toHaveLength(0);
+    // One worker round-trip per page: the fallback's rescan must hit the
+    // shared cache, not fetch again.
+    expect([...calls].sort()).toEqual([0, 1]);
+  });
+
   it('stays empty when there is no heading anywhere', async () => {
     const eng: EngineLike = {
       getPageAnnotations: noAnnos,

@@ -100,35 +100,13 @@ async fn re_putting_the_same_id_replaces_instead_of_duplicating() {
 }
 
 #[tokio::test]
-async fn patch_updates_only_what_it_names() {
+async fn putting_a_blank_note_stores_null() {
+    // Blank and never-set must be the same NULL, so a cleared note neither
+    // lists as empty text nor reaches the search index.
     let server = server("p1").await;
-    server
-        .put("/api/papers/p1/annotations/a1")
-        .json(&highlight(2, Some("original")))
-        .await
-        .assert_status_ok();
     let resp = server
-        .patch("/api/papers/p1/annotations/a1")
-        .json(&json!({ "color": "violet" }))
-        .await;
-    resp.assert_status_ok();
-    let v: serde_json::Value = resp.json();
-    assert_eq!(v["color"], "violet");
-    assert_eq!(v["note"], "original", "an unnamed field is left alone");
-    assert_eq!(v["page_index"], 2);
-}
-
-#[tokio::test]
-async fn patching_a_note_to_empty_clears_it() {
-    let server = server("p1").await;
-    server
         .put("/api/papers/p1/annotations/a1")
-        .json(&highlight(0, Some("scratch that")))
-        .await
-        .assert_status_ok();
-    let resp = server
-        .patch("/api/papers/p1/annotations/a1")
-        .json(&json!({ "note": "" }))
+        .json(&highlight(0, Some("   ")))
         .await;
     resp.assert_status_ok();
     assert_eq!(resp.json::<serde_json::Value>()["note"], json!(null));
@@ -193,16 +171,6 @@ async fn unknown_paper_is_404_on_every_verb() {
 }
 
 #[tokio::test]
-async fn patching_an_unknown_mark_is_404() {
-    let server = server("p1").await;
-    server
-        .patch("/api/papers/p1/annotations/ghost")
-        .json(&json!({ "color": "rose" }))
-        .await
-        .assert_status_not_found();
-}
-
-#[tokio::test]
 async fn a_negative_page_is_rejected() {
     let server = server("p1").await;
     server
@@ -220,21 +188,6 @@ async fn a_non_object_payload_is_rejected() {
     server
         .put("/api/papers/p1/annotations/a1")
         .json(&body)
-        .await
-        .assert_status_bad_request();
-}
-
-#[tokio::test]
-async fn an_empty_patch_is_rejected() {
-    let server = server("p1").await;
-    server
-        .put("/api/papers/p1/annotations/a1")
-        .json(&highlight(0, None))
-        .await
-        .assert_status_ok();
-    server
-        .patch("/api/papers/p1/annotations/a1")
-        .json(&json!({}))
         .await
         .assert_status_bad_request();
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { setPaperName } from '../lib/state.svelte';
+  import { setPaperName } from '../lib/library.svelte';
   import { NAME_CHIP } from '../lib/nameChip';
   import type { PaperDetail } from '../lib/types';
 
@@ -38,8 +38,8 @@
     busy = true;
     error = null;
     try {
-      // On success the dock remounts (detailRefresh bump inside) and renders
-      // the server-confirmed value; on failure stay in edit mode with the
+      // On success the patched detail cache re-renders this row with the
+      // server-confirmed value; on failure stay in edit mode with the
       // draft intact so the user can fix and retry.
       await setPaperName(d.id, next);
       editing = false;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Bookmark, X } from 'lucide-svelte';
   import NewProjectInput from './NewProjectInput.svelte';
-  import { addToProject, createNewProject, projects, removeFromProject } from '../lib/state.svelte';
+  import { addToProject, createNewProject, projects, removeFromProject } from '../lib/library.svelte';
   import type { PaperDetail } from '../lib/types';
 
   let { d }: { d: PaperDetail } = $props();

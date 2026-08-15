@@ -2,7 +2,8 @@
   import { flip } from 'svelte/animate';
   import { fade } from 'svelte/transition';
   import { DUR, dur } from '../lib/motion';
-  import { activeFilterLabels, clearFilters, library } from '../lib/state.svelte';
+  import { library } from '../lib/library.svelte';
+  import { activeFilterLabels, clearFilters, noMatchesBlame } from '../lib/searchState.svelte';
   import PaperRow from './PaperRow.svelte';
   import Spinner from './Spinner.svelte';
 
@@ -18,7 +19,7 @@
   {:else if library.papers.length === 0}
     <div class="p-4 text-sm text-stone-500 dark:text-stone-400">
       {#if activeFilters.length > 0}
-        <p>No papers match {activeFilters.join(' · ')}.</p>
+        <p>{noMatchesBlame()}</p>
         <button
           type="button"
           onclick={() => void clearFilters()}

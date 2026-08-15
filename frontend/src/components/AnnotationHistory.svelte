@@ -2,6 +2,7 @@
   import { Redo2, Undo2 } from 'lucide-svelte';
   import { useHistoryCapability } from '@embedpdf/plugin-history/svelte';
   import { ANNOTATION_HISTORY_TOPIC } from '../lib/pdfEngine';
+  import { btn } from '../lib/pillStyles';
 
   let { documentId }: { documentId: string } = $props();
 
@@ -25,9 +26,6 @@
     sync(); // a tab reopened mid-session may already have a stack
     return s.onHistoryChange(sync);
   });
-
-  const btn =
-    'rounded-lg p-1.5 text-stone-600 hover:bg-parchment hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent dark:text-stone-300 dark:hover:bg-stone-800';
 </script>
 
 <button

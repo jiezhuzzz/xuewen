@@ -1,14 +1,8 @@
 <script lang="ts">
   import { Upload } from 'lucide-svelte';
-  import {
-    activeFilterLabels,
-    anyFilterActive,
-    clearFilters,
-    filters,
-    library,
-    openImport,
-    projects,
-  } from '../lib/state.svelte';
+  import { openImport } from '../lib/importQueue.svelte';
+  import { library, projects } from '../lib/library.svelte';
+  import { anyFilterActive, clearFilters, filters, noMatchesBlame } from '../lib/searchState.svelte';
   import SealMark from './SealMark.svelte';
 
   const filteredEmpty = $derived(library.papers.length === 0 && anyFilterActive());
@@ -23,9 +17,7 @@
   <SealMark size={48} />
   <h2 class="font-serif text-2xl font-semibold text-ink dark:text-stone-100">Xuewen</h2>
   {#if filteredEmpty}
-    <p class="max-w-sm text-sm text-stone-500 dark:text-stone-400">
-      No papers match {activeFilterLabels().join(' · ')}.
-    </p>
+    <p class="max-w-sm text-sm text-stone-500 dark:text-stone-400">{noMatchesBlame()}</p>
     {#if emptyProject}
       <p class="max-w-sm text-xs text-stone-400 dark:text-stone-500">
         This project is empty — select rows in the library table and use “Add to project…”,

@@ -5,7 +5,9 @@
 use anyhow::Result;
 use sqlx::SqlitePool;
 
-#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+// Storage row, not a wire type: the history endpoint maps this to
+// `web::dto::ChatTurn`, which parses `tools_json` into structured `tools`.
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ChatMessageRow {
     pub id: i64,
     pub role: String,
@@ -34,19 +36,27 @@ pub async fn insert_exchange(
     model_label: &str,
     tools_json: Option<&str>,
 ) -> Result<i64> {
+    // One explicit RFC3339 stamp shared by both rows (ordering stays by id) —
+    // the column's `datetime('now')` default is the wrong format, and it was
+    // this table's only remaining writer of it.
+    let created_at = crate::db::now_rfc3339();
     let mut tx = pool.begin().await?;
-    sqlx::query("INSERT INTO chat_messages (paper_id, role, content) VALUES (?, 'user', ?)")
-        .bind(paper_id)
-        .bind(user_content)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO chat_messages (paper_id, role, content, created_at) VALUES (?, 'user', ?, ?)",
+    )
+    .bind(paper_id)
+    .bind(user_content)
+    .bind(&created_at)
+    .execute(&mut *tx)
+    .await?;
     let res = sqlx::query(
-        "INSERT INTO chat_messages (paper_id, role, content, model, tools_json) VALUES (?, 'assistant', ?, ?, ?)",
+        "INSERT INTO chat_messages (paper_id, role, content, model, tools_json, created_at) VALUES (?, 'assistant', ?, ?, ?, ?)",
     )
     .bind(paper_id)
     .bind(assistant_content)
     .bind(model_label)
     .bind(tools_json)
+    .bind(&created_at)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -119,6 +129,14 @@ mod tests {
         );
         assert_eq!(rows[3].model.as_deref(), Some("Local Qwen"));
         assert_eq!(rows[3].tools_json, None);
+        // Both rows of an exchange share one stamp, in RFC3339 like every
+        // other stored timestamp (not the column default's SQLite format).
+        assert_eq!(rows[0].created_at, rows[1].created_at);
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&rows[0].created_at).is_ok(),
+            "created_at not RFC3339: {}",
+            rows[0].created_at
+        );
     }
 
     #[tokio::test]

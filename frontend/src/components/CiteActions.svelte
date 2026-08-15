@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Copy, Download } from 'lucide-svelte';
   import { paperExportUrl } from '../lib/api';
-  import { bibFormat, copyCitation } from '../lib/state.svelte';
+  import { copyCitation } from '../lib/clipboard';
+  import { bibFormat } from '../lib/library.svelte';
   import { toast } from '../lib/toasts.svelte';
 
   let { id, citeKey }: { id: string; citeKey: string | null } = $props();

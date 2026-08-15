@@ -34,6 +34,45 @@ pub struct Plan {
     pub deindex: Vec<String>,
 }
 
+/// Per-tier staleness of one paper against its index row — the single
+/// definition of "needs indexing" that both `plan` (with backoff gating on
+/// top) and `SearchService::status` (counting, no backoff) consume.
+#[derive(Debug, Clone, Copy)]
+pub struct TierStale {
+    /// The Tantivy doc must be rewritten.
+    pub fts: bool,
+    /// The chunks themselves are stale: pdftotext + chunk again. Implies
+    /// `fts`.
+    pub reextract: bool,
+    pub vectors: bool,
+}
+
+pub fn tier_staleness(
+    p: &PaperState,
+    row: Option<&IndexRow>,
+    embed_model: Option<&str>,
+) -> TierStale {
+    let content_changed = row
+        .map(|r| r.content_hash != p.content_hash || r.meta_hash != p.meta_hash)
+        .unwrap_or(true);
+    let notes_changed = row.map(|r| r.notes_hash != p.notes_hash).unwrap_or(true);
+    // A missing FTS stamp still re-extracts: that is what makes `index
+    // rebuild` the escape hatch when the chunker itself changes, since
+    // nothing else ever re-derives the stored chunks.
+    let reextract = content_changed || row.map(|r| r.fts_indexed_at.is_none()).unwrap_or(true);
+    let fts = reextract || notes_changed;
+    let vectors = embed_model.is_some()
+        && (content_changed
+            || row
+                .map(|r| r.vectors_indexed_at.is_none() || r.embed_model.as_deref() != embed_model)
+                .unwrap_or(true));
+    TierStale {
+        fts,
+        reextract,
+        vectors,
+    }
+}
+
 /// Compare live papers against `search_index` and decide what to do.
 /// Pure: all clock and IO inputs are parameters.
 pub fn plan(
@@ -52,27 +91,27 @@ pub fn plan(
 
     for p in papers.iter().filter(|p| !p.trashed) {
         let row = by_id.get(p.id.as_str()).copied();
-        let content_changed = row
-            .map(|r| r.content_hash != p.content_hash || r.meta_hash != p.meta_hash)
-            .unwrap_or(true);
-        let notes_changed = row.map(|r| r.notes_hash != p.notes_hash).unwrap_or(true);
-        // A missing FTS stamp still re-extracts: that is what makes `index
-        // rebuild` the escape hatch when the chunker itself changes, since
-        // nothing else ever re-derives the stored chunks.
-        let reextract = content_changed || row.map(|r| r.fts_indexed_at.is_none()).unwrap_or(true);
-        let fts = reextract || notes_changed;
-        let vectors = embed_model.is_some()
-            && (content_changed
-                || row
-                    .map(|r| {
-                        r.vectors_indexed_at.is_none() || r.embed_model.as_deref() != embed_model
-                    })
-                    .unwrap_or(true));
-        if (fts || vectors) && backoff_elapsed(row, now) {
+        let stale = tier_staleness(p, row, embed_model);
+        // Each tier waits out its OWN backoff: a broken embedder must not
+        // delay a healthy FTS reindex, and vice versa.
+        let fts = stale.fts
+            && row.is_none_or(|r| {
+                backoff_elapsed(r.fts_attempts, r.fts_last_attempt_at.as_deref(), now)
+            });
+        // Extraction is a shared precursor that rides with the FTS pass;
+        // when the chunks themselves are stale but that pass is backed off,
+        // the vector tier waits rather than embedding stale chunks on every
+        // sweep.
+        let vectors = stale.vectors
+            && row.is_none_or(|r| {
+                backoff_elapsed(r.vec_attempts, r.vec_last_attempt_at.as_deref(), now)
+            })
+            && (!stale.reextract || fts);
+        if fts || vectors {
             out.index.push(Work {
                 paper_id: p.id.clone(),
                 fts,
-                reextract,
+                reextract: stale.reextract && fts,
                 vectors,
             });
         }
@@ -86,19 +125,14 @@ pub fn plan(
 }
 
 /// After a failure, wait 60s · 2^(attempts−1), capped at one hour.
-fn backoff_elapsed(row: Option<&IndexRow>, now: DateTime<Utc>) -> bool {
-    let Some(r) = row else { return true };
-    if r.attempts == 0 {
+fn backoff_elapsed(attempts: i64, last_attempt_at: Option<&str>, now: DateTime<Utc>) -> bool {
+    if attempts == 0 {
         return true;
     }
-    let Some(last) = r
-        .last_attempt_at
-        .as_deref()
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-    else {
+    let Some(last) = last_attempt_at.and_then(|s| DateTime::parse_from_rfc3339(s).ok()) else {
         return true;
     };
-    let exp = (r.attempts - 1).clamp(0, 6) as u32;
+    let exp = (attempts - 1).clamp(0, 6) as u32;
     let wait = (60i64 << exp).min(3600);
     now.signed_duration_since(last.with_timezone(&Utc)) >= chrono::Duration::seconds(wait)
 }
@@ -128,9 +162,12 @@ mod tests {
             fts_indexed_at: Some("2026-07-09T00:00:00Z".into()),
             vectors_indexed_at: Some("2026-07-09T00:00:00Z".into()),
             embed_model: Some("m1".into()),
-            last_error: None,
-            attempts: 0,
-            last_attempt_at: None,
+            fts_last_error: None,
+            fts_attempts: 0,
+            fts_last_attempt_at: None,
+            vec_last_error: None,
+            vec_attempts: 0,
+            vec_last_attempt_at: None,
         }
     }
 
@@ -235,18 +272,65 @@ mod tests {
     fn failed_rows_back_off_exponentially_capped_at_an_hour() {
         let mut r = row("a", "h", "m");
         r.fts_indexed_at = None;
-        r.attempts = 2; // wait = 60 * 2^(2-1) = 120s
-        r.last_attempt_at = Some((Utc::now() - Duration::seconds(30)).to_rfc3339());
+        r.fts_attempts = 2; // wait = 60 * 2^(2-1) = 120s
+        r.fts_last_attempt_at = Some((Utc::now() - Duration::seconds(30)).to_rfc3339());
         let p = plan(&[ps("a", "h", "m", false)], &[r.clone()], None, Utc::now());
         assert!(p.index.is_empty(), "still inside the backoff window");
 
-        r.last_attempt_at = Some((Utc::now() - Duration::seconds(180)).to_rfc3339());
+        r.fts_last_attempt_at = Some((Utc::now() - Duration::seconds(180)).to_rfc3339());
         let p = plan(&[ps("a", "h", "m", false)], &[r.clone()], None, Utc::now());
         assert_eq!(p.index.len(), 1, "window elapsed");
 
-        r.attempts = 50; // cap: never wait more than 3600s
-        r.last_attempt_at = Some((Utc::now() - Duration::seconds(3700)).to_rfc3339());
+        r.fts_attempts = 50; // cap: never wait more than 3600s
+        r.fts_last_attempt_at = Some((Utc::now() - Duration::seconds(3700)).to_rfc3339());
         let p = plan(&[ps("a", "h", "m", false)], &[r], None, Utc::now());
         assert_eq!(p.index.len(), 1);
+    }
+
+    #[test]
+    fn a_backed_off_vector_tier_does_not_delay_fts_work() {
+        // Broken embedder (vec backoff running), then a note edit: the FTS
+        // rewrite must be scheduled immediately, without the vector tier.
+        let mut p = ps("a", "h", "m", false);
+        p.notes_hash = "n2".into();
+        let mut r = row("a", "h", "m");
+        r.notes_hash = "n1".into();
+        r.vectors_indexed_at = None;
+        r.vec_attempts = 5;
+        r.vec_last_attempt_at = Some(Utc::now().to_rfc3339());
+        let plan = plan(&[p], &[r], Some("m1"), Utc::now());
+        assert_eq!(plan.index.len(), 1);
+        let w = &plan.index[0];
+        assert!(w.fts && !w.reextract);
+        assert!(!w.vectors, "vector tier is still inside its own backoff");
+    }
+
+    #[test]
+    fn a_backed_off_fts_tier_does_not_delay_vector_work() {
+        // Chunks are current (content matches, FTS stamp set); the FTS tier
+        // is backed off from a notes-rewrite failure while the model changed:
+        // the re-embed proceeds alone.
+        let mut p = ps("a", "h", "m", false);
+        p.notes_hash = "n2".into();
+        let mut r = row("a", "h", "m");
+        r.notes_hash = "n1".into();
+        r.fts_attempts = 3;
+        r.fts_last_attempt_at = Some(Utc::now().to_rfc3339());
+        let plan = plan(&[p], &[r], Some("m2"), Utc::now());
+        assert_eq!(plan.index.len(), 1);
+        let w = &plan.index[0];
+        assert!(!w.fts && !w.reextract && w.vectors);
+    }
+
+    #[test]
+    fn vector_work_waits_for_a_backed_off_reextract() {
+        // Content changed (the stored chunks are stale) but the FTS pass that
+        // would re-derive them is backed off: schedule nothing rather than
+        // embed stale chunks on every sweep.
+        let mut r = row("a", "h", "m");
+        r.fts_attempts = 2;
+        r.fts_last_attempt_at = Some(Utc::now().to_rfc3339());
+        let p = plan(&[ps("a", "h2", "m", false)], &[r], Some("m1"), Utc::now());
+        assert!(p.index.is_empty());
     }
 }

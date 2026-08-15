@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { initResponsiveSidebar, ui } from './state.svelte';
+import { initResponsiveSidebar, ui } from './ui.svelte';
 
 // Control the viewport width the code reads via matchMedia, and capture the
 // 'change' listener so we can simulate window resizes across the breakpoint.

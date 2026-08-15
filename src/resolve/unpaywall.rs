@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::http::HttpClient;
+use crate::http::{encode_doi_path, HttpClient};
 
 /// Query Unpaywall for a DOI and return the best OA PDF URL, if any.
 pub async fn fetch(
@@ -9,8 +9,12 @@ pub async fn fetch(
     doi: &str,
     email: &str,
 ) -> Result<Option<String>> {
-    let url = format!("{base}/v2/{doi}?email={email}");
-    let body = http.get_text(&url).await?;
+    // DOI encoded like Crossref's; the email rides as a real query param
+    // (`+` in a mail address would otherwise decode as a space server-side).
+    let req = http
+        .get(&format!("{base}/v2/{}", encode_doi_path(doi)))
+        .query(&[("email", email)]);
+    let body = http.send_text(req).await?;
     parse(&body)
 }
 

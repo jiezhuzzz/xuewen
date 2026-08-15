@@ -25,39 +25,6 @@ pub struct Summary {
     pub limitations: String,
 }
 
-/// Config-agnostic summary chat client (was `daily::tldr::ChatClient`).
-pub struct Summarizer {
-    inner: crate::llm::LlmClient,
-}
-
-impl Summarizer {
-    pub fn new(base_url: &str, model: &str, api_key: Option<String>) -> Self {
-        Self {
-            inner: crate::llm::LlmClient::new(base_url, model, api_key),
-        }
-    }
-
-    /// Build a summarizer for a resolved endpoint. `None` when no model OR no
-    /// key resolves (a keyless summary run would just 401 per paper).
-    pub fn from_resolved(r: &crate::config::Resolved) -> Option<Self> {
-        Some(Self { inner: r.client()? })
-    }
-
-    /// Keyless client pointed at a mock server. Test support only.
-    pub fn for_tests(base_url: &str, model: &str) -> Self {
-        Self::new(base_url, model, None)
-    }
-
-    pub async fn complete(&self, system: &str, user: &str) -> Result<String> {
-        self.inner.complete(system, user).await
-    }
-
-    /// The model id this summarizer uses (for stamping stored summaries).
-    pub fn model(&self) -> &str {
-        self.inner.model()
-    }
-}
-
 fn prompt(title: &str, abstract_text: &str, full_text: Option<&str>) -> String {
     let mut p = format!(
         "Summarize the following paper as a JSON object with exactly these string \
@@ -83,7 +50,7 @@ fn parse_summary(reply: &str) -> Result<Summary> {
 }
 
 async fn summary_attempt(
-    chat: &Summarizer,
+    chat: &crate::llm::LlmClient,
     title: &str,
     abstract_text: &str,
     full_text: Option<&str>,
@@ -97,7 +64,7 @@ async fn summary_attempt(
 /// Best-effort structured summary: full-text prompt, then abstract-only, then
 /// `None`. A parse failure counts as a call failure. Never propagates an error.
 pub async fn generate_summary(
-    chat: &Summarizer,
+    chat: &crate::llm::LlmClient,
     title: &str,
     abstract_text: &str,
     full_text: Option<&str>,
@@ -121,89 +88,11 @@ pub async fn generate_summary(
 mod tests {
     use super::*;
     use serde_json::json;
-    use wiremock::matchers::{body_partial_json, body_string_contains, header, method, path};
+    use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn chat_response(text: &str) -> serde_json::Value {
         json!({"choices": [{"message": {"role": "assistant", "content": text}}]})
-    }
-
-    #[tokio::test]
-    async fn complete_sends_model_messages_and_bearer() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
-            .and(header("authorization", "Bearer sk-test"))
-            .and(body_partial_json(json!({"model": "gpt-4o-mini"})))
-            .and(body_string_contains("hello user"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(chat_response("  hi  ")))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let r = crate::config::Resolved {
-            base_url: format!("{}/v1", server.uri()),
-            api_key: Some("sk-test".into()),
-            model: Some("gpt-4o-mini".into()),
-            reasoning_effort: None,
-        };
-        let c = Summarizer::from_resolved(&r).unwrap();
-        assert_eq!(c.complete("sys", "hello user").await.unwrap(), "hi");
-    }
-
-    #[tokio::test]
-    async fn complete_retries_429_then_succeeds() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(429))
-            .up_to_n_times(1)
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(chat_response("ok")))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let c = Summarizer::for_tests(&format!("{}/v1", server.uri()), "m");
-        assert_eq!(c.complete("s", "u").await.unwrap(), "ok");
-    }
-
-    #[tokio::test]
-    async fn complete_does_not_retry_400() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let c = Summarizer::for_tests(&format!("{}/v1", server.uri()), "m");
-        assert!(c.complete("s", "u").await.is_err());
-    }
-
-    #[test]
-    fn from_resolved_without_key_is_none() {
-        let r = crate::config::Resolved {
-            base_url: "https://api.openai.com/v1".into(),
-            api_key: None,
-            model: Some("m".into()),
-            reasoning_effort: None,
-        };
-        assert!(Summarizer::from_resolved(&r).is_none());
-    }
-
-    #[test]
-    fn from_resolved_without_model_is_none() {
-        let r = crate::config::Resolved {
-            base_url: "https://api.openai.com/v1".into(),
-            api_key: Some("sk-test".into()),
-            model: None,
-            reasoning_effort: None,
-        };
-        assert!(Summarizer::from_resolved(&r).is_none());
     }
 
     fn summary_json() -> serde_json::Value {
@@ -255,7 +144,7 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let c = Summarizer::for_tests(&format!("{}/v1", server.uri()), "m");
+        let c = crate::llm::LlmClient::new(&format!("{}/v1", server.uri()), "m", None);
         let out = generate_summary(&c, "Title", "An abstract.", Some("full text")).await;
         assert_eq!(out.unwrap().tldr, "One line.");
     }
@@ -273,7 +162,7 @@ mod tests {
             .expect(2)
             .mount(&server)
             .await;
-        let c = Summarizer::for_tests(&format!("{}/v1", server.uri()), "m");
+        let c = crate::llm::LlmClient::new(&format!("{}/v1", server.uri()), "m", None);
         let out = generate_summary(&c, "T", "A", Some("full text")).await;
         assert!(out.is_none());
     }

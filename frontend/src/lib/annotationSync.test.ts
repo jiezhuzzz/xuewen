@@ -6,6 +6,7 @@ import type { Annotation, NewAnnotation } from './types';
 
 const server: Record<string, Record<string, Annotation>> = {};
 let putFails: string | null = null;
+let listFails: string | null = null;
 
 /// What a payload looks like once it has been through the backend: the Rust
 /// side parses it into a `serde_json::Value`, whose map is a BTreeMap, so every
@@ -23,7 +24,10 @@ function serverJson<T>(v: T): T {
 }
 
 vi.mock('./api', () => ({
-  listAnnotations: vi.fn(async (paperId: string) => Object.values(server[paperId] ?? {})),
+  listAnnotations: vi.fn(async (paperId: string) => {
+    if (listFails) throw new Error(listFails);
+    return Object.values(server[paperId] ?? {});
+  }),
   putAnnotation: vi.fn(async (paperId: string, id: string, b: NewAnnotation) => {
     if (putFails) throw new Error(putFails);
     const saved: Annotation = {
@@ -37,16 +41,14 @@ vi.mock('./api', () => ({
     (server[paperId] ??= {})[id] = saved;
     return saved;
   }),
-  patchAnnotation: vi.fn(),
   deleteAnnotation: vi.fn(async (paperId: string, id: string) => {
     delete server[paperId]?.[id];
   }),
-  clearAnnotations: vi.fn(),
 }));
 
 import * as api from './api';
 import { createAnnotationSync, type SyncScope } from './annotationSync';
-import { annotationCount, annotations } from './annotationStore.svelte';
+import { annotationList, annotations } from './annotationStore.svelte';
 import { colorHex } from './annotationPalette';
 import { toWire } from './annotationAdapter';
 
@@ -147,6 +149,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   for (const k of Object.keys(server)) delete server[k];
   putFails = null;
+  listFails = null;
   annotations.byPaper = {};
   annotations.loaded = {};
   annotations.error = {};
@@ -168,7 +171,7 @@ describe('start', () => {
     await h.sync.start();
     expect(h.imported).toEqual([]);
     // The row is still in the store, so the panel can list it.
-    expect(annotationCount('p1')).toBe(1);
+    expect(annotationList('p1')).toHaveLength(1);
   });
 
   it('imports nothing, quietly, for a paper with no marks', async () => {
@@ -176,6 +179,18 @@ describe('start', () => {
     await h.sync.start();
     expect(h.imported).toEqual([]);
     expect(api.putAnnotation).not.toHaveBeenCalled();
+  });
+
+  it('skips the import when the sidecar load failed — unknown is not empty', async () => {
+    seed('p1', mark('a1'));
+    listFails = 'network down';
+    const h = harness();
+    await h.sync.start();
+    expect(h.imported).toEqual([]);
+    // Marks drawn this session still save: the subscription outlives the bail.
+    h.emit(created(mark('new1')));
+    await h.sync.flush();
+    expect(api.putAnnotation).toHaveBeenCalledWith('p1', 'new1', expect.anything());
   });
 });
 
@@ -328,7 +343,7 @@ describe('deleting', () => {
     h.emit(deleted(mark('a1')));
     await h.sync.flush();
     expect(api.deleteAnnotation).toHaveBeenCalledWith('p1', 'a1');
-    expect(annotationCount('p1')).toBe(0);
+    expect(annotationList('p1')).toHaveLength(0);
     // Re-firing a delete for a mark we no longer own must not fire again.
     h.emit(deleted(mark('a1')));
     await h.sync.flush();
@@ -350,7 +365,7 @@ describe('undo and redo', () => {
     h.emit(created(mark('a1')));
     await h.sync.flush();
     expect(server['p1']['a1']).toBeDefined();
-    expect(annotationCount('p1')).toBe(1);
+    expect(annotationList('p1')).toHaveLength(1);
   });
 
   it('leaves the row deleted when the undo is not redone', async () => {
@@ -361,7 +376,7 @@ describe('undo and redo', () => {
     h.emit(deleted(mark('a1')));
     await h.sync.flush();
     expect(server['p1']['a1']).toBeUndefined();
-    expect(annotationCount('p1')).toBe(0);
+    expect(annotationList('p1')).toHaveLength(0);
   });
 });
 
@@ -389,6 +404,38 @@ describe('closing the tab', () => {
     h.emit(created(mark('after')));
     await h.sync.flush();
     expect(api.putAnnotation).not.toHaveBeenCalled();
+  });
+
+  it('ignores an event arriving while destroy is still flushing', async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    await h.sync.start();
+    // Hold the create's write in flight so destroy()'s flush has to wait.
+    let release!: () => void;
+    vi.mocked(api.putAnnotation).mockImplementationOnce(
+      (paperId: string, id: string, b: NewAnnotation) =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              paper_id: paperId,
+              id,
+              ...b,
+              created_at: '2026-08-14T00:00:00Z',
+              updated_at: '2026-08-14T01:00:00Z',
+            });
+        }),
+    );
+    h.emit(created(mark('a1')));
+    const destroyed = h.sync.destroy();
+    // The plugin can still deliver events during the flush await (teardown
+    // churn, not a user edit). This must not arm a debounce timer that fires
+    // a write after the document is closed.
+    h.emit(updated(mark('a1', { contents: 'teardown noise' })));
+    release();
+    await destroyed;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(api.putAnnotation).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });
 

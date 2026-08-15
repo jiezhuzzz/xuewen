@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PaperTagEditor from './PaperTagEditor.svelte';
-import { tags } from '../lib/state.svelte';
+import { tags } from '../lib/library.svelte';
 import type { PaperDetail } from '../lib/types';
 
 function stubFetch(handler: (url: string, init?: RequestInit) => unknown) {

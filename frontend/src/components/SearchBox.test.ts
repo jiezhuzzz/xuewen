@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import SearchBox from './SearchBox.svelte';
-import { filters, searchMeta, searchOpts } from '../lib/state.svelte';
+import { filters, searchMeta, searchOpts } from '../lib/searchState.svelte';
 
 beforeEach(() => {
   filters.q = '';

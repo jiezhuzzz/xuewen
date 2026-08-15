@@ -19,6 +19,18 @@ fn stub_agent() -> std::sync::Arc<AgentService> {
     .unwrap()
 }
 
+/// Router with the agent service wired: the library ships no per-service
+/// constructors, so tests compose `AppState::base` themselves.
+fn router_with_agent(
+    pool: sqlx::SqlitePool,
+    root: PathBuf,
+    agent: std::sync::Arc<AgentService>,
+) -> axum::Router {
+    let mut state = xuewen::web::AppState::base(pool, root);
+    state.agent = Some(agent);
+    xuewen::web::build_router_from(state)
+}
+
 #[tokio::test]
 async fn models_report_unavailable_without_config() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
@@ -32,12 +44,7 @@ async fn models_report_unavailable_without_config() {
 #[tokio::test]
 async fn models_list_agent_backends() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    let server = TestServer::new(xuewen::web::build_router_with_agent(
-        pool,
-        root,
-        stub_agent(),
-    ))
-    .unwrap();
+    let server = TestServer::new(router_with_agent(pool, root, stub_agent())).unwrap();
     let v: serde_json::Value = server.get("/api/chat/models").await.json();
     assert_eq!(v["available"], true);
     assert_eq!(v["models"][0]["id"], "claude_code");
@@ -48,12 +55,7 @@ async fn models_list_agent_backends() {
 #[tokio::test]
 async fn send_streams_tool_and_deltas_and_persists_with_tools() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    let server = TestServer::new(xuewen::web::build_router_with_agent(
-        pool.clone(),
-        root,
-        stub_agent(),
-    ))
-    .unwrap();
+    let server = TestServer::new(router_with_agent(pool.clone(), root, stub_agent())).unwrap();
 
     let resp = server
         .post("/api/papers/p1/chat")
@@ -80,12 +82,7 @@ async fn send_streams_tool_and_deltas_and_persists_with_tools() {
 #[tokio::test]
 async fn send_error_persists_nothing() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    let server = TestServer::new(xuewen::web::build_router_with_agent(
-        pool.clone(),
-        root,
-        stub_agent(),
-    ))
-    .unwrap();
+    let server = TestServer::new(router_with_agent(pool.clone(), root, stub_agent())).unwrap();
     let resp = server
         .post("/api/papers/p1/chat")
         .json(&json!({"model_id": "codex", "message": "please fail"}))
@@ -101,12 +98,7 @@ async fn send_error_persists_nothing() {
 #[tokio::test]
 async fn send_with_empty_reply_errors_and_persists_nothing() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    let server = TestServer::new(xuewen::web::build_router_with_agent(
-        pool.clone(),
-        root,
-        stub_agent(),
-    ))
-    .unwrap();
+    let server = TestServer::new(router_with_agent(pool.clone(), root, stub_agent())).unwrap();
     let resp = server
         .post("/api/papers/p1/chat")
         .json(&json!({"model_id": "claude_code", "message": "answer with empty please"}))
@@ -125,30 +117,44 @@ async fn send_with_empty_reply_errors_and_persists_nothing() {
 async fn send_validates_model_message_paper_and_config() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
     let plain = TestServer::new(xuewen::web::build_router(pool.clone(), root.clone())).unwrap();
-    plain
+    // Chat errors carry the API-wide `{"error": string}` body — the shape
+    // the frontend's one extraction point (errorFromResponse) parses.
+    let resp = plain
         .post("/api/papers/p1/chat")
         .json(&json!({"model_id": "claude_code", "message": "hi"}))
-        .await
-        .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        .await;
+    resp.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        resp.json::<serde_json::Value>()["error"],
+        "agent ask is not configured"
+    );
 
-    let server = TestServer::new(xuewen::web::build_router_with_agent(
-        pool,
-        root,
-        stub_agent(),
-    ))
-    .unwrap();
-    server
+    let server = TestServer::new(router_with_agent(pool.clone(), root, stub_agent())).unwrap();
+    let resp = server
         .post("/api/papers/p1/chat")
         .json(&json!({"model_id": "nope", "message": "hi"}))
-        .await
-        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+        .await;
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        resp.json::<serde_json::Value>()["error"],
+        "unknown model_id"
+    );
     server
         .post("/api/papers/p1/chat")
         .json(&json!({"model_id": "claude_code", "message": "  "}))
         .await
         .assert_status(axum::http::StatusCode::BAD_REQUEST);
-    server
+    let resp = server
         .post("/api/papers/missing/chat")
+        .json(&json!({"model_id": "claude_code", "message": "hi"}))
+        .await;
+    resp.assert_status(axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(resp.json::<serde_json::Value>()["error"], "not found");
+
+    // Trashed paper -> 404 too: chat denies trashed papers (`Trash::Deny`).
+    xuewen::db::soft_delete(&pool, "p1").await.unwrap();
+    server
+        .post("/api/papers/p1/chat")
         .json(&json!({"model_id": "claude_code", "message": "hi"}))
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
@@ -157,17 +163,29 @@ async fn send_validates_model_message_paper_and_config() {
 #[tokio::test]
 async fn history_roundtrip_and_clear() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
-    xuewen::chat::store::insert_exchange(&pool, "p1", "q", "a", "Claude Code", None)
+    xuewen::chat::store::insert_exchange(
+        &pool,
+        "p1",
+        "q",
+        "a",
+        "Claude Code",
+        Some(r#"[{"name":"Read","detail":"paper.txt"}]"#),
+    )
+    .await
+    .unwrap();
+    // Unparseable stored tools_json must degrade to null, not fail the load.
+    xuewen::chat::store::insert_exchange(&pool, "p1", "q2", "a2", "Codex", Some("not json"))
         .await
         .unwrap();
-    let server = TestServer::new(xuewen::web::build_router_with_agent(
-        pool,
-        root,
-        stub_agent(),
-    ))
-    .unwrap();
+    let server = TestServer::new(router_with_agent(pool, root, stub_agent())).unwrap();
     let rows: serde_json::Value = server.get("/api/papers/p1/chat").await.json();
-    assert_eq!(rows.as_array().unwrap().len(), 2);
+    assert_eq!(rows.as_array().unwrap().len(), 4);
+    // The wire carries the tool log structured (the shape the live SSE `tool`
+    // events use), never the store's serialized `tools_json` TEXT.
+    assert_eq!(rows[1]["tools"][0]["name"], "Read");
+    assert!(rows[1].get("tools_json").is_none());
+    assert!(rows[0]["tools"].is_null());
+    assert!(rows[3]["tools"].is_null());
     server
         .delete("/api/papers/p1/chat")
         .await
@@ -175,7 +193,7 @@ async fn history_roundtrip_and_clear() {
     let rows: serde_json::Value = server.get("/api/papers/p1/chat").await.json();
     assert_eq!(rows.as_array().unwrap().len(), 0);
 
-    // Unknown paper: history is also guarded by live_paper.
+    // Unknown paper: history is also guarded by the trash-denying lookup.
     server
         .get("/api/papers/nope/chat")
         .await

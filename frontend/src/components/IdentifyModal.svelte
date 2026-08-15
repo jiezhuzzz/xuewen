@@ -7,7 +7,7 @@
     identifyState,
     pseudoDoiHint,
     runIdentifySearch,
-  } from '../lib/state.svelte';
+  } from '../lib/identify.svelte';
   import Modal from './Modal.svelte';
 
   // The staged identifier's value (direct never holds the candidate variant).

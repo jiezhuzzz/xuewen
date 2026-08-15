@@ -3,7 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import PdfQuickActions from './PdfQuickActions.svelte';
 import { chat } from '../lib/chat.svelte';
-import { dock, ui, viewer } from '../lib/state.svelte';
+import { viewer } from '../lib/tabs.svelte';
+import { dock, ui } from '../lib/ui.svelte';
 import type { PillHide } from '../lib/pillHide.svelte';
 
 /// A plain fake matching the real `PillHide` interface (see

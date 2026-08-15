@@ -4,7 +4,8 @@ use futures_util::StreamExt;
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::{feed, score, store, tldr, DailyService, ARXIV_ABS_BASE, ARXIV_PDF_BASE};
+use super::{feed, score, store, DailyService, ARXIV_ABS_BASE, ARXIV_PDF_BASE};
+use crate::summary::{generate_summary, FULL_TEXT_CAP};
 
 /// Pages of the PDF fed to the summary prompt.
 const SUMMARY_PDF_PAGES: u32 = 12;
@@ -155,13 +156,9 @@ async fn pipeline(svc: &DailyService, batch_date: &str) -> Result<PipelineOutcom
                     }
                 };
                 let code_url = full_text.as_deref().and_then(find_code_url);
-                let summary = tldr::generate_summary(
-                    &svc.chat,
-                    &c.title,
-                    &c.abstract_text,
-                    full_text.as_deref(),
-                )
-                .await;
+                let summary =
+                    generate_summary(&svc.chat, &c.title, &c.abstract_text, full_text.as_deref())
+                        .await;
                 store::DailyPaper {
                     batch_date: batch_date.to_string(),
                     rank: i as i64 + 1,
@@ -214,7 +211,7 @@ async fn fetch_pdf_text(svc: &DailyService, arxiv_id: &str) -> Result<String> {
         let result = (|| -> Result<String> {
             std::fs::write(&path, &bytes)?;
             let text = crate::pdf::extract_text(&path, SUMMARY_PDF_PAGES)?;
-            Ok(text.chars().take(tldr::FULL_TEXT_CAP).collect())
+            Ok(text.chars().take(FULL_TEXT_CAP).collect())
         })();
         let _ = std::fs::remove_file(&path);
         result
@@ -234,7 +231,8 @@ async fn prune_old(svc: &DailyService, batch_date: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::DailyConfig;
-    use crate::daily::{store, tldr::ChatClient, DailyService};
+    use crate::daily::{store, DailyService};
+    use crate::llm::LlmClient;
     use crate::search::{embedder::Embedder, vector::QdrantStore};
     use serde_json::json;
     use wiremock::matchers::{method, path};
@@ -329,7 +327,7 @@ Abstract: Very similar to the library.</summary>
             pool,
             Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4),
             QdrantStore::new(&server.uri(), "xuewen", 4).unwrap(),
-            ChatClient::for_tests(&format!("{}/v1", server.uri()), "m"),
+            LlmClient::new(&format!("{}/v1", server.uri()), "m", None),
             &format!("{}/atom", server.uri()),
             &format!("{}/pdf", server.uri()),
         )
@@ -351,7 +349,10 @@ Abstract: Very similar to the library.</summary>
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/atom/cs.AI+cs.LG"))
-            .and(wiremock::matchers::header("user-agent", "xuewen/0.1"))
+            .and(wiremock::matchers::header(
+                "user-agent",
+                crate::http::user_agent(None).as_str(),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_string(FEED))
             .mount(&server)
             .await;
@@ -421,7 +422,10 @@ Abstract: Very similar to the library.</summary>
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/atom/cs.AI+cs.LG"))
-            .and(wiremock::matchers::header("user-agent", "xuewen/0.1"))
+            .and(wiremock::matchers::header(
+                "user-agent",
+                crate::http::user_agent(None).as_str(),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_string(FEED))
             .mount(&server)
             .await;

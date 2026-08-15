@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Bookmark } from 'lucide-svelte';
-  import { filters } from '../lib/state.svelte';
+  import { filters } from '../lib/searchState.svelte';
   import { isPrefixMatch } from '../lib/tagTree';
   import type { PaperSummary } from '../lib/types';
 

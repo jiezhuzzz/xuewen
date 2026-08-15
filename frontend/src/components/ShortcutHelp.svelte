@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SHORTCUT_GROUPS } from '../lib/keymap';
-  import { ui } from '../lib/state.svelte';
+  import { ui } from '../lib/ui.svelte';
   import Modal from './Modal.svelte';
 </script>
 

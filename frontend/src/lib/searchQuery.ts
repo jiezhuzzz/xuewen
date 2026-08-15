@@ -25,15 +25,21 @@ interface Token {
   value: string;
 }
 
+/// Token separators, exactly Rust's `u8::is_ascii_whitespace` (space, \t,
+/// \n, \f, \r — no \v). JS `\s` would also split on NBSP and other Unicode
+/// whitespace the canonical parser keeps inside a token, desyncing the pill
+/// bar from what the server actually filters on.
+const ASCII_WHITESPACE = /[ \t\n\f\r]/;
+
 function tokenize(raw: string): Token[] {
   const out: Token[] = [];
   let i = 0;
   while (i < raw.length) {
-    while (i < raw.length && /\s/.test(raw[i])) i += 1;
+    while (i < raw.length && ASCII_WHITESPACE.test(raw[i])) i += 1;
     if (i >= raw.length) break;
     const start = i;
     let inQuotes = false;
-    while (i < raw.length && (inQuotes || !/\s/.test(raw[i]))) {
+    while (i < raw.length && (inQuotes || !ASCII_WHITESPACE.test(raw[i]))) {
       if (raw[i] === '"') inQuotes = !inQuotes;
       i += 1;
     }

@@ -3,7 +3,7 @@ import { HIDE_DELAY_MS, HOT_ZONE_PX, holdVisible, toolbarVisible, type ToolbarHo
 
 const none: ToolbarHold = {
   zen: true, hotZone: false, pointerOver: false,
-  focusWithin: false, findOpen: false, pageEditing: false,
+  focusWithin: false, findOpen: false, localHold: false,
 };
 
 describe('holdVisible', () => {
@@ -16,7 +16,7 @@ describe('holdVisible', () => {
   });
 
   it.each([
-    ['hotZone'], ['pointerOver'], ['focusWithin'], ['findOpen'], ['pageEditing'],
+    ['hotZone'], ['pointerOver'], ['focusWithin'], ['findOpen'], ['localHold'],
   ] as const)('%s alone holds the toolbar visible in zen', (k) => {
     expect(holdVisible({ ...none, [k]: true })).toBe(true);
   });

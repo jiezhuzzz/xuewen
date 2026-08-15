@@ -1,10 +1,15 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { copyText, viewer } from '../lib/state.svelte';
+  import { copyText } from '../lib/clipboard';
+  import { viewer } from '../lib/tabs.svelte';
   import { pdfUrl } from '../lib/api';
   import { useDocumentManagerCapability } from '@embedpdf/plugin-document-manager/svelte';
   import { useSelectionCapability } from '@embedpdf/plugin-selection/svelte';
-  import { planOpens, reconcileDocuments } from '../lib/pdfDeck';
+  import { useAnnotationCapability } from '@embedpdf/plugin-annotation/svelte';
+  import { applyToolDefaults } from '../lib/annotationAdapter';
+  import { annotationTools } from '../lib/annotationState.svelte';
+  import { colorHex } from '../lib/annotationPalette';
+  import { DocumentOpenError, openDocumentFully, planOpens, reconcileDocuments } from '../lib/pdfDeck';
   import { createPdfCopy, forgetPdfSelection, registerPdfCopy } from '../lib/pdfCopy';
   import { runWhenIdle } from '../lib/idle';
   import { toast } from '../lib/toasts.svelte';
@@ -49,6 +54,17 @@
     };
   });
 
+  // The palette color → tool defaults push. Tool defaults are GLOBAL in the
+  // annotation plugin, so this lives here for the same reason the ⌘C wiring
+  // does: PdfDeck mounts exactly once, whereas each open tab's AnnotationTools
+  // would redundantly re-push the same five defaults per color change.
+  const annotationCap = useAnnotationCapability();
+  $effect(() => {
+    const cap = annotationCap.provides;
+    if (!cap) return;
+    applyToolDefaults(cap, colorHex(annotationTools.color));
+  });
+
   // Documents we've asked the manager to open. Plain (non-reactive) set used to
   // diff against `viewer.tabs` so we open/close each document exactly once.
   const opened = new Set<string>();
@@ -58,21 +74,19 @@
   let draining = false;
   let cancelIdle: (() => void) | null = null;
 
-  // openDocumentUrl's task rejects if the manager's maxDocuments cap is hit (or
-  // the document errors before an id is assigned). Roll back so a later effect
-  // run (the next tab change) retries the open instead of leaving the tab
-  // stranded with no document.
+  // openDocumentFully (lib/pdfDeck.ts) owns the outer-task-resolves-
+  // synchronously trap and rejects with the failing phase. Only an 'open'
+  // failure (maxDocuments cap hit, or the document errored before an id was
+  // assigned) rolls back, so a later effect run (the next tab change) retries
+  // instead of leaving the tab stranded with no document; a 'load' failure
+  // keeps the id in `opened` — retrying a broken PDF on every tab change
+  // would loop forever.
   function open(cap: DocumentManager, id: string, done: () => void): void {
     opened.add(id);
-    cap.openDocumentUrl({ url: pdfUrl(id), documentId: id, autoActivate: false }).wait(
-      // The outer task resolves SYNCHRONOUSLY, carrying the real load task
-      // nested inside it (plugin-document-manager's openDocumentUrl:169), so
-      // waiting on the outer one reports "loaded" before a single byte has been
-      // read — which would let background tabs start immediately, defeating the
-      // whole point of deferring them. Chain on the inner task instead.
-      ({ task }) => task.wait(done, done),
-      () => {
-        opened.delete(id);
+    openDocumentFully(cap, { url: pdfUrl(id), documentId: id }).then(
+      () => done(),
+      (e) => {
+        if (e instanceof DocumentOpenError && e.phase === 'open') opened.delete(id);
         done();
       },
     );

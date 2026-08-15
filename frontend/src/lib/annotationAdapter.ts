@@ -47,13 +47,19 @@ export function colorPatch(kind: AnnotationKind, hex: string): Record<string, st
   return kind === 'text_comment' ? { strokeColor: hex } : { color: hex, strokeColor: hex };
 }
 
-/// Tools whose mark is driven by a text selection (as opposed to a click).
-export const TEXT_MARKUP_KINDS: readonly AnnotationKind[] = [
-  'highlight',
-  'underline',
-  'strikeout',
-  'squiggly',
-];
+/// Push the palette color into every tool's defaults. Tool defaults are
+/// registry-GLOBAL in the plugin — one set of tools shared by every open
+/// document — so this belongs to a once-mounted caller (PdfDeck), never a
+/// per-tab component. Structural capability slice for the same testability
+/// reason as SyncScope.
+export function applyToolDefaults(
+  cap: { setToolDefaults(toolId: string, patch: Record<string, string>): void },
+  hex: string,
+): void {
+  for (const [kind, toolId] of Object.entries(TOOL_BY_KIND)) {
+    cap.setToolDefaults(toolId, colorPatch(kind as AnnotationKind, hex));
+  }
+}
 
 /// The subtype whitelist. An annotation whose subtype is absent here is never
 /// persisted: it is either a type we don't offer, or — much more likely — a

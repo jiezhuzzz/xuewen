@@ -1,27 +1,26 @@
 <script lang="ts">
   import { Bookmark, ChevronRight, Ellipsis, Star } from 'lucide-svelte';
-  import { onMount, tick } from 'svelte';
-  import ConfirmButtons from './ConfirmButtons.svelte';
+  import { onMount } from 'svelte';
   import NewProjectInput from './NewProjectInput.svelte';
-  import { clickOutside } from '../lib/clickOutside';
-  import { menuItems, menuNavKeydown } from '../lib/menuNav';
-  import { clampMenuPosition } from '../lib/popoverPosition';
+  import PillMenu from './PillMenu.svelte';
   import {
     createNewProject,
     deleteTag,
-    filters,
     loadTags,
     projects,
     removeProject,
     renameProject,
     renameTag,
+    tags,
+  } from '../lib/library.svelte';
+  import {
+    filters,
     setProjectFilter,
     setSortFilter,
     setStarFilter,
     setStatusFilter,
     setTagFilter,
-    tags,
-  } from '../lib/state.svelte';
+  } from '../lib/searchState.svelte';
   import type { Sort, StatusFilter } from '../lib/types';
 
   function onStatus(e: Event) {
@@ -98,16 +97,8 @@
   // mouse users never see it and the bar stays gap-free.
   type PillKind = 'project' | 'tag';
   let openMenu = $state<{ kind: PillKind; id: string; name: string } | null>(null);
-  let menuMode = $state<'menu' | 'rename' | 'delete'>('menu');
-  let renameValue = $state('');
-  let renameInput = $state<HTMLInputElement | null>(null);
-  let menuBusy = $state(false);
-  let menuError = $state<string | null>(null);
-  let menuEl = $state<HTMLDivElement | null>(null);
-  let menuX = 0;
-  let menuY = 0;
-  let left = $state(0);
-  let top = $state(0);
+  let menuX = $state(0);
+  let menuY = $state(0);
 
   function openPillMenu(e: MouseEvent, kind: PillKind, id: string, name: string) {
     e.preventDefault();
@@ -123,133 +114,68 @@
       menuY = e.clientY;
     }
     openMenu = { kind, id, name };
-    menuMode = 'menu';
-    menuBusy = false;
-    menuError = null;
   }
   function closeMenu() {
     openMenu = null;
-    menuMode = 'menu';
-    menuError = null;
-  }
-
-  // Focus moves onto the first action on open (WAI menu pattern) and back to
-  // wherever it was on close — right-click doesn't move DOM focus by itself,
-  // so without this, Escape/arrows would land on the page underneath.
-  let prevFocus: HTMLElement | null = null;
-  $effect(() => {
-    if (openMenu) {
-      prevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      void tick().then(() => menuItems(menuEl)[0]?.focus());
-    } else {
-      prevFocus?.focus();
-      prevFocus = null;
-    }
-  });
-
-  // Rename focuses its input; the delete confirm focuses its first button so
-  // Enter-ing "Delete" flows straight into confirm-or-cancel by keyboard.
-  $effect(() => {
-    if (menuMode === 'rename') renameInput?.focus();
-    else if (menuMode === 'delete') menuEl?.querySelector<HTMLElement>('button')?.focus();
-  });
-
-  // Re-runs when the menu resizes (mode switch).
-  $effect(() => {
-    if (!openMenu || !menuEl) return;
-    menuMode; // re-clamp when rename/delete changes the menu's height
-    const p = clampMenuPosition(menuX, menuY, menuEl);
-    left = p.left;
-    top = p.top;
-  });
-
-  // Escape steps back one level (delete-confirm/rename → action list →
-  // closed). The rename input handles its own Escape and stops propagation,
-  // so this only sees it from the action list and the delete confirm.
-  function onWindowKeydown(e: KeyboardEvent) {
-    if (!openMenu || e.key !== 'Escape') return;
-    if (menuMode === 'menu') closeMenu();
-    else cancelRename();
-  }
-  function onMenuKeydown(e: KeyboardEvent) {
-    if (menuMode === 'menu') menuNavKeydown(menuEl, e);
   }
   function isMenuOpen(kind: PillKind, id: string): boolean {
     return openMenu?.kind === kind && openMenu.id === id;
+  }
+
+  async function renamePill(name: string) {
+    if (!openMenu) return;
+    if (openMenu.kind === 'project') await renameProject(openMenu.id, { name });
+    else await renameTag(openMenu.id, name);
+  }
+  async function deletePill() {
+    if (!openMenu) return;
+    if (openMenu.kind === 'project') await removeProject(openMenu.id);
+    else await deleteTag(openMenu.id);
   }
 
   // A keyboard Enter/Space "click" has no coordinates, so openPillMenu's
   // (0,0) fallback anchors the menu to this trigger's own rect.
   const kbdTriggerClasses =
     'sr-only rounded-full text-stone-400 focus-visible:not-sr-only dark:text-stone-500';
-
-  function startRename() {
-    if (!openMenu) return;
-    renameValue = openMenu.name;
-    menuMode = 'rename';
-    menuError = null;
-  }
-  function cancelRename() {
-    menuMode = 'menu';
-    menuError = null;
-  }
-  async function submitRename() {
-    if (!openMenu) return;
-    const name = renameValue.trim();
-    if (!name || name === openMenu.name) {
-      closeMenu();
-      return;
-    }
-    menuBusy = true;
-    menuError = null;
-    try {
-      if (openMenu.kind === 'project') {
-        await renameProject(openMenu.id, { name });
-      } else {
-        await renameTag(openMenu.id, name);
-      }
-      closeMenu();
-    } catch (e) {
-      menuError = (e as Error).message;
-    } finally {
-      menuBusy = false;
-    }
-  }
-  function onRenameKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      void submitRename();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      cancelRename();
-    }
-  }
-
-  function startDelete() {
-    menuMode = 'delete';
-    menuError = null;
-  }
-  async function confirmDelete() {
-    if (!openMenu) return;
-    menuBusy = true;
-    menuError = null;
-    try {
-      if (openMenu.kind === 'project') {
-        await removeProject(openMenu.id);
-      } else {
-        await deleteTag(openMenu.id);
-      }
-      closeMenu();
-    } catch (e) {
-      menuError = (e as Error).message;
-    } finally {
-      menuBusy = false;
-    }
-  }
 </script>
 
-<svelte:window onkeydown={onWindowKeydown} />
+<!-- One pill + sr-only "⋯" trigger pair; project and tag pills differ only
+     in palette, icon, and toggle handler. (Starred stays hand-written — it
+     has no menu.) -->
+{#snippet pill(p: {
+  kind: PillKind;
+  id: string;
+  name: string;
+  count: number;
+  active: boolean;
+  palette: (active: boolean) => string;
+  icon?: typeof Bookmark;
+  onToggle: () => void;
+})}
+  <button
+    type="button"
+    aria-pressed={p.active}
+    onclick={p.onToggle}
+    oncontextmenu={(e) => openPillMenu(e, p.kind, p.id, p.name)}
+    class={p.palette(p.active)}
+  >
+    {#if p.icon}
+      <p.icon size={11} />
+    {/if}
+    <span>{p.name}</span>
+    <span class="tabular-nums opacity-70">{p.count}</span>
+  </button>
+  <button
+    type="button"
+    aria-label={`${p.name} options`}
+    aria-haspopup="menu"
+    aria-expanded={isMenuOpen(p.kind, p.id)}
+    onclick={(e) => openPillMenu(e, p.kind, p.id, p.name)}
+    class={kbdTriggerClasses}
+  >
+    <Ellipsis size={12} />
+  </button>
+{/snippet}
 
 <div class="flex gap-2">
   <select value={filters.status} aria-label="Filter by status" onchange={onStatus} class={selectClasses}>
@@ -284,27 +210,16 @@
   {#if projectsOpen}
   <div class="mt-1 flex flex-wrap items-center gap-1.5">
     {#each projects.items as p (p.id)}
-      <button
-        type="button"
-        aria-pressed={filters.project === p.id}
-        onclick={() => onProjectPill(p.id)}
-        oncontextmenu={(e) => openPillMenu(e, 'project', p.id, p.name)}
-        class={projectPillClasses(filters.project === p.id)}
-      >
-        <Bookmark size={11} />
-        <span>{p.name}</span>
-        <span class="tabular-nums opacity-70">{p.paper_count}</span>
-      </button>
-      <button
-        type="button"
-        aria-label={`${p.name} options`}
-        aria-haspopup="menu"
-        aria-expanded={isMenuOpen('project', p.id)}
-        onclick={(e) => openPillMenu(e, 'project', p.id, p.name)}
-        class={kbdTriggerClasses}
-      >
-        <Ellipsis size={12} />
-      </button>
+      {@render pill({
+        kind: 'project',
+        id: p.id,
+        name: p.name,
+        count: p.paper_count,
+        active: filters.project === p.id,
+        palette: projectPillClasses,
+        icon: Bookmark,
+        onToggle: () => onProjectPill(p.id),
+      })}
     {/each}
     <NewProjectInput
       onCreate={(name) => createNewProject(name)}
@@ -342,102 +257,33 @@
       <span>Starred</span>
     </button>
     {#each tags.items as t (t.id)}
-      <button
-        type="button"
-        aria-pressed={filters.tag === t.name}
-        onclick={() => onTagPill(t.name)}
-        oncontextmenu={(e) => openPillMenu(e, 'tag', t.id, t.name)}
-        class={tagPillClasses(filters.tag === t.name)}
-      >
-        <span>{t.name}</span>
-        <span class="tabular-nums opacity-70">{t.paper_count}</span>
-      </button>
-      <button
-        type="button"
-        aria-label={`${t.name} options`}
-        aria-haspopup="menu"
-        aria-expanded={isMenuOpen('tag', t.id)}
-        onclick={(e) => openPillMenu(e, 'tag', t.id, t.name)}
-        class={kbdTriggerClasses}
-      >
-        <Ellipsis size={12} />
-      </button>
+      {@render pill({
+        kind: 'tag',
+        id: t.id,
+        name: t.name,
+        count: t.paper_count,
+        active: filters.tag === t.name,
+        palette: tagPillClasses,
+        onToggle: () => onTagPill(t.name),
+      })}
     {/each}
   </div>
   {/if}
 </div>
 
 {#if openMenu}
-  <!-- Dismiss on any pointerdown outside the menu. The right-click that
-       opened it fires its pointerdown BEFORE the menu mounts (and with it
-       the action's listener) — no immediate re-close. -->
-  <div
-    bind:this={menuEl}
-    use:clickOutside={closeMenu}
-    role="menu"
-    aria-label={`${openMenu.name} options`}
-    tabindex="-1"
-    onkeydown={onMenuKeydown}
-    class="fixed z-50 w-36 rounded-xl border border-stone-200 bg-paper/95 p-1.5 shadow-lg backdrop-blur dark:border-stone-800 dark:bg-soot/95"
-    style={`left:${left}px;top:${top}px`}
-  >
-    {#if menuMode === 'menu'}
-      <button
-        type="button"
-        role="menuitem"
-        onclick={startRename}
-        class="block w-full rounded-lg px-2 py-1 text-left text-xs text-stone-600 hover:bg-parchment hover:text-ink dark:text-stone-300 dark:hover:bg-stone-800"
-      >
-        Rename
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onclick={startDelete}
-        class="block w-full rounded-lg px-2 py-1 text-left text-xs text-red-600 hover:bg-red-600/10 dark:text-red-400"
-      >
-        Delete
-      </button>
-    {:else if menuMode === 'rename'}
-      <input
-        bind:this={renameInput}
-        bind:value={renameValue}
-        type="text"
-        aria-label={`Rename ${openMenu.name}`}
-        onkeydown={onRenameKeydown}
-        class="w-full rounded-lg border border-stone-200 bg-paper px-1.5 py-1 text-xs outline-none focus:border-indigo-600 dark:border-stone-700 dark:bg-stone-800"
-      />
-      <div class="mt-1 flex justify-end gap-1">
-        <button
-          type="button"
-          onclick={cancelRename}
-          class="rounded-lg px-2 py-0.5 text-xs text-stone-500 hover:bg-parchment dark:text-stone-400 dark:hover:bg-stone-800"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={menuBusy}
-          onclick={() => void submitRename()}
-          class="rounded-lg bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50 dark:bg-indigo-500"
-        >
-          Save
-        </button>
-      </div>
-    {:else if menuBusy}
-      <span class="block px-1 py-0.5 text-xs text-stone-500 dark:text-stone-400">Deleting…</span>
-    {:else}
-      <p class="px-1 text-xs text-stone-600 dark:text-stone-300">Delete this {openMenu.kind}?</p>
-      <div class="mt-1 flex justify-end gap-1">
-        <ConfirmButtons
-          confirmLabel="Delete"
-          onConfirm={() => void confirmDelete()}
-          onCancel={() => (menuMode = 'menu')}
-        />
-      </div>
-    {/if}
-    {#if menuError}
-      <p class="mt-1 px-1 text-chip text-red-600 dark:text-red-400">{menuError}</p>
-    {/if}
-  </div>
+  <!-- Keyed on the open record (a fresh object per open): reopening on
+       another pill remounts the menu, resetting mode/busy/error to a fresh
+       action list. -->
+  {#key openMenu}
+    <PillMenu
+      kind={openMenu.kind}
+      name={openMenu.name}
+      x={menuX}
+      y={menuY}
+      onRename={renamePill}
+      onDelete={deletePill}
+      onClose={closeMenu}
+    />
+  {/key}
 {/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { X } from 'lucide-svelte';
-  import { addTagToPaper, removeTagFromPaper, tags } from '../lib/state.svelte';
+  import { addTagToPaper, removeTagFromPaper, tags } from '../lib/library.svelte';
   import type { PaperDetail } from '../lib/types';
 
   let { d }: { d: PaperDetail } = $props();

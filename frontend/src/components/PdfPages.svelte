@@ -6,11 +6,12 @@
   import { ZoomGestureWrapper } from '@embedpdf/plugin-zoom/svelte';
   import { DocumentContent } from '@embedpdf/plugin-document-manager/svelte';
   import { RenderLayer } from '@embedpdf/plugin-render/svelte';
-  import { SelectionLayer, useSelectionCapability } from '@embedpdf/plugin-selection/svelte';
+  import { SelectionLayer } from '@embedpdf/plugin-selection/svelte';
   import { GlobalPointerProvider, PagePointerProvider } from '@embedpdf/plugin-interaction-manager/svelte';
   import { TilingLayer } from '@embedpdf/plugin-tiling/svelte';
   import PdfToolbar from './PdfToolbar.svelte';
   import PdfQuickActions from './PdfQuickActions.svelte';
+  import PdfFallback from './PdfFallback.svelte';
   import PdfFindBar from './PdfFindBar.svelte';
   import PdfSidePanel from './PdfSidePanel.svelte';
   import TranslateBubble from './TranslateBubble.svelte';
@@ -25,18 +26,16 @@
   import { ANNOTATION_RENDERERS } from '../lib/annotationRenderers';
   import { createAnnotationSync } from '../lib/annotationSync';
   import { toast } from '../lib/toasts.svelte';
-  import { loadCitations, type EngineLike } from '../lib/loadCitations';
-  import { libraryTitleIndex, matchReferences } from '../lib/citationMatch';
-  import { parseCitations } from '../lib/api';
+  import { runCitationPipeline } from '../lib/citationPipeline';
+  import type { EngineLike } from '../lib/loadCitations';
+  import { onPdfSelectionSettled, pdfSelectionFetchPending } from '../lib/pdfCopy';
   import { runWhenIdle } from '../lib/idle';
-  import { mergeStructured } from '../lib/refMerge';
-  import { resolveAuthorYearMarkers } from '../lib/textCitations';
   import { panelWidth, reader } from '../lib/readerState.svelte';
-  import { pdfAppearance } from '../lib/state.svelte';
+  import { pdfAppearance } from '../lib/theme.svelte';
   import { createPillHide } from '../lib/pillHide.svelte';
   import { Spring } from 'svelte/motion';
-  import { prefersReducedMotion, SPRINGS } from '../lib/motion';
-  import { appSettings } from '../lib/state.svelte';
+  import { springTo, SPRINGS } from '../lib/motion';
+  import { appSettings } from '../lib/ui.svelte';
   import { requestTranslate, translateTrigger } from '../lib/translate.svelte';
   import type { CitationData } from '../lib/citations';
   import type { PaperSummary } from '../lib/types';
@@ -52,7 +51,8 @@
   // Annotations ⇄ the SQLite sidecar. The tab id IS the paper id, so one sync
   // per mounted tab covers exactly one paper. Both capabilities start null and
   // settle once, so this effect runs at most twice; re-running is safe because
-  // `destroy` flushes before it stops listening.
+  // `destroy` still flushes pending writes and the replacement sync
+  // re-subscribes synchronously in `start()`, so no event falls in the gap.
   //
   // Withholding the id until the document is loaded is load-bearing. The
   // plugin creates a document's annotation state in `onDocumentLoadingStarted`,
@@ -84,12 +84,12 @@
     return () => void sync.destroy();
   });
 
-  // Selection → translate wiring (Task 7). `getSelectedText()` takes only an
-  // optional documentId — no doc/page object crosses into the engine call —
-  // so the $state.snapshot/DataCloneError gotcha above does not apply here.
-  const selectionCap = useSelectionCapability();
+  // Selection → translate wiring (Task 7) — see the effect below.
   let lastPointer = $state<{ x: number; y: number } | null>(null);
   let bubble = $state<{ x: number; y: number; text: string } | null>(null);
+  // Plain fields, not $state: read and written only inside event handlers.
+  let pointerDown = false;
+  let parkedText: string | null = null;
 
   // Shared zen auto-hide for the floating pills (see lib/pillHide.svelte.ts).
   const pill = createPillHide(() => documentId);
@@ -106,17 +106,20 @@
   // $effect below drives every subsequent update via panelW.target.
   const panelW = new Spring(reader.panel ? panelWidth(reader.panel) : 0, SPRINGS.pane);
   $effect(() => {
-    const target = reader.panel ? panelWidth(reader.panel) : 0;
-    if (import.meta.env.MODE === 'test' || prefersReducedMotion()) {
-      panelW.set(target, { instant: true });
-    } else {
-      panelW.target = target;
-    }
+    springTo(panelW, reader.panel ? panelWidth(reader.panel) : 0);
   });
 
   let citations = $state<CitationData>({ references: [], markers: [] });
   let matches = $state<Map<number, PaperSummary>>(new Map());
-  let pageSizes = $state<{ width: number; height: number }[]>([]);
+  // Pure projection of the document's page geometry (PDF points, for the
+  // citation overlay) — no engine call touches it, so a reactive read of the
+  // $state-proxied document is fine here.
+  const pageSizes = $derived(
+    docState.current?.document?.pages.map((p) => ({
+      width: p.size.width,
+      height: p.size.height,
+    })) ?? [],
+  );
 
   // Extract citation markers + match them against the library ONCE per document.
   // `docState.current` (and its `.document`) is reassigned on any core change —
@@ -137,47 +140,25 @@
     const rawDoc = docState.current?.document ?? null;
     if (!registry || !rawDoc || extractedFor === documentId) return;
     extractedFor = documentId;
-    pageSizes = rawDoc.pages.map((p) => ({ width: p.size.width, height: p.size.height }));
     const engine = registry.getEngine();
     // The document/page objects are Svelte $state proxies (EmbedPDF's core
     // wraps them for reactivity). PDFium now runs in a worker (see
     // pdfEngine.ts), and every engine call round-trips doc/page through
     // postMessage — a live Proxy throws DataCloneError there. Snapshot once
-    // into plain data so loadCitations can hand it back to the worker.
+    // into plain data so the pipeline can hand it back to the worker.
     const doc = $state.snapshot(rawDoc);
     // Extraction is PDFium work (now off the main thread, in the worker) —
     // wait for idle so the first pages paint before we start crawling
-    // annotations/text.
+    // annotations/text. The pipeline itself (phases, cancellation points,
+    // progressive publishes) lives in lib/citationPipeline.ts.
     cancelExtractionIdle = runWhenIdle(() => {
-      void (async () => {
-        try {
-          const data = await loadCitations(engine as unknown as EngineLike, doc);
-          if (extractionCancelled) return;
-          citations = data;
-          // Whole-library title index, independent of the current UI filter
-          // and shared across all open tabs (one fetch + normalization pass).
-          const index = await libraryTitleIndex();
-          if (extractionCancelled) return;
-          matches = matchReferences(data.references, index);
-
-          let refs = data.references;
-          if (refs.length > 0) {
-            // Structured upgrade — one POST per open; failure keeps raw text.
-            const structured = await parseCitations(documentId, refs.map((r) => r.rawText));
-            if (extractionCancelled) return;
-            if (structured) refs = mergeStructured(refs, structured);
-          }
-          // Fallback author-year markers resolve best with structured entries,
-          // and degrade to raw entry heads when the parse is unavailable.
-          const extra = data.pendingAuthorYear?.length
-            ? resolveAuthorYearMarkers(data.pendingAuthorYear, refs)
-            : [];
-          citations = { references: refs, markers: [...data.markers, ...extra] };
-          matches = matchReferences(refs, index);
-        } catch (err) {
-          console.warn('citation extraction failed', err); // reader still works
-        }
-      })();
+      void runCitationPipeline(engine as unknown as EngineLike, doc, documentId, {
+        isCancelled: () => extractionCancelled,
+        onUpdate: (u) => {
+          if (u.citations) citations = u.citations;
+          if (u.matches) matches = u.matches;
+        },
+      });
     });
   });
 
@@ -186,43 +167,54 @@
     cancelExtractionIdle?.();
   });
 
-  // Subscribe to selection-end while the translate feature is on. Auto mode
-  // fires requestTranslate immediately; Manual mode shows the bubble instead,
-  // which the user must click (see TranslateBubble.svelte). onEndSelection's
-  // event carries no text — getSelectedText() is fetched separately per the
-  // plugin's PdfTask API (same .toPromise() pattern as loadCitations.ts).
-  // Anchored at the window-level capture-phase pointerup (svelte:window handler
-  // above), not page-space math — the selection plugin can stop bubbling, so
-  // a div-level handler would leave lastPointer stale. useSelectionCapability()
-  // is a registry-wide SINGLETON, not per-document — every open tab keeps its
-  // own (hidden) PdfPages mounted and running this effect, so every tab's
-  // listener fires on ANY tab's selection. Guard on documentId (both the
-  // event and the getSelectedText call) so only the tab that owns the
-  // selection reacts. The anchor coords are captured synchronously, before
-  // the await, so a pointer event during the await can't move them.
+  // Auto mode fires requestTranslate; Manual mode shows the bubble instead,
+  // which the user must click (see TranslateBubble.svelte). Anchored at the
+  // window-level capture-phase pointerup (svelte:window handler below), not
+  // page-space math — the selection plugin can stop bubbling, so a div-level
+  // handler would leave lastPointer stale.
+  function fireTranslate(text: string): void {
+    const at = lastPointer ?? { x: window.innerWidth / 2, y: 200 };
+    if (translateTrigger() === 'auto') {
+      bubble = null;
+      void requestTranslate(text, at);
+    } else {
+      bubble = { x: at.x, y: at.y, text };
+    }
+  }
+
+  // Subscribe to the ⌘C copier's settled-selection feed while the translate
+  // feature is on — NOT to the plugin's onEndSelection, which never fires for
+  // a drag released in the gutter, past the margin, over the toolbar, or on
+  // another page (see SETTLE_MS in pdfCopy.ts); the copier's trailing debounce
+  // on onSelectionChange catches every one of those, and its cache means no
+  // second PDFium round-trip for text it already fetched. The feed is
+  // module-wide and every open tab keeps its own (hidden) PdfPages mounted, so
+  // guard on documentId — only the tab that owns the selection reacts. A
+  // settle can land MID-drag (a >200ms pause with the button still down),
+  // which must not fire a paid auto-translation per pause: text arriving
+  // while the pointer is down is parked and fired from the capture-phase
+  // pointerup below (which refreshes the anchor first, and drops the parked
+  // text as stale when a newer fetch is still pending); text arriving with
+  // the pointer up — the common release-on-page drag, double/triple-click,
+  // and a post-release settle — fires immediately.
   $effect(() => {
-    const cap = selectionCap.provides;
-    if (!cap || !appSettings.translate.enabled) return;
-    const unsub = cap.onEndSelection((ev) => {
-      if (ev.documentId !== documentId) return;
-      const at = lastPointer ?? { x: window.innerWidth / 2, y: 200 };
-      void (async () => {
-        const parts = await cap.getSelectedText(documentId).toPromise();
-        const text = (parts ?? []).join(' ').trim();
-        if (!text) {
-          bubble = null;
-          return;
-        }
-        if (translateTrigger() === 'auto') {
-          bubble = null;
-          void requestTranslate(text, at);
-        } else {
-          bubble = { x: at.x, y: at.y, text };
-        }
-      })();
+    if (!appSettings.translate.enabled) return;
+    const unsub = onPdfSelectionSettled((docId, text) => {
+      if (docId !== documentId) return;
+      // The copier caches the parts '\n'-joined; translate sends prose.
+      const prose = text.split('\n').join(' ').trim();
+      if (!prose) {
+        // The selection was cleared (e.g. a click on the page) — dismiss.
+        parkedText = null;
+        bubble = null;
+        return;
+      }
+      if (pointerDown) parkedText = prose;
+      else fireTranslate(prose);
     });
     return () => {
-      unsub?.();
+      unsub();
+      parkedText = null;
       bubble = null;
     };
   });
@@ -278,7 +270,27 @@
 
 <svelte:window
   onpointermove={(e) => pill.onWindowMove(e)}
-  onpointerupcapture={(e) => (lastPointer = { x: e.clientX, y: e.clientY })}
+  onpointerdowncapture={() => (pointerDown = true)}
+  onpointerupcapture={(e) => {
+    // Anchor first: a parked translate fired below must pop at this release.
+    lastPointer = { x: e.clientX, y: e.clientY };
+    pointerDown = false;
+    const parked = parkedText;
+    parkedText = null;
+    // A pending settle/end fetch means the selection kept changing after the
+    // parked text was fetched: it is stale, and that fetch will announce the
+    // final text with the pointer now up and fire the translation itself
+    // (deduped by the copier if it comes back unchanged). Firing the parked
+    // copy too would pay for two translations of one drag — the first with
+    // text the user never finally selected.
+    if (parked && !pdfSelectionFetchPending(documentId)) fireTranslate(parked);
+  }}
+  onpointercancelcapture={() => {
+    // The drag died (touch/pen cancellation) — a parked settle firing on some
+    // later, unrelated pointerup would be a surprise. Drop it.
+    pointerDown = false;
+    parkedText = null;
+  }}
 />
 
 <DocumentContent {documentId}>
@@ -352,7 +364,10 @@
         />
       {/if}
     {:else if doc.isError}
-      <p class="p-4 text-sm text-red-600 dark:text-red-400">Failed to load document.</p>
+      <!-- Same escape hatch as PdfTab's missing-PDF probe: a file that HEADs
+           fine but fails to parse still deserves open/download links, not a
+           dead-end message. -->
+      <PdfFallback id={documentId} />
     {:else}
       <!-- Centered, not a corner note: the blank page area otherwise reads
            as broken during the multi-second worker boot + first parse. -->

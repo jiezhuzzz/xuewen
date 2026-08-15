@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -18,9 +18,11 @@ pub struct Config {
     /// Daily arXiv recommendations. Absent ⇒ the feature is off.
     #[serde(default)]
     pub daily: Option<DailyConfig>,
-    /// Translate-on-selection. Absent ⇒ feature off.
+    /// Translate-on-selection defaults. Like `[search]`/`[ui]`, this section
+    /// only sets defaults — the feature is gated by the presence of a
+    /// provider (`[ai.translate]` or `[translate.deepl]`), not this section.
     #[serde(default)]
-    pub translate: Option<TranslateConfig>,
+    pub translate: TranslateConfig,
     #[serde(default)]
     pub ai: AiConfig,
     #[serde(default)]
@@ -104,6 +106,9 @@ pub struct AiDefaults {
 pub struct Resolved {
     pub base_url: String,
     pub api_key: Option<String>,
+    /// The env var `api_key` was resolved through — kept so a missing key can
+    /// be reported by name instead of as a silently disabled feature.
+    pub api_key_env: String,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
 }
@@ -114,7 +119,16 @@ impl Resolved {
     /// every keyed service constructs its `LlmClient` identically.
     pub fn client(&self) -> Option<crate::llm::LlmClient> {
         let model = self.model.clone()?;
-        let key = self.api_key.clone()?;
+        let Some(key) = self.api_key.clone() else {
+            // A model with no key is a configured-but-broken section, not an
+            // unconfigured one: name the env var that was consulted so every
+            // keyed service surfaces the cause with no call-site changes.
+            tracing::warn!(
+                "model {model} configured but no API key found — set ${} or `api_key_env`",
+                self.api_key_env
+            );
+            return None;
+        };
         Some(
             crate::llm::LlmClient::new(&self.base_url, &model, Some(key))
                 .with_reasoning_effort(self.reasoning_effort.clone()),
@@ -154,6 +168,7 @@ impl AiConfig {
         Resolved {
             base_url,
             api_key,
+            api_key_env,
             model: pick(&use_.model, &self.defaults.model),
             reasoning_effort: pick(&use_.reasoning_effort, &self.defaults.reasoning_effort),
         }
@@ -297,7 +312,7 @@ fn default_target_lang() -> String {
     "zh".to_string()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TranslateProvider {
     Llm,
@@ -668,6 +683,79 @@ dims = 1536
     }
 
     #[test]
+    fn client_without_key_is_none() {
+        let r = super::Resolved {
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: None,
+            api_key_env: "OPENAI_API_KEY".into(),
+            model: Some("m".into()),
+            reasoning_effort: None,
+        };
+        assert!(r.client().is_none());
+    }
+
+    #[test]
+    fn client_without_model_is_none() {
+        let r = super::Resolved {
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: Some("sk-test".into()),
+            api_key_env: "OPENAI_API_KEY".into(),
+            model: None,
+            reasoning_effort: None,
+        };
+        assert!(r.client().is_none());
+    }
+
+    #[tokio::test]
+    async fn client_sends_model_messages_and_bearer() {
+        // Pins the config → client dance end to end: the resolved key rides
+        // as a Bearer header and the resolved model lands in the body.
+        use wiremock::matchers::{body_partial_json, body_string_contains, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer sk-test"))
+            .and(body_partial_json(
+                serde_json::json!({"model": "gpt-4o-mini"}),
+            ))
+            .and(body_string_contains("hello user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "content": "  hi  "}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let r = super::Resolved {
+            base_url: format!("{}/v1", server.uri()),
+            api_key: Some("sk-test".into()),
+            api_key_env: "OPENAI_API_KEY".into(),
+            model: Some("gpt-4o-mini".into()),
+            reasoning_effort: None,
+        };
+        let c = r.client().unwrap();
+        assert_eq!(c.complete("sys", "hello user").await.unwrap(), "hi");
+    }
+
+    #[test]
+    fn resolved_carries_the_consulted_api_key_env_name() {
+        // The name rides on `Resolved` so a missing key can be reported as
+        // "set $THAT_VAR" instead of a silently disabled feature.
+        let ai = AiConfig::default();
+        assert_eq!(
+            ai.resolve(&AiDefaults::default()).api_key_env,
+            "OPENAI_API_KEY"
+        );
+        let use_ = AiDefaults {
+            api_key_env: Some("MY_PROVIDER_KEY".into()),
+            ..Default::default()
+        };
+        assert_eq!(ai.resolve(&use_).api_key_env, "MY_PROVIDER_KEY");
+    }
+
+    #[test]
     fn ai_absent_means_features_off() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         write!(
@@ -761,7 +849,7 @@ database_url = "sqlite::memory:"
 model = "gpt-4o-mini"
 "#;
         let cfg: Config = toml::from_str(toml).unwrap();
-        let t = cfg.translate.as_ref().unwrap();
+        let t = &cfg.translate;
         assert_eq!(t.target_lang, "zh");
         assert!(matches!(t.trigger, TranslateTrigger::Auto));
         assert!(t.provider.is_none()); // unset -> resolved later by the service
@@ -785,7 +873,7 @@ api_key_env = "DEEPL_API_KEY"
 plan = "pro"
 "#;
         let cfg: Config = toml::from_str(toml).unwrap();
-        let t = cfg.translate.as_ref().unwrap();
+        let t = &cfg.translate;
         assert_eq!(t.target_lang, "en");
         assert!(matches!(t.provider, Some(TranslateProvider::Deepl)));
         assert!(matches!(t.trigger, TranslateTrigger::Manual));
@@ -795,14 +883,19 @@ plan = "pro"
     }
 
     #[test]
-    fn translate_absent_by_default() {
+    fn translate_defaults_when_section_absent() {
         let toml = r#"
 inbox_dir = "/i"
 library_root = "/l"
 database_url = "sqlite::memory:"
 "#;
         let cfg: Config = toml::from_str(toml).unwrap();
-        assert!(cfg.translate.is_none());
+        // A defaults-only section (like [search]/[ui]): absence means default
+        // values, and no DeepL provider — the feature gate lives with the
+        // providers, not here.
+        assert_eq!(cfg.translate.target_lang, "zh");
+        assert!(cfg.translate.provider.is_none());
+        assert!(cfg.translate.deepl.is_none());
     }
 
     #[test]

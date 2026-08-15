@@ -36,3 +36,14 @@ export function cancelHideCitation(): void {
     hideTimer = null;
   }
 }
+
+/** Hide immediately (an action was taken on the reference). Clears any
+ *  pending grace timer too — writes to `citationHover.current` must come
+ *  through this module so the timer bookkeeping stays consistent. */
+export function hideCitationNow(): void {
+  if (hideTimer) {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  }
+  citationHover.current = null;
+}

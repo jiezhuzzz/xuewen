@@ -1,4 +1,4 @@
-use crate::resolve::http::{HttpClient, RetryPolicy};
+use crate::http::{HttpClient, RetryPolicy};
 use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use std::time::Duration;
@@ -7,7 +7,7 @@ const BATCH: usize = 64;
 
 /// Client for an OpenAI-compatible `/embeddings` endpoint.
 pub struct Embedder {
-    /// Shared retrying transport (`resolve::http`) — same retry/backoff
+    /// Shared retrying transport (`crate::http`) — same retry/backoff
     /// implementation as every other HTTP caller in the crate.
     http: HttpClient,
     base_url: String,
@@ -143,6 +143,7 @@ mod tests {
         let r = crate::config::Resolved {
             base_url: format!("{}/v1", server.uri()),
             api_key: Some("sk-test".into()),
+            api_key_env: "OPENAI_API_KEY".into(),
             model: Some("text-embedding-3-small".into()),
             reasoning_effort: None,
         };
@@ -213,6 +214,7 @@ mod tests {
         let r = crate::config::Resolved {
             base_url: "https://api.openai.com/v1".into(),
             api_key: None,
+            api_key_env: "OPENAI_API_KEY".into(),
             model: Some("m".into()),
             reasoning_effort: None,
         };

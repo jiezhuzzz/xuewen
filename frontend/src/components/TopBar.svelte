@@ -1,24 +1,15 @@
 <script lang="ts">
   import { Monitor, Moon, PanelLeft, Sun, Upload } from 'lucide-svelte';
-  import {
-    filters,
-    library,
-    openImport,
-    setStatusFilter,
-    stats,
-    theme,
-    toggleSidebar,
-    toggleTheme,
-    ui,
-  } from '../lib/state.svelte';
+  import { openImport } from '../lib/importQueue.svelte';
+  import { library, stats } from '../lib/library.svelte';
+  import { filters, setStatusFilter } from '../lib/searchState.svelte';
+  import { nextTheme, theme, toggleTheme } from '../lib/theme.svelte';
+  import { toggleSidebar, ui } from '../lib/ui.svelte';
   import SealMark from './SealMark.svelte';
 
-  const THEME_ORDER = ['light', 'dark', 'system'] as const;
   const THEME_NAMES = { light: 'Light', dark: 'Dark', system: 'System' } as const;
   const themeLabel = $derived(THEME_NAMES[theme.mode]);
-  const nextThemeLabel = $derived(
-    THEME_NAMES[THEME_ORDER[(THEME_ORDER.indexOf(theme.mode) + 1) % THEME_ORDER.length]],
-  );
+  const nextThemeLabel = $derived(THEME_NAMES[nextTheme()]);
 
   // While searching, library.papers holds relevance-ranked search results
   // rather than the whole library — show how many matched instead of the

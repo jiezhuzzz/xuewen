@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Star, Wand2 } from 'lucide-svelte';
-  import { appSettings, detailRefresh, loadDetail, openIdentify, toggleStar } from '../lib/state.svelte';
+  import { openIdentify } from '../lib/identify.svelte';
+  import { cachedDetail, loadDetail, toggleStar } from '../lib/library.svelte';
+  import { appSettings } from '../lib/ui.svelte';
   import CiteActions from './CiteActions.svelte';
   import DeletePaperButton from './DeletePaperButton.svelte';
   import DockCode from './DockCode.svelte';
@@ -13,6 +15,22 @@
   let { id }: { id: string } = $props();
 
   let abstractOpen = $state(!appSettings.foldAbstract);
+
+  // The reactive cache read plus fetch-on-miss. A mutation patches the cached
+  // record and this view updates in place — no remount, so child editor state
+  // (a half-typed tag query, a focused input) survives unrelated mutations —
+  // while a global eviction (tag/project rename) empties the entry, re-runs
+  // this effect, and refetches.
+  const d = $derived(cachedDetail(id));
+  let loadFailed = $state(false);
+  $effect(() => {
+    if (cachedDetail(id) !== undefined) return;
+    const requested = id;
+    loadFailed = false;
+    loadDetail(requested).catch(() => {
+      if (requested === id) loadFailed = true;
+    });
+  });
 
   function fmtDate(s: string): string {
     if (!s) return '—';
@@ -27,10 +45,10 @@
 </script>
 
 <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-  {#key `${id}-${detailRefresh.n}`}
-    {#await loadDetail(id)}
-      <Spinner />
-    {:then d}
+  <!-- Keyed on the paper identity (only): switching papers must still reset
+       the children's editor state (PaperNameEditor's draft, the tag query). -->
+  {#key id}
+    {#if d}
       <PaperMeta {d} />
 
       {#if d.summary}
@@ -120,11 +138,13 @@
           <Wand2 size={13} /> Identify…
         </button>
       </div>
-    {:catch}
+    {:else if loadFailed}
       <p class="text-sm text-red-600 dark:text-red-400">
         Failed to load details. Check that the server is running, then reopen this panel.
       </p>
-    {/await}
+    {:else}
+      <Spinner />
+    {/if}
   {/key}
 </div>
 

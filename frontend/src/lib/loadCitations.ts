@@ -87,6 +87,39 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
   // reference's DOI/URL can be attached below).
   const links: GotoLink[] = [];
   const urlLinksByPage = new Map<number, UrlLink[]>();
+
+  // The one place a page's text becomes a PageText. Caches the PROMISE, not
+  // the result, so concurrent readers of the same page (pass 2's Promise.all)
+  // still cost one worker round-trip — and shared with the text-layer
+  // fallback below, so pages the hyperlink path already read are hits there
+  // rather than second fetches. Reads urlLinksByPage lazily: every call
+  // happens after pass 1 has filled it.
+  const pageCache = new Map<number, Promise<PageText | null>>();
+  const readPage = (idx: number): Promise<PageText | null> => {
+    const hit = pageCache.get(idx);
+    if (hit) return hit;
+    const page = doc.pages[idx];
+    const read = page
+      ? engine
+          .getPageTextRuns(doc, page)
+          .toPromise()
+          .then((textRuns): PageText => {
+            const runs: TextRun[] = textRuns.runs.map((r) => ({
+              text: r.text,
+              x: r.rect.origin.x,
+              y: r.rect.origin.y,
+              width: r.rect.size.width,
+              height: r.rect.size.height,
+            }));
+            return {
+              pageIndex: idx, width: page.size.width, height: page.size.height,
+              runs, urlLinks: urlLinksByPage.get(idx) ?? [],
+            };
+          })
+      : Promise.resolve(null);
+    pageCache.set(idx, read);
+    return read;
+  };
   // Pages are independent — fetch all annotation lists concurrently instead
   // of paying one serialized worker round-trip per page.
   const annosByPage = await Promise.all(
@@ -120,26 +153,9 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
     const destPages = [...new Set(links.map((l) => l.destPageIndex))].sort((a, b) => a - b);
     const scanPages = destPages[0] > 0 ? [destPages[0] - 1, ...destPages] : destPages;
     // Same concurrency as pass 1: the per-page text-run reads are independent.
-    const pages: PageText[] = (
-      await Promise.all(
-        scanPages.map(async (idx) => {
-          const page = doc.pages[idx];
-          if (!page) return null;
-          const textRuns = await engine.getPageTextRuns(doc, page).toPromise();
-          const runs: TextRun[] = textRuns.runs.map((r) => ({
-            text: r.text,
-            x: r.rect.origin.x,
-            y: r.rect.origin.y,
-            width: r.rect.size.width,
-            height: r.rect.size.height,
-          }));
-          return {
-            pageIndex: idx, width: page.size.width, height: page.size.height,
-            runs, urlLinks: urlLinksByPage.get(idx) ?? [],
-          };
-        }),
-      )
-    ).filter((p): p is PageText => p !== null);
+    const pages: PageText[] = (await Promise.all(scanPages.map(readPage))).filter(
+      (p): p is PageText => p !== null,
+    );
 
     const refStart = findReferencesStart(pages);
     if (refStart) {
@@ -148,36 +164,16 @@ export async function loadCitations(engine: EngineLike, doc: PdfDocumentObject):
     }
   }
   // Hyperlink path yielded nothing usable — text-layer fallback.
-  return loadCitationsFromText(engine, doc, urlLinksByPage);
+  return loadCitationsFromText(doc, readPage);
 }
 
 // How many pages from the end to scan for the References heading.
 const MAX_HEADING_SCAN = 15;
 
 async function loadCitationsFromText(
-  engine: EngineLike,
   doc: PdfDocumentObject,
-  urlLinksByPage: Map<number, UrlLink[]>,
+  readPage: (idx: number) => Promise<PageText | null>,
 ): Promise<CitationLoad> {
-  const cache = new Map<number, PageText>();
-  const readPage = async (idx: number): Promise<PageText | null> => {
-    const page = doc.pages[idx];
-    if (!page) return null;
-    const hit = cache.get(idx);
-    if (hit) return hit;
-    const textRuns = await engine.getPageTextRuns(doc, page).toPromise();
-    const runs: TextRun[] = textRuns.runs.map((r) => ({
-      text: r.text, x: r.rect.origin.x, y: r.rect.origin.y,
-      width: r.rect.size.width, height: r.rect.size.height,
-    }));
-    const p: PageText = {
-      pageIndex: idx, width: page.size.width, height: page.size.height,
-      runs, urlLinks: urlLinksByPage.get(idx) ?? [],
-    };
-    cache.set(idx, p);
-    return p;
-  };
-
   // Heading: scan from the last page backward (bibliographies live at the back).
   let refStart: RefAnchor | null = null;
   const lowest = Math.max(0, doc.pages.length - MAX_HEADING_SCAN);

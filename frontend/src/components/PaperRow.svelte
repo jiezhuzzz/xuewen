@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { PaperSummary } from '../lib/types';
   import { openContextMenu } from '../lib/contextMenu.svelte';
-  import { openTab, searchMeta, selectPaper, selection, toggleStar, viewer } from '../lib/state.svelte';
+  import { toggleStar } from '../lib/library.svelte';
+  import { searchMeta } from '../lib/searchState.svelte';
+  import { openTab, selection, selectPaper, viewer } from '../lib/tabs.svelte';
   import { abbreviateVenue } from '../lib/venue';
   import { authorLine } from '../lib/refFormat';
   import { NAME_CHIP } from '../lib/nameChip';

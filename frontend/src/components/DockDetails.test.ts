@@ -2,7 +2,10 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { chat } from '../lib/chat.svelte';
-import { appSettings, identifyState, library, openTab, removePaper, viewer } from '../lib/state.svelte';
+import { identifyState } from '../lib/identify.svelte';
+import { library, removePaper } from '../lib/library.svelte';
+import { openTab, viewer } from '../lib/tabs.svelte';
+import { appSettings } from '../lib/ui.svelte';
 import type { PaperSummary } from '../lib/types';
 import DockDetails from './DockDetails.svelte';
 

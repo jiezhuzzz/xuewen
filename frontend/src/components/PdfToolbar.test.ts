@@ -10,7 +10,7 @@ vi.mock('@embedpdf/plugin-scroll/svelte', () => ({
 
 import userEvent from '@testing-library/user-event';
 import PdfToolbar from './PdfToolbar.svelte';
-import { pdfAppearance } from '../lib/state.svelte';
+import { pdfAppearance } from '../lib/theme.svelte';
 
 // Mirrors the PillHide interface (lib/pillHide.svelte.ts) the toolbar binds to;
 // the component invokes pillEnter/pillLeave/focusIn/focusOut on pointer/focus

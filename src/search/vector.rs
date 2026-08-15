@@ -1,5 +1,7 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
+use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 
 const UPSERT_BATCH: usize = 64;
 
@@ -37,6 +39,57 @@ pub fn point_id(paper_id: &str, seq: i64) -> String {
     .to_string()
 }
 
+/// Typed wire shapes for the Qdrant responses we read. serde skips fields we
+/// don't model; the ones here are required unless defaulted, so shape drift
+/// fails loudly (with the response body in the error) instead of parsing as
+/// zero or silently dropping hits.
+#[derive(Deserialize)]
+struct PointPayload {
+    paper_id: String,
+    seq: i64,
+    /// NULL for the seq-0 title+abstract chunk.
+    #[serde(default)]
+    page: Option<i64>,
+}
+
+/// A collection's vector config: one unnamed vector vs. Qdrant's
+/// named-vectors map — discriminated explicitly so a named-vectors
+/// collection is refused outright instead of parsing its size as 0.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum VectorsConfig {
+    Params(VectorParams),
+    Named(HashMap<String, VectorParams>),
+}
+
+#[derive(Deserialize)]
+struct VectorParams {
+    size: usize,
+}
+
+/// Truncate a response body for inclusion in an error message.
+fn excerpt(body: &str) -> String {
+    body.chars().take(300).collect()
+}
+
+/// Status + (truncated) body of a failed response — Qdrant returns JSON
+/// diagnostics worth surfacing over a bare status code.
+async fn failure(resp: reqwest::Response) -> String {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if body.trim().is_empty() {
+        status.to_string()
+    } else {
+        format!("{status} — {}", excerpt(&body))
+    }
+}
+
+/// Parse a successful response's JSON, quoting the body on a shape mismatch.
+async fn parse<T: serde::de::DeserializeOwned>(what: &str, resp: reqwest::Response) -> Result<T> {
+    let text = resp.text().await?;
+    serde_json::from_str(&text).map_err(|e| anyhow!("qdrant {what}: {e} — {}", excerpt(&text)))
+}
+
 /// Qdrant over its REST API (the official crate would pull in the whole
 /// tonic/prost gRPC stack for four calls).
 pub struct QdrantStore {
@@ -44,6 +97,15 @@ pub struct QdrantStore {
     base_url: String,
     collection: String,
     dims: usize,
+    /// Memoized `ensure_collection` success: the sweep validates per paper,
+    /// and N identical GETs per rebuild are pointless. Failures stay
+    /// un-memoized so the next call retries; `recreate_collection` resets
+    /// and re-primes it. A 404 from `upsert`/`delete_paper` also resets it —
+    /// the collection the memo vouches for is gone (Qdrant restarted on a
+    /// fresh volume, dropped externally), and in a long-running serve nothing
+    /// else would ever re-run the create cycle, wedging the vector tier
+    /// until a restart.
+    ensured: tokio::sync::Mutex<bool>,
 }
 
 impl QdrantStore {
@@ -55,6 +117,7 @@ impl QdrantStore {
             base_url: base_url.trim_end_matches('/').to_string(),
             collection: collection.to_string(),
             dims,
+            ensured: tokio::sync::Mutex::new(false),
         })
     }
 
@@ -64,12 +127,49 @@ impl QdrantStore {
 
     /// Create the collection if missing; verify vector size if present.
     pub async fn ensure_collection(&self) -> Result<()> {
+        let mut ensured = self.ensured.lock().await;
+        if *ensured {
+            return Ok(());
+        }
+        self.ensure_collection_uncached().await?;
+        *ensured = true;
+        Ok(())
+    }
+
+    async fn ensure_collection_uncached(&self) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Info {
+            result: InfoResult,
+        }
+        #[derive(Deserialize)]
+        struct InfoResult {
+            config: InfoConfig,
+        }
+        #[derive(Deserialize)]
+        struct InfoConfig {
+            params: InfoParams,
+        }
+        #[derive(Deserialize)]
+        struct InfoParams {
+            vectors: VectorsConfig,
+        }
+
         let resp = self.http.get(self.url("")).send().await?;
         if resp.status().is_success() {
-            let body: serde_json::Value = resp.json().await?;
-            let size = body["result"]["config"]["params"]["vectors"]["size"]
-                .as_u64()
-                .unwrap_or(0) as usize;
+            let body: Info = parse("collection info", resp).await?;
+            let size = match body.result.config.params.vectors {
+                VectorsConfig::Params(p) => p.size,
+                VectorsConfig::Named(named) => {
+                    let mut names: Vec<&str> = named.keys().map(String::as_str).collect();
+                    names.sort_unstable();
+                    bail!(
+                        "qdrant collection '{}' uses named vectors ({}), \
+                         which xuewen does not support",
+                        self.collection,
+                        names.join(", ")
+                    )
+                }
+            };
             if size != self.dims {
                 bail!(
                     "qdrant collection '{}' has vector size {size} but config dims = {} — \
@@ -81,7 +181,7 @@ impl QdrantStore {
             return Ok(());
         }
         if resp.status().as_u16() != 404 {
-            bail!("qdrant GET collection: {}", resp.status());
+            bail!("qdrant GET collection: {}", failure(resp).await);
         }
         let resp = self
             .http
@@ -90,16 +190,18 @@ impl QdrantStore {
             .send()
             .await?;
         if !resp.status().is_success() {
-            bail!("qdrant create collection: {}", resp.status());
+            bail!("qdrant create collection: {}", failure(resp).await);
         }
         Ok(())
     }
 
     /// Drop and recreate the collection (vector rebuild after a dims change).
     pub async fn recreate_collection(&self) -> Result<()> {
+        let mut ensured = self.ensured.lock().await;
+        *ensured = false;
         let resp = self.http.delete(self.url("")).send().await?;
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
-            bail!("qdrant delete collection: {}", resp.status());
+            bail!("qdrant delete collection: {}", failure(resp).await);
         }
         let resp = self
             .http
@@ -108,8 +210,10 @@ impl QdrantStore {
             .send()
             .await?;
         if !resp.status().is_success() {
-            bail!("qdrant create collection: {}", resp.status());
+            bail!("qdrant create collection: {}", failure(resp).await);
         }
+        // The recreated collection is known-good for `self.dims`.
+        *ensured = true;
         Ok(())
     }
 
@@ -129,27 +233,49 @@ impl QdrantStore {
                 .send()
                 .await?;
             if !resp.status().is_success() {
-                bail!("qdrant upsert: {}", resp.status());
+                // 404 only: the memoized collection no longer exists, so the
+                // next ensure must recreate it. Transient 5xx keep the memo.
+                if resp.status().as_u16() == 404 {
+                    *self.ensured.lock().await = false;
+                }
+                bail!("qdrant upsert: {}", failure(resp).await);
             }
         }
         Ok(())
     }
 
+    /// Vector search. `scope`, when given, restricts hits to those paper ids
+    /// INSIDE Qdrant (a `match any` clause), so the top-`limit` truncation
+    /// happens on the filtered set.
     pub async fn search(
         &self,
         vector: &[f32],
         limit: usize,
         filter: SeqFilter,
+        scope: Option<&[String]>,
     ) -> Result<Vec<VecHit>> {
+        #[derive(Deserialize)]
+        struct SearchResponse {
+            result: Vec<ScoredPoint>,
+        }
+        #[derive(Deserialize)]
+        struct ScoredPoint {
+            score: f32,
+            payload: PointPayload,
+        }
+
         let mut body = json!({"vector": vector, "limit": limit, "with_payload": true});
+        let mut must: Vec<serde_json::Value> = Vec::new();
         match filter {
             SeqFilter::All => {}
-            SeqFilter::OnlySummary => {
-                body["filter"] = json!({"must": [{"key": "seq", "match": {"value": 0}}]});
-            }
-            SeqFilter::OnlyBody => {
-                body["filter"] = json!({"must": [{"key": "seq", "range": {"gte": 1}}]});
-            }
+            SeqFilter::OnlySummary => must.push(json!({"key": "seq", "match": {"value": 0}})),
+            SeqFilter::OnlyBody => must.push(json!({"key": "seq", "range": {"gte": 1}})),
+        }
+        if let Some(ids) = scope {
+            must.push(json!({"key": "paper_id", "match": {"any": ids}}));
+        }
+        if !must.is_empty() {
+            body["filter"] = json!({"must": must});
         }
         let resp = self
             .http
@@ -158,30 +284,40 @@ impl QdrantStore {
             .send()
             .await?;
         if !resp.status().is_success() {
-            bail!("qdrant search: {}", resp.status());
+            bail!("qdrant search: {}", failure(resp).await);
         }
-        let body: serde_json::Value = resp.json().await?;
-        let hits = body["result"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|h| {
-                        Some(VecHit {
-                            paper_id: h["payload"]["paper_id"].as_str()?.to_string(),
-                            seq: h["payload"]["seq"].as_i64()?,
-                            page: h["payload"]["page"].as_i64(),
-                            score: h["score"].as_f64()? as f32,
-                        })
-                    })
-                    .collect()
+        let body: SearchResponse = parse("search", resp).await?;
+        Ok(body
+            .result
+            .into_iter()
+            .map(|p| VecHit {
+                paper_id: p.payload.paper_id,
+                seq: p.payload.seq,
+                page: p.payload.page,
+                score: p.score,
             })
-            .unwrap_or_default();
-        Ok(hits)
+            .collect())
     }
 
     /// All seq-0 (title+abstract) points as (paper_id, vector), paging
     /// through the scroll API. Feeds the daily-recommendation profile.
     pub async fn scroll_summaries(&self) -> Result<Vec<(String, Vec<f32>)>> {
+        #[derive(Deserialize)]
+        struct ScrollResponse {
+            result: ScrollResult,
+        }
+        #[derive(Deserialize)]
+        struct ScrollResult {
+            points: Vec<ScrollPoint>,
+            #[serde(default)]
+            next_page_offset: Option<serde_json::Value>,
+        }
+        #[derive(Deserialize)]
+        struct ScrollPoint {
+            payload: PointPayload,
+            vector: Vec<f32>,
+        }
+
         let mut out = Vec::new();
         let mut offset: Option<serde_json::Value> = None;
         loop {
@@ -201,29 +337,13 @@ impl QdrantStore {
                 .send()
                 .await?;
             if !resp.status().is_success() {
-                bail!("qdrant scroll: {}", resp.status());
+                bail!("qdrant scroll: {}", failure(resp).await);
             }
-            let body: serde_json::Value = resp.json().await?;
-            if let Some(points) = body["result"]["points"].as_array() {
-                for p in points {
-                    let Some(paper_id) = p["payload"]["paper_id"].as_str() else {
-                        continue;
-                    };
-                    let Some(vec) = p["vector"].as_array() else {
-                        continue;
-                    };
-                    let v: Vec<f32> = vec
-                        .iter()
-                        .filter_map(|x| x.as_f64())
-                        .map(|x| x as f32)
-                        .collect();
-                    out.push((paper_id.to_string(), v));
-                }
+            let body: ScrollResponse = parse("scroll", resp).await?;
+            for p in body.result.points {
+                out.push((p.payload.paper_id, p.vector));
             }
-            offset = match &body["result"]["next_page_offset"] {
-                serde_json::Value::Null => None,
-                o => Some(o.clone()),
-            };
+            offset = body.result.next_page_offset;
             if offset.is_none() {
                 break;
             }
@@ -239,7 +359,10 @@ impl QdrantStore {
             .send()
             .await?;
         if !resp.status().is_success() {
-            bail!("qdrant delete: {}", resp.status());
+            if resp.status().as_u16() == 404 {
+                *self.ensured.lock().await = false;
+            }
+            bail!("qdrant delete: {}", failure(resp).await);
         }
         Ok(())
     }
@@ -343,7 +466,7 @@ mod tests {
             .mount(&server)
             .await;
         let hits = store(&server)
-            .search(&[0.1; 4], 10, SeqFilter::OnlyBody)
+            .search(&[0.1; 4], 10, SeqFilter::OnlyBody, None)
             .await
             .unwrap();
         assert_eq!(hits.len(), 2);
@@ -351,6 +474,239 @@ mod tests {
         assert_eq!(hits[0].seq, 3);
         assert_eq!(hits[0].page, Some(7));
         assert!(hits[0].score > hits[1].score);
+    }
+
+    #[tokio::test]
+    async fn search_scope_becomes_a_paper_id_filter_clause() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/collections/xuewen/points/search"))
+            .and(body_partial_json(json!({"filter": {"must": [
+                {"key": "seq", "range": {"gte": 1}},
+                {"key": "paper_id", "match": {"any": ["p1", "p2"]}}
+            ]}})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": []})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let scope = vec!["p1".to_string(), "p2".to_string()];
+        store(&server)
+            .search(&[0.1; 4], 10, SeqFilter::OnlyBody, Some(&scope))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn search_error_includes_qdrant_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/collections/xuewen/points/search"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(json!({"status": {"error": "wrong vector size"}})),
+            )
+            .mount(&server)
+            .await;
+        let err = store(&server)
+            .search(&[0.1; 4], 10, SeqFilter::All, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("wrong vector size"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn named_vectors_collection_is_rejected_explicitly() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {"config": {"params": {"vectors": {
+                    "custom": {"size": 4, "distance": "Cosine"}
+                }}}}
+            })))
+            .mount(&server)
+            .await;
+        let err = store(&server)
+            .ensure_collection()
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("named vectors"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn ensure_success_is_memoized_and_recreate_reprimes_it() {
+        let server = MockServer::start().await;
+        // Exactly one GET despite three ensure calls: success is memoized,
+        // and a successful recreate re-primes the cache (the collection it
+        // just created is known-good).
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": true})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": true})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let s = store(&server);
+        s.ensure_collection().await.unwrap();
+        s.ensure_collection().await.unwrap();
+        s.recreate_collection().await.unwrap();
+        s.ensure_collection().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_failure_is_not_memoized() {
+        let server = MockServer::start().await;
+        // First GET fails; the next ensure must retry rather than trust a
+        // cached failure.
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let s = store(&server);
+        assert!(s.ensure_collection().await.is_err());
+        s.ensure_collection().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn upsert_404_resets_the_ensure_memo_and_the_tier_heals() {
+        let server = MockServer::start().await;
+        // First ensure sees the collection; it then vanishes (Qdrant restarted
+        // on a fresh volume), the upsert 404s, and the next ensure must run
+        // the full GET(404)+PUT create cycle instead of trusting the memo.
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
+            })))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen"))
+            .and(body_partial_json(
+                json!({"vectors": {"size": 4, "distance": "Cosine"}}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": true})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen/points"))
+            .respond_with(ResponseTemplate::new(404))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen/points"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": {}})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let s = store(&server);
+        let pts = vec![ChunkPoint {
+            paper_id: "p1".into(),
+            seq: 0,
+            page: None,
+            vector: vec![0.1; 4],
+        }];
+        s.ensure_collection().await.unwrap();
+        assert!(s.upsert(&pts).await.is_err());
+        s.ensure_collection().await.unwrap();
+        s.upsert(&pts).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_404_resets_the_ensure_memo() {
+        let server = MockServer::start().await;
+        // Two GETs despite the memo: the delete's 404 un-memoizes.
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/collections/xuewen/points/delete"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let s = store(&server);
+        s.ensure_collection().await.unwrap();
+        assert!(s.delete_paper("p1").await.is_err());
+        s.ensure_collection().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn upsert_5xx_keeps_the_ensure_memo() {
+        let server = MockServer::start().await;
+        // A transient server error is not a vanished collection: exactly one
+        // GET, even after the failed upsert.
+        Mock::given(method("GET"))
+            .and(path("/collections/xuewen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": {"config": {"params": {"vectors": {"size": 4, "distance": "Cosine"}}}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/xuewen/points"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let s = store(&server);
+        let pts = vec![ChunkPoint {
+            paper_id: "p1".into(),
+            seq: 0,
+            page: None,
+            vector: vec![0.1; 4],
+        }];
+        s.ensure_collection().await.unwrap();
+        assert!(s.upsert(&pts).await.is_err());
+        s.ensure_collection().await.unwrap();
     }
 
     #[tokio::test]

@@ -80,11 +80,14 @@ pub fn pdf_target(src: &Source) -> Option<PdfTarget> {
 }
 
 /// The identifier a source implies, used to seed metadata resolution during
-/// ingest. An IEEE arnumber is not a DOI, so it yields no hint.
+/// ingest. An IEEE arnumber is not a DOI, so it yields no hint. Canonicalized
+/// here rather than in `parse_source`: the `Source` keeps the pasted form
+/// verbatim because `pdf_target` builds fetch URLs from it (an explicit
+/// `…v5` should fetch that version), while the identifier must dedupe.
 pub fn source_identifier(src: &Source) -> Option<Identifier> {
     match src {
-        Source::Doi(d) => Some(Identifier::Doi(d.clone())),
-        Source::Arxiv(a) => Some(Identifier::Arxiv(a.clone())),
+        Source::Doi(d) => Some(Identifier::doi(d.clone())),
+        Source::Arxiv(a) => Some(Identifier::arxiv(a.clone())),
         Source::IeeeDocument(_) => None,
     }
 }
@@ -190,6 +193,18 @@ mod parse_tests {
     }
 
     #[test]
+    fn source_identifier_canonicalizes_while_source_stays_verbatim() {
+        // The Source keeps the pasted form (pdf_target fetches exactly v5)…
+        let src = parse_source("arXiv:1706.03762v5").unwrap();
+        assert_eq!(src, Source::Arxiv("1706.03762v5".into()));
+        // …while the dedupe/resolution identifier is version-stripped.
+        assert_eq!(
+            source_identifier(&src),
+            Some(Identifier::Arxiv("1706.03762".into()))
+        );
+    }
+
+    #[test]
     fn ignores_bare_id_embedded_in_prose() {
         // "arxiv" in surrounding prose must not turn a stray number into an id.
         assert_eq!(
@@ -243,12 +258,13 @@ pub fn encode_target(s: &str) -> String {
 
 impl Fetcher {
     pub fn new(proxy_login_url: Option<String>) -> Result<Self> {
+        let ua = crate::http::user_agent(None);
         let client = reqwest::Client::builder()
-            .user_agent("xuewen/0.1")
+            .user_agent(&ua)
             .timeout(Duration::from_secs(30))
             .build()?;
         let no_redirect = reqwest::Client::builder()
-            .user_agent("xuewen/0.1")
+            .user_agent(&ua)
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
@@ -267,6 +283,13 @@ impl Fetcher {
     /// Whether `proxy_login_url` is configured (paywalled fetch is possible).
     pub fn proxy_enabled(&self) -> bool {
         self.proxy_login_url.is_some()
+    }
+
+    /// Host of the configured EZproxy (`None` without `[proxy]`). Surfaced by
+    /// GET /api/settings so the UI can say which host a cookie is for instead
+    /// of hardcoding one deployment's university.
+    pub fn proxy_host(&self) -> Option<&str> {
+        self.proxy_host.as_deref()
     }
 
     /// GET `url` following redirects. `Ok(Some(bytes))` if the body is a PDF,
@@ -504,7 +527,8 @@ pub struct Fetched {
     pub hint: Option<Identifier>,
 }
 
-/// Why a URL/identifier import could not produce a PDF.
+/// Why a URL/identifier import failed: no PDF could be produced
+/// (`Unsupported`..`Network`), or the fetched PDF failed to ingest (`Ingest`).
 #[derive(Debug)]
 pub enum ImportError {
     Unsupported,
@@ -513,6 +537,7 @@ pub enum ImportError {
         metadata: Option<Box<ResolvedMetadata>>,
     },
     Network(anyhow::Error),
+    Ingest(anyhow::Error),
 }
 
 /// Turn an input string into PDF bytes, following the spec's fetch order:
@@ -550,11 +575,17 @@ pub async fn import_source(
         }
     }
 
-    // 3. Open-access fallback via Unpaywall (needs a DOI).
+    // 3. Open-access fallback via Unpaywall (needs a DOI). Failures fall
+    // through to the terminal error but must not vanish silently — the CLI's
+    // "paywalled or cookie expired" message would misattribute them.
     if let Source::Doi(doi) = &src {
         if let Some(oa) = resolver.oa_pdf_url(doi).await {
-            if let Ok(Some(bytes)) = fetcher.fetch_plain(&oa).await {
-                return Ok(Fetched { bytes, hint });
+            match fetcher.fetch_plain(&oa).await {
+                Ok(Some(bytes)) => return Ok(Fetched { bytes, hint }),
+                // Unpaywall asserted a PDF at this URL, so a non-PDF body is
+                // itself noteworthy (link rot, an interstitial page).
+                Ok(None) => tracing::warn!("oa fetch for {oa} returned a non-PDF body"),
+                Err(e) => tracing::warn!("oa fetch failed for {oa}: {e}"),
             }
         }
     }
@@ -567,6 +598,42 @@ pub async fn import_source(
             metadata: metadata_for(resolver, &src).await,
         })
     }
+}
+
+/// Fetch → stage → ingest → cleanup-on-error, shared by `xuewen import` and
+/// `POST /api/import`. The shells only present the result: the CLI maps it to
+/// println!/bail!, the web to JSON/status codes.
+pub async fn fetch_stage_ingest(
+    ctx: &crate::pipeline::IngestCtx,
+    fetcher: &Fetcher,
+    input: &str,
+    cookie: Option<&str>,
+) -> Result<crate::pipeline::Outcome, ImportError> {
+    // Best-effort dedupe BEFORE any network fetch: re-importing a known
+    // DOI/arXiv id must not download the whole PDF (or spend an EZproxy round
+    // trip) just to learn SameWork. The post-ingest identifier check stays the
+    // authority — this can only miss (and then that check catches it).
+    if let Some(ident) = parse_source(input).as_ref().and_then(source_identifier) {
+        let (doi, arxiv) = match &ident {
+            Identifier::Doi(d) => (Some(d.as_str()), None),
+            Identifier::Arxiv(a) => (None, Some(a.as_str())),
+            Identifier::None => (None, None),
+        };
+        if let Some(existing) = crate::db::find_by_identifier(&ctx.pool, doi, arxiv)
+            .await
+            .map_err(ImportError::Ingest)?
+        {
+            return Ok(if existing.deleted_at.is_some() {
+                crate::pipeline::Outcome::InTrash(existing.id)
+            } else {
+                crate::pipeline::Outcome::SameWork(existing.id)
+            });
+        }
+    }
+    let fetched = import_source(fetcher, &ctx.resolver, input, cookie).await?;
+    ctx.ingest_bytes(&fetched.bytes, "import.pdf", fetched.hint)
+        .await
+        .map_err(ImportError::Ingest)
 }
 
 /// Best-effort metadata for the clean-failure message.
@@ -650,6 +717,61 @@ mod orchestration_tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ImportError::Unfetched { .. }));
+    }
+
+    #[tokio::test]
+    async fn known_identifier_short_circuits_before_any_fetch() {
+        use crate::pipeline::{IngestCtx, Libraries, Outcome};
+
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}", dir.path().join("t.db").display());
+        let pool = crate::db::connect(&url).await.unwrap();
+        let paper = crate::models::Paper {
+            id: "01890000-0000-7000-8000-0000000000aa".into(),
+            content_hash: "h1".into(),
+            rel_path: "h1.pdf".into(),
+            cite_key: None,
+            added_at: "2026-07-08T00:00:00Z".into(),
+            deleted_at: None,
+            starred: false,
+            name: None,
+            meta: crate::models::PaperMeta {
+                title: Some("T".into()),
+                abstract_text: None,
+                authors: crate::models::Authors::default(),
+                venue: None,
+                year: None,
+                doi: Some("10.1145/known".into()),
+                arxiv_id: None,
+                dblp_key: None,
+                url: None,
+                source: None,
+                status: crate::models::PaperStatus::NeedsReview,
+            },
+        };
+        crate::db::insert_paper(&pool, &paper).await.unwrap();
+
+        let ctx = IngestCtx {
+            pool: pool.clone(),
+            dirs: Libraries::under(&dir.path().join("inbox"), &dir.path().join("library")),
+            resolver: offline_resolver(),
+            grobid: None,
+        };
+        // Proxy-less fetcher + offline resolver: without the pre-fetch check
+        // this ACM DOI would go down the fetch chain and end in Unfetched;
+        // with it, the answer comes straight from the DB. Pasted case also
+        // differs, exercising identifier canonicalization end to end.
+        let fetcher = Fetcher::new(None).unwrap();
+        let out = fetch_stage_ingest(&ctx, &fetcher, "10.1145/KNOWN", None)
+            .await
+            .unwrap();
+        assert_eq!(out, Outcome::SameWork(paper.id.clone()));
+
+        crate::db::soft_delete(&pool, &paper.id).await.unwrap();
+        let out = fetch_stage_ingest(&ctx, &fetcher, "10.1145/known", None)
+            .await
+            .unwrap();
+        assert_eq!(out, Outcome::InTrash(paper.id));
     }
 
     #[tokio::test]

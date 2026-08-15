@@ -10,7 +10,8 @@ use anyhow::Result;
 use sqlx::SqlitePool;
 
 use crate::config::Config;
-use crate::summary::{generate_summary, store, Summarizer};
+use crate::llm::LlmClient;
+use crate::summary::{generate_summary, store};
 
 /// How many papers one sweep pass summarizes before yielding.
 const BATCH: i64 = 8;
@@ -21,7 +22,7 @@ const RETRY_BACKOFF_MINS: i64 = 30;
 
 pub struct SummaryService {
     pool: SqlitePool,
-    summarizer: Summarizer,
+    client: LlmClient,
     library_root: PathBuf,
 }
 
@@ -30,8 +31,8 @@ impl SummaryService {
     /// a model/API key (warns).
     pub fn from_config(pool: SqlitePool, cfg: &Config) -> Option<Arc<Self>> {
         let use_ = cfg.ai.summary.as_ref()?;
-        let summarizer = match Summarizer::from_resolved(&cfg.ai.resolve(use_)) {
-            Some(s) => s,
+        let client = match cfg.ai.resolve(use_).client() {
+            Some(c) => c,
             None => {
                 tracing::warn!("[ai.summary] has no model or API key — library summaries disabled");
                 return None;
@@ -39,16 +40,16 @@ impl SummaryService {
         };
         Some(Arc::new(Self {
             pool,
-            summarizer,
+            client,
             library_root: cfg.library_root.clone(),
         }))
     }
 
     /// DI constructor for tests.
-    pub fn for_tests(pool: SqlitePool, summarizer: Summarizer, library_root: PathBuf) -> Arc<Self> {
+    pub fn for_tests(pool: SqlitePool, client: LlmClient, library_root: PathBuf) -> Arc<Self> {
         Arc::new(Self {
             pool,
-            summarizer,
+            client,
             library_root,
         })
     }
@@ -71,6 +72,21 @@ impl SummaryService {
         Ok(written)
     }
 
+    /// Drain the backlog: sweep batch after batch until a pass writes
+    /// nothing (used by `xuewen summarize`, which runs to completion instead
+    /// of ticking). Returns the total written; hard errors propagate as
+    /// `sweep`'s do.
+    pub async fn sweep_all(&self) -> Result<usize> {
+        let mut total = 0;
+        loop {
+            let n = self.sweep().await?;
+            total += n;
+            if n == 0 {
+                return Ok(total);
+            }
+        }
+    }
+
     /// Summarize one paper. `Ok(true)` = stored; `Ok(false)` = skipped (purged)
     /// or the model produced nothing (a failure was recorded for backoff);
     /// `Err` = a hard DB failure for THIS paper (caller logs; NOT counted as a
@@ -79,16 +95,22 @@ impl SummaryService {
         let Some(paper) = crate::db::get_by_id(&self.pool, id).await? else {
             return Ok(false); // purged since selection ran
         };
-        let title = paper.meta.title.as_deref().unwrap_or_default();
+        let title = paper.meta.title.clone().unwrap_or_default();
         let pdf_path = self.library_root.join(&paper.rel_path);
-        let full_text = match tokio::task::spawn_blocking(move || {
-            crate::pdf::extract_text_all(&pdf_path)
+        let full_text = match tokio::task::spawn_blocking({
+            let title = title.clone();
+            // Small-caps splits of the paper's own name would otherwise leak
+            // into the generated summary ("RTC ON" for "RTCON"); repaired
+            // inside the closure so the regex passes over the full document
+            // stay off the async worker thread, with the extraction.
+            move || {
+                crate::pdf::extract_text_all(&pdf_path)
+                    .map(|t| crate::pdf::repair_smallcaps(&t, &title))
+            }
         })
         .await
         {
-            // Small-caps splits of the paper's own name would otherwise leak
-            // into the generated summary ("RTC ON" for "RTCON").
-            Ok(Ok(t)) => Some(crate::pdf::repair_smallcaps(&t, title)),
+            Ok(Ok(t)) => Some(t),
             Ok(Err(e)) => {
                 tracing::warn!(
                     "pdf extraction failed for {id}: {e}; summarizing from abstract only"
@@ -103,7 +125,7 @@ impl SummaryService {
             }
         };
         let abstract_text = paper.meta.abstract_text.as_deref().unwrap_or_default();
-        match generate_summary(&self.summarizer, title, abstract_text, full_text.as_deref()).await {
+        match generate_summary(&self.client, &title, abstract_text, full_text.as_deref()).await {
             Some(summary) => {
                 store::upsert(&self.pool, &paper.id, &summary, self.model()).await?;
                 store::clear_failure(&self.pool, Some(&paper.id)).await?;
@@ -117,7 +139,7 @@ impl SummaryService {
     }
 
     fn model(&self) -> &str {
-        self.summarizer.model()
+        self.client.model()
     }
 }
 
@@ -218,7 +240,7 @@ mod tests {
 
         let svc = SummaryService::for_tests(
             pool.clone(),
-            Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
+            LlmClient::new(&format!("{}/v1", server.uri()), "m", None),
             lib.path().to_path_buf(),
         );
 
@@ -283,7 +305,7 @@ mod tests {
 
         let svc = SummaryService::for_tests(
             pool.clone(),
-            Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
+            LlmClient::new(&format!("{}/v1", server.uri()), "m", None),
             lib.path().to_path_buf(),
         );
 
@@ -339,7 +361,7 @@ mod tests {
 
         let svc = SummaryService::for_tests(
             pool.clone(),
-            Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
+            LlmClient::new(&format!("{}/v1", server.uri()), "m", None),
             lib.path().to_path_buf(),
         );
 
@@ -419,7 +441,7 @@ mod tests {
 
         let svc = SummaryService::for_tests(
             pool.clone(),
-            Summarizer::for_tests(&format!("{}/v1", server.uri()), "m"),
+            LlmClient::new(&format!("{}/v1", server.uri()), "m", None),
             lib.path().to_path_buf(),
         );
 

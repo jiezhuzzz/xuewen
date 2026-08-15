@@ -36,7 +36,7 @@ export interface PdfCopyOptions {
   selection: SelectionLike;
   /// Read at call time, never captured: the active tab changes under us.
   activeDocumentId: () => string | null;
-  /// Production: `copyText` from state.svelte.ts (Clipboard API, falling back
+  /// Production: `copyText` from clipboard.ts (Clipboard API, falling back
   /// to a hidden textarea + execCommand for plain-HTTP `--allow-remote`).
   copy: (text: string) => Promise<void>;
   /// Drops any native DOM selection when a PDF selection starts, so the two can
@@ -49,10 +49,30 @@ export interface PdfCopyOptions {
 export interface PdfCopy {
   /// Whether ⌘C should be taken over for the active tab right now.
   hasSelection(): boolean;
+  /// Whether the settled-selection feed still owes this document an
+  /// announcement (a settle timer armed or a fetch in flight) — i.e. any text
+  /// a consumer holds from an earlier announcement is stale.
+  fetchPending(documentId: string): boolean;
   copySelection(): Promise<void>;
   /// Drop a closed document's cached text (PdfDeck's close loop).
   forget(documentId: string): void;
   destroy(): void;
+}
+
+/// Consumers of the settled selection beyond ⌘C — today, selection→translate
+/// (PdfPages). The copier already runs the one reliable settle detector (the
+/// debounce below) and already holds the fetched text, so consumers subscribe
+/// here instead of duplicating both and paying a second PDFium round-trip per
+/// selection. Fired with the '\n'-joined text once a fetch lands, or with ''
+/// when a fetch comes back empty (the selection was cleared); see prefetch for
+/// the exact duplicate-suppression rule. Module-level like registerPdfCopy:
+/// listeners outlive any one copier instance.
+export type SettledSelectionListener = (documentId: string, text: string) => void;
+const settledListeners = new Set<SettledSelectionListener>();
+
+export function onPdfSelectionSettled(listener: SettledSelectionListener): () => void {
+  settledListeners.add(listener);
+  return () => settledListeners.delete(listener);
 }
 
 /// How long the selection must stop changing before we fetch its text.
@@ -117,8 +137,19 @@ export function createPdfCopy(opts: PdfCopyOptions): PdfCopy {
       // two round-trips happen to interleave.
       if (inflight.get(documentId) !== done) return;
       inflight.delete(documentId);
+      const prev = cache.get(documentId) ?? '';
       if (text) cache.set(documentId, text);
       else cache.delete(documentId);
+      // Settled-selection feed (selection→translate). Non-empty text notifies
+      // only when it differs from what was already cached: a release-on-page
+      // drag whose settle timer already fetched fires prefetch AGAIN from
+      // onEndSelection, and re-announcing the identical text would fire a
+      // second (paid) translation for one selection. Empty text always
+      // notifies — it is how a click that cleared the selection dismisses the
+      // consumer's UI, and dismissal is idempotent.
+      if (text === '' || text !== prev) {
+        for (const listener of settledListeners) listener(documentId, text);
+      }
     });
   }
 
@@ -169,6 +200,10 @@ export function createPdfCopy(opts: PdfCopyOptions): PdfCopy {
       return cache.has(id) || inflight.has(id) || timers.has(id);
     },
 
+    fetchPending(documentId: string): boolean {
+      return timers.has(documentId) || inflight.has(documentId);
+    },
+
     async copySelection(): Promise<void> {
       const id = activeDocumentId();
       if (!id) return;
@@ -217,6 +252,16 @@ export function registerPdfCopy(copier: PdfCopy | null): void {
 
 export function pdfSelectionHasText(): boolean {
   return current?.hasSelection() ?? false;
+}
+
+/// `fetchPending` on the live copier. PdfPages' pointerup uses it to drop a
+/// mid-drag parked settle: the drag kept moving after that text was fetched,
+/// so the pending fetch announces the final text itself (the pointer is up by
+/// then) and firing the parked copy too would pay for a second translation of
+/// one selection — the first with text the user never finally selected. No
+/// copier means nothing was ever announced or parked, so false is safe.
+export function pdfSelectionFetchPending(documentId: string): boolean {
+  return current?.fetchPending(documentId) ?? false;
 }
 
 export function copyPdfSelection(): void {

@@ -3,10 +3,23 @@ use serde_json::Value;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::config::DailyConfig;
-use xuewen::daily::{store, tldr::ChatClient, DailyService};
+use xuewen::daily::{store, DailyService};
 use xuewen::db;
+use xuewen::llm::LlmClient;
 use xuewen::search::{embedder::Embedder, vector::QdrantStore};
-use xuewen::web::{build_router, build_router_with_daily};
+use xuewen::web::{build_router, build_router_from, AppState};
+
+/// Router with the daily service wired: the library ships no per-service
+/// constructors, so tests compose `AppState::base` themselves.
+fn build_router_with_daily(
+    pool: sqlx::SqlitePool,
+    root: std::path::PathBuf,
+    daily: std::sync::Arc<xuewen::daily::DailyService>,
+) -> axum::Router {
+    let mut state = AppState::base(pool, root);
+    state.daily = Some(daily);
+    build_router_from(state)
+}
 
 async fn temp_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
     let dir = tempfile::tempdir().unwrap();
@@ -33,7 +46,7 @@ fn dead_service(pool: sqlx::SqlitePool) -> std::sync::Arc<DailyService> {
         pool,
         Embedder::for_tests("http://127.0.0.1:1/v1", "m", 4),
         QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap(),
-        ChatClient::for_tests("http://127.0.0.1:1/v1", "m"),
+        LlmClient::new("http://127.0.0.1:1/v1", "m", None),
         "http://127.0.0.1:1/atom",
         "http://127.0.0.1:1/pdf",
     )
@@ -68,7 +81,7 @@ async fn get_daily_returns_latest_batch() {
     .await
     .unwrap();
     let mut rich = batch_paper("2026-07-10", 1, "2507.2", Some("Short."));
-    rich.summary = Some(xuewen::daily::tldr::Summary {
+    rich.summary = Some(xuewen::summary::Summary {
         tldr: "Short.".into(),
         problem: "Gap.".into(),
         approach: "Idea.".into(),
@@ -154,7 +167,7 @@ async fn post_run_starts_then_conflicts_while_running() {
         pool.clone(),
         Embedder::for_tests("http://127.0.0.1:1/v1", "m", 4),
         QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap(),
-        ChatClient::for_tests("http://127.0.0.1:1/v1", "m"),
+        LlmClient::new("http://127.0.0.1:1/v1", "m", None),
         &format!("{}/atom", mock.uri()),
         "http://127.0.0.1:1/pdf",
     );

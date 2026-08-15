@@ -16,6 +16,7 @@ import { fromWire, kindOf, sameAsStored, toWire } from './annotationAdapter';
 import {
   annotations,
   annotationList,
+  isLoaded,
   loadAnnotations,
   removeAnnotation,
   saveAnnotation,
@@ -164,6 +165,11 @@ export function createAnnotationSync(opts: AnnotationSyncOptions): AnnotationSyn
       unsubscribe = subscribe(onEvent);
       await loadAnnotations(paperId);
       if (stopped) return;
+      // A failed load leaves this paper's marks UNKNOWN, which is not the
+      // same as none (the store's `loaded` contract): skip the import — its
+      // empty list would claim there is nothing — while the subscription
+      // above keeps marks drawn THIS session saving normally.
+      if (!isLoaded(paperId)) return;
       const items: AnnotationTransferItem[] = [];
       for (const row of annotationList(paperId)) {
         const item = fromWire(row);
@@ -189,10 +195,20 @@ export function createAnnotationSync(opts: AnnotationSyncOptions): AnnotationSyn
     },
 
     async destroy(): Promise<void> {
-      await this.flush();
+      // Intake stops BEFORE the flush: during flush's await the handler would
+      // otherwise still be subscribed, and an update event landing there
+      // (plugin teardown, not a user edit) would arm a fresh debounce timer
+      // that nothing clears — firing its write after PdfDeck has closed the
+      // document. flush() itself doesn't check `stopped`, so the pending
+      // edits still go out.
       stopped = true;
       unsubscribe?.();
       unsubscribe = null;
+      await this.flush();
+      // No event can have armed a timer since `stopped` was set; anything
+      // left here would fire against a closed document, so drop it.
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
     },
   };
 }

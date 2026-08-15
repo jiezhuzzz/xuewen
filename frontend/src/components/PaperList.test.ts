@@ -9,7 +9,8 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 import * as api from '../lib/api';
 import PaperList from './PaperList.svelte';
-import { filters, library, projects } from '../lib/state.svelte';
+import { library, projects } from '../lib/library.svelte';
+import { filters } from '../lib/searchState.svelte';
 
 beforeEach(() => {
   vi.clearAllMocks();

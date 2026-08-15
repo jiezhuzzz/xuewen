@@ -16,7 +16,8 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 import CitationPopover from './CitationPopover.svelte';
 import { citationHover } from '../lib/citationState.svelte';
-import { importState, ui } from '../lib/state.svelte';
+import { importState } from '../lib/importQueue.svelte';
+import { ui } from '../lib/ui.svelte';
 import type { PaperSummary } from '../lib/types';
 
 afterEach(() => {

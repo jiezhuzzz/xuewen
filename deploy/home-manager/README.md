@@ -27,7 +27,7 @@ does not provide on macOS. On a Mac, use the native desktop app
         ({ ... }: {
           services.xuewen = {
             enable = true;
-            # host = "127.0.0.1";  # default; non-loopback auto-adds --allow-remote
+            # host = "127.0.0.1";  # default; non-loopback also needs allowRemote = true
             # port = 8080;
 
             settings.ai = {
@@ -102,8 +102,9 @@ The runner package vendors each SDK's prebuilt CLI binary, so it adds roughly
 
 The web UI has **no authentication** and exposes mutating endpoints. Keep the
 default loopback bind and front it with an authenticating reverse proxy.
-Setting a non-loopback `host` binds publicly (and auto-adds `--allow-remote`);
-only do that on a trusted network.
+Setting a non-loopback `host` binds publicly and requires the explicit
+`allowRemote = true` opt-in (an eval-time assertion reminds you); only do that
+on a trusted network.
 
 ## Options
 
@@ -113,6 +114,7 @@ only do that on a trusted network.
 | `package` | flake build | Xuewen package to run |
 | `agentRunnerPackage` | flake build | Agent Ask runner; defaults `settings.ai.agent.runner` |
 | `host` / `port` | `127.0.0.1` / `8080` | Bind address |
+| `allowRemote` | `false` | Pass `--allow-remote` (required for a non-loopback `host`) |
 | `dataDir` | `$XDG_DATA_HOME/xuewen` | Library / DB / index state |
 | `environmentFile` | `null` | systemd `EnvironmentFile` for secrets |
 | `settings` | `{}` | `xuewen.toml` as a Nix attrset |

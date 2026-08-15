@@ -40,8 +40,11 @@ async fn parses_leftovers_via_llm_and_caches() {
 
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
     let svc = xuewen::citations::CitationsService::for_tests(pool.clone(), &upstream.uri(), "m");
-    let server =
-        TestServer::new(xuewen::web::build_router_with_citations(pool, root, svc)).unwrap();
+    let server = {
+        let mut state = xuewen::web::AppState::base(pool, root);
+        state.citations = svc;
+        TestServer::new(xuewen::web::build_router_from(state)).unwrap()
+    };
 
     // Heuristically unparseable (no anchors, no year) -> goes to the LLM.
     let body = json!({"references": ["%% garbled fragment %%"]});
@@ -70,8 +73,11 @@ async fn empty_references_is_bad_request() {
     let upstream = MockServer::start().await;
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
     let svc = xuewen::citations::CitationsService::for_tests(pool.clone(), &upstream.uri(), "m");
-    let server =
-        TestServer::new(xuewen::web::build_router_with_citations(pool, root, svc)).unwrap();
+    let server = {
+        let mut state = xuewen::web::AppState::base(pool, root);
+        state.citations = svc;
+        TestServer::new(xuewen::web::build_router_from(state)).unwrap()
+    };
 
     let resp = server
         .post("/api/papers/p1/citations")

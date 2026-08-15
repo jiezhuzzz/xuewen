@@ -26,11 +26,21 @@ vi.mock('./api', async (importOriginal) => {
 });
 
 import * as api from './api';
+import { library, loadPapers, projects } from './library.svelte';
 import {
-  filters, library, loadPapers, loadSearchStatus, projects, searchMeta, searchOpts,
-  semanticBlocked, setProjectFilter, setSearch, setStarFilter, setTagFilter,
-  toggleSearchEngine, toggleSearchField,
-} from './state.svelte';
+  filters,
+  loadSearchStatus,
+  noMatchesBlame,
+  searchMeta,
+  searchOpts,
+  semanticBlocked,
+  setProjectFilter,
+  setSearch,
+  setStarFilter,
+  setTagFilter,
+  toggleSearchEngine,
+  toggleSearchField,
+} from './searchState.svelte';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -152,5 +162,10 @@ describe('search state', () => {
     expect(searchMeta.semantic.available).toBe(false);
     expect(semanticBlocked()).toBe(true);
     expect(searchMeta.pending).toBe(3); // max(fts.pending, vectors.pending)
+  });
+
+  it('noMatchesBlame names every active filter with the · join', () => {
+    Object.assign(filters, { q: 'fuzz', tag: 'nlp/eval', starred: true });
+    expect(noMatchesBlame()).toBe('No papers match “fuzz” · nlp/eval · starred.');
   });
 });

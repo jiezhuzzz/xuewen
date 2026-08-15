@@ -50,23 +50,42 @@ pub struct TranslateService {
 }
 
 impl TranslateService {
-    /// Build from config. `None` when no provider is configured.
+    /// Build from config. `None` when no provider is configured. Config
+    /// mistakes warn here (mirroring summary/daily/citations) so they are
+    /// diagnosable from the startup log instead of silently changing behavior.
     pub fn from_config(cfg: &Config) -> Option<Self> {
-        let tcfg = cfg.translate.clone().unwrap_or_default();
+        let tcfg = cfg.translate.clone();
 
         // LLM provider: present iff [ai.translate] resolves to a client.
-        let llm = cfg
-            .ai
-            .translate
-            .as_ref()
-            .and_then(|d| cfg.ai.resolve(d).client())
-            .map(|client| LlmTranslator { client });
+        let llm = match cfg.ai.translate.as_ref() {
+            None => None,
+            Some(d) => match cfg.ai.resolve(d).client() {
+                Some(client) => Some(LlmTranslator { client }),
+                None => {
+                    tracing::warn!(
+                        "[ai.translate] has no model or API key — LLM translate disabled"
+                    );
+                    None
+                }
+            },
+        };
 
         // DeepL provider: present iff [translate.deepl] is configured.
         let deepl = tcfg.deepl.as_ref().map(deepl::DeeplTranslator::new);
 
         if llm.is_none() && deepl.is_none() {
             return None;
+        }
+        if let Some(p) = tcfg.provider {
+            let available = match p {
+                TranslateProvider::Llm => llm.is_some(),
+                TranslateProvider::Deepl => deepl.is_some(),
+            };
+            if !available {
+                tracing::warn!(
+                    "[translate].provider = {p:?} is not available — translations fall back to the other provider"
+                );
+            }
         }
         Some(Self {
             cfg: tcfg,

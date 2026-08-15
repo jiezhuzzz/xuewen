@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { closeDock, dock, initDock, openDock, toggleDock, viewer } from './state.svelte';
+import { viewer } from './tabs.svelte';
+import { closeDock, dock, initDock, openDock, toggleDock } from './ui.svelte';
 
 beforeEach(() => {
   localStorage.clear();

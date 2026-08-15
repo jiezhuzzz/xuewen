@@ -8,7 +8,7 @@ pub mod query;
 pub mod store;
 pub mod vector;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,17 +35,99 @@ pub struct SearchRequest {
     pub starred: Option<bool>,
 }
 
+/// Caller-supplied inputs to `SearchRequest::assemble` that don't come from
+/// the query string: the engine selection plus fallback filters that parsed
+/// qualifiers override (the web handler forwards its query parameters; the
+/// CLI has no equivalents and passes `None`s).
+pub struct RequestOverrides {
+    pub keyword: bool,
+    pub semantic: bool,
+    /// CSV field list, used only when the query has no `in:` qualifier.
+    pub fields: Option<String>,
+    pub status: Option<String>,
+    /// Project id (not name — `project:` NAMEs live in the query string).
+    pub project: Option<String>,
+    pub tag: Option<String>,
+    pub starred: Option<bool>,
+}
+
+impl SearchRequest {
+    /// The one place a raw query string becomes a `SearchRequest` (shared by
+    /// `/api/search` and `xuewen search`): parse it, resolve a `project:`
+    /// NAME to its id, and merge parsed qualifiers over `overrides`
+    /// (qualifiers win). An unknown project name binds the name itself — it
+    /// can never equal a project id, so the search filters to zero results;
+    /// a *failing* lookup propagates instead of being mistaken for that.
+    pub async fn assemble(
+        pool: &SqlitePool,
+        raw_q: &str,
+        overrides: RequestOverrides,
+    ) -> Result<Self> {
+        let parsed = query::parse(raw_q);
+        let project = match parsed.project {
+            Some(name) => Some(
+                crate::db::find_project_by_name(pool, &name)
+                    .await?
+                    .map(|p| p.id)
+                    .unwrap_or(name),
+            ),
+            None => overrides.project,
+        };
+        Ok(Self {
+            q: parsed.text,
+            author_terms: parsed.authors,
+            fields: parsed
+                .fields
+                .unwrap_or_else(|| fts::FieldSel::parse(overrides.fields.as_deref())),
+            keyword: overrides.keyword,
+            semantic: overrides.semantic,
+            status: parsed.status.or(overrides.status),
+            project,
+            tag: parsed.tag.or(overrides.tag),
+            starred: if parsed.starred {
+                Some(true)
+            } else {
+                overrides.starred
+            },
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SemanticState {
     pub available: bool,
     pub reason: Option<String>,
 }
 
+/// Which engine(s) matched a paper. Stringified (lowercase) only at the
+/// web/CLI boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    Keyword,
+    Semantic,
+    Both,
+}
+
+impl Engine {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Engine::Keyword => "keyword",
+            Engine::Semantic => "semantic",
+            Engine::Both => "both",
+        }
+    }
+}
+
+impl std::fmt::Display for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MatchInfo {
-    /// "keyword" | "semantic" | "both"
-    pub engine: String,
-    pub field: String,
+    pub engine: Engine,
+    pub field: fts::FieldName,
     /// HTML-safe (escaped text, <mark> highlights only).
     pub snippet: String,
     pub page: Option<i64>,
@@ -71,13 +153,23 @@ pub struct IndexStatus {
     pub reason: Option<String>,
 }
 
+/// The semantic tier's two halves. They live and die together — a Qdrant
+/// store is useless without an embedder to query it — so the pairing is one
+/// optional field instead of two separately-optional ones re-guarded at
+/// every call site.
+pub struct SemanticTier {
+    pub embedder: embedder::Embedder,
+    pub store: vector::QdrantStore,
+}
+
 /// Owns the three search backends. SQLite remains the source of truth;
 /// Tantivy and Qdrant are derived and rebuildable.
 pub struct SearchService {
     pub pool: SqlitePool,
-    pub fts: fts::FtsIndex,
-    pub vectors: vector::QdrantStore,
-    pub embedder: Option<embedder::Embedder>,
+    /// Arc so the spawn_blocking facades below can move a handle into their
+    /// closures; the index itself stays synchronous.
+    pub fts: Arc<fts::FtsIndex>,
+    pub semantic: Option<SemanticTier>,
     notify: tokio::sync::Notify,
 }
 
@@ -91,23 +183,29 @@ impl SearchService {
         if created {
             store::clear_stamps(&pool, true, false).await?;
         }
-        let (embedder, dims) = match &ai.embedding {
+        let semantic = match &ai.embedding {
             Some(e) => {
                 let r = ai.resolve(&e.endpoint);
                 let model = e.model();
-                (
-                    embedder::Embedder::from_resolved(&r, &model, e.dims),
-                    e.dims,
-                )
+                embedder::Embedder::from_resolved(&r, &model, e.dims)
+                    .map(|embedder| {
+                        anyhow::Ok(SemanticTier {
+                            embedder,
+                            store: vector::QdrantStore::new(
+                                &cfg.qdrant_url,
+                                &cfg.qdrant_collection,
+                                e.dims,
+                            )?,
+                        })
+                    })
+                    .transpose()?
             }
-            None => (None, 1536),
+            None => None,
         };
-        let vectors = vector::QdrantStore::new(&cfg.qdrant_url, &cfg.qdrant_collection, dims)?;
         Ok(Arc::new(Self {
             pool,
-            fts: fts_idx,
-            vectors,
-            embedder,
+            fts: Arc::new(fts_idx),
+            semantic,
             notify: tokio::sync::Notify::new(),
         }))
     }
@@ -116,16 +214,44 @@ impl SearchService {
     pub fn open_with(
         pool: SqlitePool,
         fts: fts::FtsIndex,
-        vectors: vector::QdrantStore,
-        embedder: Option<embedder::Embedder>,
+        semantic: Option<SemanticTier>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pool,
-            fts,
-            vectors,
-            embedder,
+            fts: Arc::new(fts),
+            semantic,
             notify: tokio::sync::Notify::new(),
         })
+    }
+
+    /// Tantivy's commit/reload/search do real fsync-backed disk I/O; these
+    /// facades run them on the blocking pool so a commit-heavy sweep or a
+    /// large-segment search can't stall the tokio workers serving HTTP.
+    async fn fts_search(
+        &self,
+        q: String,
+        sel: fts::FieldSel,
+        limit: usize,
+        scope: Option<Vec<String>>,
+    ) -> Result<Vec<fts::FtsHit>> {
+        let fts = Arc::clone(&self.fts);
+        tokio::task::spawn_blocking(move || fts.search(&q, &sel, limit, scope.as_deref()))
+            .await
+            .context("fts search task panicked")?
+    }
+
+    pub(crate) async fn fts_upsert(&self, doc: fts::PaperDoc) -> Result<()> {
+        let fts = Arc::clone(&self.fts);
+        tokio::task::spawn_blocking(move || fts.upsert(&doc))
+            .await
+            .context("fts upsert task panicked")?
+    }
+
+    pub(crate) async fn fts_delete(&self, paper_id: String) -> Result<()> {
+        let fts = Arc::clone(&self.fts);
+        tokio::task::spawn_blocking(move || fts.delete(&paper_id))
+            .await
+            .context("fts delete task panicked")?
     }
 
     /// Nudge the indexer to sweep now (harmless if nothing is stale).
@@ -142,7 +268,7 @@ impl SearchService {
     }
 
     fn semantic_config_state(&self) -> SemanticState {
-        match &self.embedder {
+        match &self.semantic {
             Some(_) => SemanticState {
                 available: true,
                 reason: None,
@@ -177,9 +303,37 @@ impl SearchService {
             };
         }
 
+        // Resolve org filters to a paper-id scope BEFORE either engine runs:
+        // each engine truncates to its top K, so a filter applied after the
+        // cutoff would silently drop matches ranked past it exactly when a
+        // qualifier narrows a broad term.
+        let filter = crate::db::PaperFilter {
+            status: req.status.clone(),
+            project: req.project.clone(),
+            tag: req.tag.clone(),
+            starred: req.starred,
+        };
+        let filtered = filter.status.is_some()
+            || filter.project.is_some()
+            || filter.tag.is_some()
+            || filter.starred == Some(true);
+        let scope: Option<Vec<String>> = if filtered {
+            Some(store::filtered_paper_ids(&self.pool, &filter).await?)
+        } else {
+            None
+        };
+        if scope.as_ref().is_some_and(|ids| ids.is_empty()) {
+            // Nothing satisfies the filter; don't bother either engine.
+            return Ok(SearchOutcome {
+                semantic,
+                results: Vec::new(),
+            });
+        }
+
         let keyword_hits = if req.keyword {
             let keyword_q = query::compose_keyword_query(&req.author_terms, q);
-            self.fts.search(&keyword_q, &req.fields, KEYWORD_LIMIT)?
+            self.fts_search(keyword_q, req.fields, KEYWORD_LIMIT, scope.clone())
+                .await?
         } else {
             Vec::new()
         };
@@ -187,45 +341,32 @@ impl SearchService {
         // Best chunk per paper, in Qdrant score order.
         let mut semantic_best: Vec<vector::VecHit> = Vec::new();
         if req.semantic && semantic.available && !q.is_empty() {
-            match self.semantic_search(q, &req.fields).await {
-                Ok(hits) => {
-                    let mut seen = std::collections::HashSet::new();
-                    for h in hits {
-                        if seen.insert(h.paper_id.clone()) {
-                            semantic_best.push(h);
+            if let Some(tier) = &self.semantic {
+                match Self::semantic_search(tier, q, &req.fields, scope.as_deref()).await {
+                    Ok(hits) => {
+                        let mut seen = std::collections::HashSet::new();
+                        for h in hits {
+                            if seen.insert(h.paper_id.clone()) {
+                                semantic_best.push(h);
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::warn!("semantic search failed: {e}");
-                    semantic = SemanticState {
-                        available: false,
-                        reason: Some(e.to_string()),
-                    };
+                    Err(e) => {
+                        tracing::warn!("semantic search failed: {e}");
+                        semantic = SemanticState {
+                            available: false,
+                            reason: Some(e.to_string()),
+                        };
+                    }
                 }
             }
         }
 
         let keyword_ids: Vec<String> = keyword_hits.iter().map(|h| h.paper_id.clone()).collect();
         let semantic_ids: Vec<String> = semantic_best.iter().map(|h| h.paper_id.clone()).collect();
-        let fused: Vec<String> = match (keyword_ids.is_empty(), semantic_ids.is_empty()) {
-            (false, true) => keyword_ids.clone(),
-            (true, false) => semantic_ids.clone(),
-            _ => fusion::rrf(&[keyword_ids.clone(), semantic_ids.clone()], RRF_K)
-                .into_iter()
-                .map(|(id, _)| id)
-                .collect(),
-        };
+        let fused = fusion::rrf(&[keyword_ids, semantic_ids], RRF_K);
 
-        let papers = store::papers_by_ids_ordered(
-            &self.pool,
-            &fused,
-            req.status.as_deref(),
-            req.project.as_deref(),
-            req.tag.as_deref(),
-            req.starred,
-        )
-        .await?;
+        let papers = store::papers_by_ids_ordered(&self.pool, &fused).await?;
 
         let kw_by_id: std::collections::HashMap<&str, &fts::FtsHit> = keyword_hits
             .iter()
@@ -242,14 +383,14 @@ impl SearchService {
             let sem = sem_by_id.get(p.id.as_str());
             let info = match (kw, sem) {
                 (Some(k), Some(_)) => MatchInfo {
-                    engine: "both".into(),
-                    field: k.field.clone(),
+                    engine: Engine::Both,
+                    field: k.field,
                     snippet: k.snippet_html.clone(),
                     page: None,
                 },
                 (Some(k), None) => MatchInfo {
-                    engine: "keyword".into(),
-                    field: k.field.clone(),
+                    engine: Engine::Keyword,
+                    field: k.field,
                     snippet: k.snippet_html.clone(),
                     page: None,
                 },
@@ -261,24 +402,30 @@ impl SearchService {
         Ok(SearchOutcome { semantic, results })
     }
 
-    async fn semantic_search(&self, q: &str, sel: &fts::FieldSel) -> Result<Vec<vector::VecHit>> {
-        let embedder = self.embedder.as_ref().expect("caller checked availability");
-        let vecs = embedder.embed(&[q.to_string()]).await?;
+    async fn semantic_search(
+        tier: &SemanticTier,
+        q: &str,
+        sel: &fts::FieldSel,
+        scope: Option<&[String]>,
+    ) -> Result<Vec<vector::VecHit>> {
+        let vecs = tier.embedder.embed(&[q.to_string()]).await?;
         let filter = match (sel.title || sel.abstract_text, sel.body) {
             (true, true) => vector::SeqFilter::All,
             (false, true) => vector::SeqFilter::OnlyBody,
             (true, false) => vector::SeqFilter::OnlySummary,
             (false, false) => vector::SeqFilter::All, // authors-only never reaches here
         };
-        self.vectors.search(&vecs[0], SEMANTIC_LIMIT, filter).await
+        tier.store
+            .search(&vecs[0], SEMANTIC_LIMIT, filter, scope)
+            .await
     }
 
     /// Snippet for a semantic-only hit: the matching chunk's text (escaped, trimmed).
     async fn semantic_match_info(&self, hit: &vector::VecHit) -> MatchInfo {
         let (field, page) = if hit.seq == 0 {
-            ("abstract", None)
+            (fts::FieldName::Abstract, None)
         } else {
-            ("body", hit.page)
+            (fts::FieldName::Body, hit.page)
         };
         let text = store::chunk_text(&self.pool, &hit.paper_id, hit.seq)
             .await
@@ -293,14 +440,16 @@ impl SearchService {
             ""
         };
         MatchInfo {
-            engine: "semantic".into(),
-            field: field.into(),
+            engine: Engine::Semantic,
+            field,
             snippet: format!("{}{}", fts::html_escape(&trimmed), ellipsis),
             page,
         }
     }
 
-    /// Live papers as planner input (meta hashes computed here).
+    /// Planner input for every paper — deliberately unfiltered, trashed rows
+    /// included: the planner needs them (as `trashed`) to detect tombstones
+    /// still holding index state. Meta hashes are computed here.
     pub async fn paper_states(&self) -> Result<Vec<planner::PaperState>> {
         let papers = sqlx::query_as::<_, Paper>("SELECT * FROM papers")
             .fetch_all(&self.pool)
@@ -325,46 +474,54 @@ impl SearchService {
         let rows = store::all_index_rows(&self.pool).await?;
         let by_id: std::collections::HashMap<&str, &store::IndexRow> =
             rows.iter().map(|r| (r.paper_id.as_str(), r)).collect();
-        let model = self.embedder.as_ref().map(|e| e.model());
+        let model = self.semantic.as_ref().map(|t| t.embedder.model());
 
-        // A tier is "indexed" only when its stamp is set AND the stored
-        // hashes still match the paper (a stale stamp is pending work).
+        // A tier is "indexed" exactly when the planner's staleness predicate
+        // sees no work for it — one definition, so status and the sweep can
+        // never disagree about what "indexed" means. Backoff is deliberately
+        // absent here: a failed-and-waiting paper still counts as pending.
+        // "Failed" is gated on the same staleness: an error on a tier with no
+        // pending work is residue no pass will ever run to clear (a pre-split
+        // failure charged to a vector tier that never runs keyword-only, or
+        // migration 0023's copy landing on a tier that was already current)
+        // and must not be reported forever.
         let (mut fts_indexed, mut vec_indexed, mut live_n) = (0i64, 0i64, 0i64);
+        let (mut fts_failed, mut vec_failed) = (0i64, 0i64);
         for p in papers.iter().filter(|p| !p.trashed) {
             live_n += 1;
-            if let Some(r) = by_id.get(p.id.as_str()) {
-                let content_ok = r.content_hash == p.content_hash && r.meta_hash == p.meta_hash;
-                // Notes only affect the FTS tier — nothing embeds them.
-                if content_ok && r.notes_hash == p.notes_hash && r.fts_indexed_at.is_some() {
-                    fts_indexed += 1;
-                }
-                if content_ok && r.vectors_indexed_at.is_some() && r.embed_model.as_deref() == model
-                {
-                    vec_indexed += 1;
-                }
+            let row = by_id.get(p.id.as_str()).copied();
+            let stale = planner::tier_staleness(p, row, model);
+            if !stale.fts {
+                fts_indexed += 1;
+            } else if row.is_some_and(|r| r.fts_last_error.is_some()) {
+                fts_failed += 1;
+            }
+            if !stale.vectors {
+                vec_indexed += 1;
+            } else if row.is_some_and(|r| r.vec_last_error.is_some()) {
+                vec_failed += 1;
             }
         }
-        let failed = rows.iter().filter(|r| r.last_error.is_some()).count() as i64;
         let sem = self.semantic_config_state();
         // Without an embedder the vectors tier is idle, not "all indexed".
-        let vectors = if self.embedder.is_some() {
+        let vectors = if self.semantic.is_some() {
             TierCounts {
                 indexed: vec_indexed,
                 pending: live_n - vec_indexed,
-                failed,
+                failed: vec_failed,
             }
         } else {
             TierCounts {
                 indexed: 0,
                 pending: 0,
-                failed,
+                failed: vec_failed,
             }
         };
         Ok(IndexStatus {
             fts: TierCounts {
                 indexed: fts_indexed,
                 pending: live_n - fts_indexed,
-                failed,
+                failed: fts_failed,
             },
             vectors,
             semantic_available: sem.available,
@@ -415,13 +572,92 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn assemble_merges_qualifiers_over_overrides_and_resolves_project() {
+        let pool = pool().await;
+        let proj = crate::db::create_project(&pool, "Thesis").await.unwrap();
+
+        // Qualifiers win over the fallback params; `project:` resolves by
+        // name, case-insensitively.
+        let req = SearchRequest::assemble(
+            &pool,
+            "fuzzing tag:nlp is:starred project:thesis status:resolved in:title",
+            RequestOverrides {
+                keyword: true,
+                semantic: false,
+                fields: Some("body".into()),
+                status: Some("needs_review".into()),
+                project: Some("fallback-id".into()),
+                tag: Some("systems".into()),
+                starred: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.q, "fuzzing");
+        assert_eq!(req.project.as_deref(), Some(proj.id.as_str()));
+        assert_eq!(req.tag.as_deref(), Some("nlp"));
+        assert_eq!(req.status.as_deref(), Some("resolved"));
+        assert_eq!(req.starred, Some(true));
+        assert!(req.fields.title && !req.fields.body);
+        assert!(req.keyword && !req.semantic);
+
+        // No qualifiers -> the fallbacks flow through untouched.
+        let req = SearchRequest::assemble(
+            &pool,
+            "fuzzing",
+            RequestOverrides {
+                keyword: true,
+                semantic: true,
+                fields: Some("body".into()),
+                status: Some("needs_review".into()),
+                project: Some("explicit-id".into()),
+                tag: Some("systems".into()),
+                starred: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.project.as_deref(), Some("explicit-id"));
+        assert_eq!(req.tag.as_deref(), Some("systems"));
+        assert_eq!(req.status.as_deref(), Some("needs_review"));
+        assert_eq!(req.starred, Some(true));
+        assert!(req.fields.body && !req.fields.title);
+
+        // Unknown project NAME binds the name (filters to zero) — not an error.
+        let req = SearchRequest::assemble(
+            &pool,
+            "project:nosuch",
+            RequestOverrides {
+                keyword: true,
+                semantic: true,
+                fields: None,
+                status: None,
+                project: None,
+                tag: None,
+                starred: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.project.as_deref(), Some("nosuch"));
+    }
+
     /// Service with keyword tier real (temp Tantivy), semantic unavailable.
     async fn keyword_only_service(pool: sqlx::SqlitePool) -> std::sync::Arc<SearchService> {
         let dir = tempfile::tempdir().unwrap();
         let (fts, _) = fts::FtsIndex::open(dir.path()).unwrap();
         std::mem::forget(dir);
-        let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
-        SearchService::open_with(pool, fts, vectors, None)
+        SearchService::open_with(pool, fts, None)
+    }
+
+    /// Semantic tier pointed at a wiremock server standing in for both
+    /// Qdrant and the embedding API.
+    fn mock_tier(server: &MockServer) -> SemanticTier {
+        SemanticTier {
+            embedder: embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4),
+            store: vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap(),
+        }
     }
 
     #[tokio::test]
@@ -475,7 +711,7 @@ mod tests {
         assert!(out.semantic.reason.is_some());
         assert_eq!(out.results.len(), 1);
         assert_eq!(out.results[0].0.id, "a");
-        assert_eq!(out.results[0].1.engine, "keyword");
+        assert_eq!(out.results[0].1.engine, Engine::Keyword);
         assert!(out.results[0].1.snippet.contains("<mark>"));
     }
 
@@ -516,6 +752,51 @@ mod tests {
             out.results.is_empty(),
             "trashed paper leaked through hydration"
         );
+    }
+
+    #[tokio::test]
+    async fn org_filters_scope_the_engines_and_short_circuit_when_empty() {
+        let pool = pool().await;
+        for (id, title) in [("a", "Fuzzing Firmware"), ("b", "Fuzzing Kernels")] {
+            crate::db::insert_paper(&pool, &paper(id, title))
+                .await
+                .unwrap();
+        }
+        crate::db::add_paper_tag(&pool, "a", "nlp").await.unwrap();
+        let svc = keyword_only_service(pool).await;
+        for (id, title) in [("a", "Fuzzing Firmware"), ("b", "Fuzzing Kernels")] {
+            svc.fts
+                .upsert(&fts::PaperDoc {
+                    id: id.into(),
+                    title: title.into(),
+                    authors: String::new(),
+                    venue: String::new(),
+                    abstract_text: String::new(),
+                    body: String::new(),
+                    notes: String::new(),
+                })
+                .unwrap();
+        }
+        let search_with_tag = |tag: &str| SearchRequest {
+            q: "fuzzing".into(),
+            author_terms: Vec::new(),
+            fields: fts::FieldSel::all(),
+            keyword: true,
+            semantic: false,
+            status: None,
+            project: None,
+            tag: Some(tag.into()),
+            starred: None,
+        };
+
+        let out = svc.search(&search_with_tag("nlp")).await.unwrap();
+        assert_eq!(out.results.len(), 1);
+        assert_eq!(out.results[0].0.id, "a");
+
+        // A filter nothing satisfies resolves to an empty id scope, which
+        // short-circuits before either engine runs.
+        let out = svc.search(&search_with_tag("nosuch")).await.unwrap();
+        assert!(out.results.is_empty());
     }
 
     #[tokio::test]
@@ -568,9 +849,7 @@ mod tests {
                 notes: String::new(),
             })
             .unwrap();
-        let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
-        let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
-        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+        let svc = SearchService::open_with(pool, fts_idx, Some(mock_tier(&server)));
 
         let out = svc
             .search(&SearchRequest {
@@ -589,7 +868,7 @@ mod tests {
 
         assert!(out.semantic.available);
         assert_eq!(out.results.len(), 1);
-        assert_eq!(out.results[0].1.engine, "both");
+        assert_eq!(out.results[0].1.engine, Engine::Both);
         assert!(
             out.results[0].1.snippet.contains("<mark>"),
             "keyword snippet preferred"
@@ -633,9 +912,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
         std::mem::forget(dir);
-        let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
-        let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
-        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+        let svc = SearchService::open_with(pool, fts_idx, Some(mock_tier(&server)));
 
         let out = svc
             .search(&SearchRequest {
@@ -654,8 +931,8 @@ mod tests {
 
         assert_eq!(out.results.len(), 1);
         let m = &out.results[0].1;
-        assert_eq!(m.engine, "semantic");
-        assert_eq!(m.field, "body");
+        assert_eq!(m.engine, Engine::Semantic);
+        assert_eq!(m.field, fts::FieldName::Body);
         assert_eq!(m.page, Some(3));
         assert!(
             m.snippet.contains("&lt;escaping&gt;"),
@@ -685,9 +962,11 @@ mod tests {
             })
             .unwrap();
         // Embedder points at a dead port -> semantic path errors.
-        let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
-        let embedder = embedder::Embedder::for_tests("http://127.0.0.1:1/v1", "m", 4);
-        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+        let tier = SemanticTier {
+            embedder: embedder::Embedder::for_tests("http://127.0.0.1:1/v1", "m", 4),
+            store: vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap(),
+        };
+        let svc = SearchService::open_with(pool, fts_idx, Some(tier));
 
         let out = svc
             .search(&SearchRequest {
@@ -786,9 +1065,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
         std::mem::forget(dir);
-        let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
-        let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
-        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+        let svc = SearchService::open_with(pool, fts_idx, Some(mock_tier(&server)));
 
         let out = svc
             .search(&SearchRequest {
@@ -863,13 +1140,61 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::search::store::record_error(&pool, "a", "boom")
+        crate::search::store::record_error(&pool, "a", "boom", store::ErrorTier::Both)
             .await
             .unwrap();
 
         let svc = keyword_only_service(pool).await;
         let st = svc.status().await.unwrap();
         assert_eq!(st.fts.failed, 1, "status should count papers with errors");
+    }
+
+    #[tokio::test]
+    async fn status_does_not_count_errors_on_tiers_with_no_pending_work() {
+        let pool = pool().await;
+        let p = paper("a", "T");
+        crate::db::insert_paper(&pool, &p).await.unwrap();
+        crate::search::store::replace_chunks(
+            &pool,
+            "a",
+            &[crate::search::chunker::Chunk {
+                seq: 0,
+                page: None,
+                text: "T".into(),
+            }],
+            "hash-a",
+            &crate::search::store::meta_hash(&p),
+        )
+        .await
+        .unwrap();
+        // A pre-split failure once charged the vector tier too; keyword-only,
+        // that tier never runs, so nothing ever clears its error...
+        crate::search::store::record_error(&pool, "a", "boom", store::ErrorTier::Both)
+            .await
+            .unwrap();
+        // ...and the next FTS pass succeeds.
+        crate::search::store::mark_fts_done(&pool, "a", "")
+            .await
+            .unwrap();
+        // Migration-0023-style residue: an error stamped on a tier that is
+        // already current, which no pass will ever run to clear.
+        sqlx::query("UPDATE search_index SET fts_last_error = 'legacy' WHERE paper_id = 'a'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let svc = keyword_only_service(pool).await;
+        let st = svc.status().await.unwrap();
+        assert_eq!(st.fts.indexed, 1);
+        assert_eq!(st.fts.pending, 0);
+        assert_eq!(
+            st.fts.failed, 0,
+            "an error on a current tier is residue, not a failure"
+        );
+        assert_eq!(
+            st.vectors.failed, 0,
+            "no embedder: no vector pass exists to clear this error"
+        );
     }
 
     #[tokio::test]
@@ -910,9 +1235,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
         std::mem::forget(dir);
-        let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
-        let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
-        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+        let svc = SearchService::open_with(pool, fts_idx, Some(mock_tier(&server)));
 
         let out = svc
             .search(&SearchRequest {
@@ -931,7 +1254,7 @@ mod tests {
 
         assert_eq!(out.results.len(), 1);
         let m = &out.results[0].1;
-        assert_eq!(m.engine, "semantic");
+        assert_eq!(m.engine, Engine::Semantic);
         assert!(
             m.snippet.ends_with("…"),
             "snippet should end with ellipsis: {}",
@@ -1011,9 +1334,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(dir.path()).unwrap();
         std::mem::forget(dir);
-        let vectors = vector::QdrantStore::new(&server.uri(), "xuewen", 4).unwrap();
-        let embedder = embedder::Embedder::for_tests(&format!("{}/v1", server.uri()), "m", 4);
-        let svc = SearchService::open_with(pool, fts_idx, vectors, Some(embedder));
+        let svc = SearchService::open_with(pool, fts_idx, Some(mock_tier(&server)));
 
         let out = svc
             .search(&SearchRequest {
@@ -1055,7 +1376,7 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::search::store::record_error(&pool, "a", "boom")
+        crate::search::store::record_error(&pool, "a", "boom", store::ErrorTier::Both)
             .await
             .unwrap();
         let svc = keyword_only_service(pool).await;

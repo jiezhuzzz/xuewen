@@ -51,10 +51,11 @@ async fn translate_returns_translation_from_mocked_llm() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
     let cfg = translate_cfg(&upstream.uri());
     let translate = std::sync::Arc::new(TranslateService::from_config(&cfg).unwrap());
-    let server = TestServer::new(xuewen::web::build_router_with_translate(
-        pool, root, translate,
-    ))
-    .unwrap();
+    let server = {
+        let mut state = xuewen::web::AppState::base(pool, root);
+        state.translate = Some(translate);
+        TestServer::new(xuewen::web::build_router_from(state)).unwrap()
+    };
 
     let resp = server
         .post("/api/translate")

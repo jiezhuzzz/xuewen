@@ -2,6 +2,7 @@ mod api;
 mod assets;
 mod chat;
 mod dto;
+mod error;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,8 +20,10 @@ use crate::pipeline::IngestCtx;
 /// `Resolver`/`Grobid` are not).
 pub struct Ingest {
     pub ctx: IngestCtx,
-    /// Where uploaded bytes are written before ingest (`inbox_dir/_uploads`).
-    pub staging_dir: PathBuf,
+    /// HTTP fetcher for URL imports, built once: its two `reqwest::Client`s
+    /// carry connection pools that per-request construction would discard.
+    /// Also owns the EZproxy login prefix (`[proxy].login_url`).
+    pub fetcher: crate::import::Fetcher,
 }
 
 /// Shared state for the web handlers.
@@ -30,8 +33,6 @@ pub struct AppState {
     pub library_root: PathBuf,
     /// Present only when the server was started to allow uploads (`serve`).
     pub ingest: Option<Arc<Ingest>>,
-    /// EZproxy login prefix (from `[proxy].login_url`); `None` disables proxy fetch.
-    pub proxy_login_url: Option<String>,
     /// Present when a search index/service was opened (serve). `None` in
     /// read-only test routers -> /api/search answers 503.
     pub search: Option<Arc<crate::search::SearchService>>,
@@ -57,16 +58,17 @@ pub struct AppState {
 
 impl AppState {
     /// Base state with every optional service off (heuristics-only
-    /// citations, no ingest/search/daily/agent, default UI prefs). The
-    /// `build_router*` helpers below flip on just what they need.
-    fn base(pool: SqlitePool, library_root: PathBuf) -> Self {
+    /// citations, no ingest/search/daily/agent, default UI prefs). Tests
+    /// compose on top of this — set just the services they need, then hand
+    /// the state to `build_router_from` — so no per-service constructor
+    /// exists or needs adding when the next service lands.
+    pub fn base(pool: SqlitePool, library_root: PathBuf) -> Self {
         let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
         let annotations = Arc::new(crate::annotations::AnnotationsService::new(pool.clone()));
         Self {
             pool,
             library_root,
             ingest: None,
-            proxy_login_url: None,
             search: None,
             daily: None,
             agent: None,
@@ -87,89 +89,12 @@ impl AppState {
 
 /// Assemble the read-only web router (no import). Used directly by tests.
 pub fn build_router(pool: SqlitePool, library_root: PathBuf) -> Router {
-    router_with(AppState::base(pool, library_root))
+    build_router_from(AppState::base(pool, library_root))
 }
 
-/// Assemble the full web router, including the import endpoint.
-pub fn build_router_with_ingest(
-    pool: SqlitePool,
-    library_root: PathBuf,
-    ingest: Arc<Ingest>,
-) -> Router {
-    let mut state = AppState::base(pool, library_root);
-    state.ingest = Some(ingest);
-    router_with(state)
-}
-
-/// Full router with import + a configured proxy prefix. Used by tests.
-pub fn build_router_with_ingest_proxy(
-    pool: SqlitePool,
-    library_root: PathBuf,
-    ingest: Arc<Ingest>,
-    proxy_login_url: Option<String>,
-) -> Router {
-    let mut state = AppState::base(pool, library_root);
-    state.ingest = Some(ingest);
-    state.proxy_login_url = proxy_login_url;
-    router_with(state)
-}
-
-/// Read-only router plus a live search service. Used by tests.
-pub fn build_router_with_search(
-    pool: SqlitePool,
-    library_root: PathBuf,
-    search: Arc<crate::search::SearchService>,
-) -> Router {
-    let mut state = AppState::base(pool, library_root);
-    state.search = Some(search);
-    router_with(state)
-}
-
-/// Read-only router plus a daily-recommendations service. Used by tests.
-pub fn build_router_with_daily(
-    pool: SqlitePool,
-    library_root: PathBuf,
-    daily: Arc<crate::daily::DailyService>,
-) -> Router {
-    let mut state = AppState::base(pool, library_root);
-    state.daily = Some(daily);
-    router_with(state)
-}
-
-/// Read-only router plus a configured agent service. Used by tests.
-pub fn build_router_with_agent(
-    pool: SqlitePool,
-    library_root: PathBuf,
-    agent: Arc<crate::agent::AgentService>,
-) -> Router {
-    let mut state = AppState::base(pool, library_root);
-    state.agent = Some(agent);
-    router_with(state)
-}
-
-/// Test router with the citations service wired (everything else off).
-pub fn build_router_with_citations(
-    pool: SqlitePool,
-    library_root: PathBuf,
-    citations: Arc<crate::citations::CitationsService>,
-) -> Router {
-    let mut state = AppState::base(pool, library_root);
-    state.citations = citations;
-    router_with(state)
-}
-
-/// Read-only router plus a configured translate service. Used by tests.
-pub fn build_router_with_translate(
-    pool: SqlitePool,
-    library_root: PathBuf,
-    translate: Arc<crate::translate::TranslateService>,
-) -> Router {
-    let mut state = AppState::base(pool, library_root);
-    state.translate = Some(translate);
-    router_with(state)
-}
-
-fn router_with(state: AppState) -> Router {
+/// Assemble the router for any `AppState` the caller composed — arbitrary
+/// service combinations without a constructor per service.
+pub fn build_router_from(state: AppState) -> Router {
     Router::new()
         .route(
             "/api/papers",
@@ -251,12 +176,12 @@ fn router_with(state: AppState) -> Router {
             get(api::list_annotations).delete(api::clear_annotations),
         )
         // PUT (not POST): the reader's plugin mints the annotation id, so the
-        // id addresses the row and a retried save is idempotent.
+        // id addresses the row and a retried save is idempotent. Deliberately
+        // no PATCH: a partial update of the projection columns would desync
+        // them from the authoritative payload, which the reader replays alone.
         .route(
             "/api/papers/{paper_id}/annotations/{annotation_id}",
-            axum::routing::put(api::put_annotation)
-                .patch(api::patch_annotation)
-                .delete(api::delete_annotation),
+            axum::routing::put(api::put_annotation).delete(api::delete_annotation),
         )
         .route(
             "/api/papers/{id}/code",
@@ -275,7 +200,7 @@ fn router_with(state: AppState) -> Router {
 /// gracefully on SIGINT/SIGTERM (see `shutdown_signal`) — the container
 /// runs this as PID 1, where an unhandled signal means a hung stop.
 pub async fn serve_on(listener: tokio::net::TcpListener, state: AppState) -> Result<()> {
-    let app = router_with(state);
+    let app = build_router_from(state);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

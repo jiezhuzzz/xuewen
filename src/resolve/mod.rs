@@ -2,17 +2,13 @@ pub mod arxiv;
 pub mod crossref;
 pub mod dblp;
 pub mod grobid;
-pub mod http;
 pub mod unpaywall;
 
+use crate::http::{HttpClient, RetryPolicy};
 use crate::matching;
 use crate::models::Identifier;
 use anyhow::Result;
-use regex::Regex;
-use std::sync::LazyLock;
 use std::time::Duration;
-
-use self::http::{HttpClient, RetryPolicy};
 
 /// Normalized bibliographic metadata produced by a source resolver.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -26,20 +22,8 @@ pub struct ResolvedMetadata {
     pub arxiv_id: Option<String>,
     pub dblp_key: Option<String>,
     pub url: Option<String>,
-    /// Which source produced this record: "arxiv" | "crossref".
+    /// Which source produced this record: "arxiv" | "crossref" | "dblp" | "grobid".
     pub source: String,
-}
-
-/// Collapse all runs of whitespace to single spaces and trim.
-pub(crate) fn collapse_ws(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
-
-/// Strip XML/HTML tags (e.g. Crossref JATS `<jats:p>`) and collapse whitespace.
-pub(crate) fn strip_tags(s: &str) -> String {
-    collapse_ws(&TAG_RE.replace_all(s, " "))
 }
 
 /// Fetches authoritative metadata for an identifier. A network or parse failure
@@ -91,12 +75,8 @@ impl Resolver {
         crossref_base: String,
         retry: RetryPolicy,
     ) -> Result<Self> {
-        let ua = match contact_email {
-            Some(email) => format!("xuewen/0.1 (mailto:{email})"),
-            None => "xuewen/0.1".to_string(),
-        };
         let client = reqwest::Client::builder()
-            .user_agent(ua)
+            .user_agent(crate::http::user_agent(contact_email))
             .timeout(Duration::from_secs(20))
             .build()?;
         Ok(Self {
@@ -137,17 +117,11 @@ impl Resolver {
     }
 
     async fn try_arxiv(&self, id: &str) -> Option<ResolvedMetadata> {
-        match self.fetch_parse_arxiv(id).await {
-            Ok(Some(mut m)) => {
-                m.arxiv_id = Some(id.to_string());
-                Some(m)
-            }
-            Ok(None) => None,
-            Err(e) => {
-                tracing::warn!("arxiv resolve failed for {id}: {e}");
-                None
-            }
-        }
+        let mut m = degrade("arxiv resolve", id, self.fetch_parse_arxiv(id).await)??;
+        // Stamp the queried id in canonical (version-stripped) form: the Atom
+        // feed does not echo it and the caller may hold a versioned one.
+        m.arxiv_id = Some(crate::models::canonical_arxiv(id));
+        Some(m)
     }
 
     async fn fetch_parse_arxiv(&self, id: &str) -> Result<Option<ResolvedMetadata>> {
@@ -156,19 +130,15 @@ impl Resolver {
     }
 
     async fn try_crossref(&self, doi: &str) -> Option<ResolvedMetadata> {
-        match self.fetch_parse_crossref(doi).await {
-            Ok(Some(mut m)) => {
-                if m.doi.is_none() {
-                    m.doi = Some(doi.to_string());
-                }
-                Some(m)
-            }
-            Ok(None) => None,
-            Err(e) => {
-                tracing::warn!("crossref resolve failed for {doi}: {e}");
-                None
-            }
+        let mut m = degrade(
+            "crossref resolve",
+            doi,
+            self.fetch_parse_crossref(doi).await,
+        )??;
+        if m.doi.is_none() {
+            m.doi = Some(crate::models::canonical_doi(doi));
         }
+        Some(m)
     }
 
     async fn fetch_parse_crossref(&self, doi: &str) -> Result<Option<ResolvedMetadata>> {
@@ -189,13 +159,12 @@ impl Resolver {
     }
 
     async fn try_dblp(&self, title: &str) -> Option<ResolvedMetadata> {
-        match self.fetch_parse_dblp(title).await {
-            Ok(cands) => best_match(title, cands),
-            Err(e) => {
-                tracing::warn!("dblp search failed for {title:?}: {e}");
-                None
-            }
-        }
+        degrade(
+            "dblp search",
+            &format!("{title:?}"),
+            self.fetch_parse_dblp(title).await,
+        )
+        .and_then(|cands| best_match(title, cands))
     }
 
     async fn fetch_parse_dblp(&self, title: &str) -> Result<Vec<ResolvedMetadata>> {
@@ -204,13 +173,12 @@ impl Resolver {
     }
 
     async fn try_crossref_search(&self, title: &str) -> Option<ResolvedMetadata> {
-        match self.fetch_parse_crossref_search(title).await {
-            Ok(cands) => best_match(title, cands),
-            Err(e) => {
-                tracing::warn!("crossref search failed for {title:?}: {e}");
-                None
-            }
-        }
+        degrade(
+            "crossref search",
+            &format!("{title:?}"),
+            self.fetch_parse_crossref_search(title).await,
+        )
+        .and_then(|cands| best_match(title, cands))
     }
 
     async fn fetch_parse_crossref_search(&self, title: &str) -> Result<Vec<ResolvedMetadata>> {
@@ -222,12 +190,24 @@ impl Resolver {
     /// there is no OA copy, no configured contact email, or the lookup fails.
     pub async fn oa_pdf_url(&self, doi: &str) -> Option<String> {
         let email = self.email.as_deref()?;
-        match unpaywall::fetch(&self.http, &self.unpaywall_base, doi, email).await {
-            Ok(u) => u,
-            Err(e) => {
-                tracing::warn!("unpaywall lookup failed for {doi}: {e}");
-                None
-            }
+        degrade(
+            "unpaywall lookup",
+            doi,
+            unpaywall::fetch(&self.http, &self.unpaywall_base, doi, email).await,
+        )
+        .flatten()
+    }
+}
+
+/// The log-and-degrade shared by every resolver wrapper: an upstream failure
+/// warns (`"<what> failed for <key>: <err>"`) and resolves to `None` —
+/// resolution never aborts ingestion.
+fn degrade<T>(what: &str, key: &str, r: Result<T>) -> Option<T> {
+    match r {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!("{what} failed for {key}: {e}");
+            None
         }
     }
 }
@@ -249,13 +229,12 @@ impl Resolver {
             self.fetch_parse_dblp(query),
             self.fetch_parse_crossref_search(query)
         );
-        match dblp {
-            Ok(c) => cands.extend(c),
-            Err(e) => tracing::warn!("dblp candidate search failed for {query:?}: {e}"),
+        let key = format!("{query:?}");
+        if let Some(c) = degrade("dblp candidate search", &key, dblp) {
+            cands.extend(c);
         }
-        match crossref {
-            Ok(c) => cands.extend(c),
-            Err(e) => tracing::warn!("crossref candidate search failed for {query:?}: {e}"),
+        if let Some(c) = degrade("crossref candidate search", &key, crossref) {
+            cands.extend(c);
         }
         rank_candidates(query, cands)
     }
@@ -279,29 +258,40 @@ fn rank_candidates(query: &str, cands: Vec<ResolvedMetadata>) -> Vec<ResolvedMet
         }
         out.push(c);
     }
-    out.sort_by(|a, b| {
-        let score = |c: &ResolvedMetadata| {
-            c.title
-                .as_deref()
-                .map(|t| matching::title_similarity(query, t))
-                .unwrap_or(-1.0)
-        };
-        score(b)
-            .partial_cmp(&score(a))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // Score once per candidate (title_similarity allocates + runs a
+    // Levenshtein), then sort on the precomputed key; the stable sort keeps
+    // equal-scoring candidates in arrival order, as before.
+    let mut scored = scored(query, out);
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out: Vec<ResolvedMetadata> = scored.into_iter().map(|(_, c)| c).collect();
     out.truncate(MAX_CANDIDATES);
     out
+}
+
+/// Score every candidate against `query` (untitled candidates sink to -1).
+/// The one scoring site shared by ranking and the confidence gate, so a
+/// threshold or normalization change can never apply to one and not the other.
+fn scored(query: &str, cands: Vec<ResolvedMetadata>) -> Vec<(f64, ResolvedMetadata)> {
+    cands
+        .into_iter()
+        .map(|c| {
+            let score = c
+                .title
+                .as_deref()
+                .map(|t| matching::title_similarity(query, t))
+                .unwrap_or(-1.0);
+            (score, c)
+        })
+        .collect()
 }
 
 /// Pick the highest-similarity candidate whose title confidently matches `query`.
 fn best_match(query: &str, candidates: Vec<ResolvedMetadata>) -> Option<ResolvedMetadata> {
     let mut best: Option<(f64, ResolvedMetadata)> = None;
-    for c in candidates {
-        let score = match c.title.as_deref() {
-            Some(t) => matching::title_similarity(query, t),
-            None => continue,
-        };
+    for (score, c) in scored(query, candidates) {
+        // Strictly greater: at equal scores the FIRST candidate wins.
+        // Exact ties are realistic (conference and journal versions of one
+        // work share a title), and the winner must not silently flip.
         if score >= matching::MATCH_THRESHOLD && best.as_ref().is_none_or(|(bs, _)| score > *bs) {
             best = Some((score, c));
         }
@@ -312,19 +302,6 @@ fn best_match(query: &str, candidates: Vec<ResolvedMetadata>) -> Option<Resolved
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn collapse_ws_normalizes() {
-        assert_eq!(collapse_ws("  a\n  b\t c "), "a b c");
-    }
-
-    #[test]
-    fn strip_tags_removes_jats() {
-        assert_eq!(
-            strip_tags("<jats:p>Hello  <b>world</b></jats:p>"),
-            "Hello world"
-        );
-    }
 
     fn cand(title: &str, doi: Option<&str>, dblp_key: Option<&str>) -> ResolvedMetadata {
         ResolvedMetadata {
@@ -358,6 +335,22 @@ mod tests {
             1,
             "case-insensitive DOI dedup"
         );
+    }
+
+    #[test]
+    fn best_match_keeps_the_first_of_equal_scoring_candidates() {
+        let query = "Deep Residual Learning for Image Recognition";
+        // Identical titles score identically; the first (e.g. the conference
+        // version DBLP lists ahead of the journal reprint) must win.
+        let winner = best_match(
+            query,
+            vec![
+                cand(query, None, Some("conf/cvpr/HeZRS16")),
+                cand(query, None, Some("journals/corr/HeZRS15")),
+            ],
+        )
+        .unwrap();
+        assert_eq!(winner.dblp_key.as_deref(), Some("conf/cvpr/HeZRS16"));
     }
 
     #[test]

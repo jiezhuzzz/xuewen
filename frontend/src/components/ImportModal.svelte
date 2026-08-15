@@ -1,12 +1,14 @@
 <script lang="ts">
   import { Check, CircleAlert, Copy, FileWarning, Link, Loader, Upload } from 'lucide-svelte';
+  import { clearProxyCookie, setProxyCookie } from '../lib/api';
   import {
-    clearProxyCookie,
-    getSettings,
-    setProxyCookie,
-  } from '../lib/api';
-  import { closeImport, enqueueFiles, enqueueUrl, importState } from '../lib/state.svelte';
-  import type { Settings } from '../lib/types';
+    closeImport,
+    enqueueFiles,
+    enqueueUrl,
+    importState,
+    type ImportItem,
+  } from '../lib/importQueue.svelte';
+  import { appSettings, loadSettings } from '../lib/ui.svelte';
   import Modal from './Modal.svelte';
 
   let dragging = $state(false);
@@ -34,49 +36,113 @@
     void enqueueUrl(v);
   }
 
-  let settings = $state<Settings | null>(null);
+  // The cookie state lives in the shared appSettings store (the app-startup
+  // loadSettings and this modal read the same `/api/settings`); the modal
+  // only re-calls loadSettings after mutating the cookie. Failures surface
+  // inline (the DockCode attach/detach pattern) — a rejected save must not
+  // leave the "not set" badge silently standing.
   let cookieInput = $state('');
-  let savingCookie = $state(false);
-  async function loadSettings() {
-    try {
-      settings = await getSettings();
-    } catch {
-      settings = null;
-    }
-  }
+  let cookieBusy = $state(false);
+  let cookieError = $state<string | null>(null);
   async function saveCookie() {
     const v = cookieInput.trim();
-    if (!v) return;
-    savingCookie = true;
+    if (!v || cookieBusy) return;
+    cookieBusy = true;
+    cookieError = null;
     try {
       await setProxyCookie(v);
       cookieInput = '';
       await loadSettings();
+    } catch (e) {
+      cookieError = (e as Error).message;
     } finally {
-      savingCookie = false;
+      cookieBusy = false;
     }
   }
   async function removeCookie() {
-    await clearProxyCookie();
-    await loadSettings();
+    if (cookieBusy) return;
+    cookieBusy = true;
+    cookieError = null;
+    try {
+      await clearProxyCookie();
+      await loadSettings();
+    } catch (e) {
+      cookieError = (e as Error).message;
+    } finally {
+      cookieBusy = false;
+    }
   }
-  // Load once when the modal mounts.
+  // Refresh once when the modal mounts (the cookie may have expired or been
+  // set from the CLI since startup).
   $effect(() => {
     void loadSettings();
   });
 
+  // Every per-status decision (icon, summary bucket, row label) in ONE
+  // table, keyed by the full status union — a new import outcome is one
+  // record entry here, and the Record type makes missing one a type error
+  // instead of a silent fall-through to the queued styling. The 'ingested'
+  // row's message + needs-review badge layout stays in the markup below;
+  // its label entry exists only to satisfy exhaustiveness.
+  const STATUS_META: Record<
+    ImportItem['status'],
+    {
+      icon: typeof Check | null;
+      iconClass: string;
+      bucket: 'ingested' | 'skipped' | 'failed' | 'pending';
+      label: (item: ImportItem) => string;
+    }
+  > = {
+    queued: { icon: null, iconClass: '', bucket: 'pending', label: () => 'queued' },
+    importing: {
+      icon: Loader,
+      iconClass: 'shrink-0 animate-spin text-amber-600',
+      bucket: 'pending',
+      label: () => 'importing…',
+    },
+    ingested: {
+      icon: Check,
+      iconClass: 'shrink-0 text-lime-600',
+      bucket: 'ingested',
+      label: (i) => i.message ?? '',
+    },
+    duplicate: {
+      icon: Copy,
+      iconClass: 'shrink-0 text-stone-400',
+      bucket: 'skipped',
+      label: () => 'duplicate',
+    },
+    'same-work': {
+      icon: Copy,
+      iconClass: 'shrink-0 text-stone-400',
+      bucket: 'skipped',
+      label: () => 'already in library',
+    },
+    'in-trash': {
+      icon: Copy,
+      iconClass: 'shrink-0 text-stone-400',
+      bucket: 'skipped',
+      label: (i) => `in trash — run: xuewen restore ${i.message}`,
+    },
+    unfetched: {
+      icon: FileWarning,
+      iconClass: 'shrink-0 text-yellow-600',
+      bucket: 'skipped',
+      label: () => 'no PDF — download & drop in inbox',
+    },
+    failed: {
+      icon: CircleAlert,
+      iconClass: 'shrink-0 text-red-500',
+      bucket: 'failed',
+      label: (i) => i.message ?? '',
+    },
+  };
+
   const summary = $derived.by(() => {
     const c = { ingested: 0, skipped: 0, failed: 0 };
     for (const i of importState.items) {
-      if (i.status === 'ingested') c.ingested++;
-      else if (
-        i.status === 'duplicate' ||
-        i.status === 'same-work' ||
-        i.status === 'in-trash' ||
-        i.status === 'unfetched'
-      )
-        c.skipped++;
-      else if (i.status === 'failed') c.failed++;
+      const bucket = STATUS_META[i.status].bucket;
+      if (bucket !== 'pending') c[bucket]++;
     }
     return c;
   });
@@ -145,17 +211,10 @@
   {#if importState.items.length}
     <ul class="mt-4 space-y-1">
       {#each importState.items as item, i (i)}
+        {@const meta = STATUS_META[item.status]}
         <li class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm">
-          {#if item.status === 'importing'}
-            <Loader size={14} class="shrink-0 animate-spin text-amber-600" />
-          {:else if item.status === 'ingested'}
-            <Check size={14} class="shrink-0 text-lime-600" />
-          {:else if item.status === 'duplicate' || item.status === 'same-work' || item.status === 'in-trash'}
-            <Copy size={14} class="shrink-0 text-stone-400" />
-          {:else if item.status === 'failed'}
-            <CircleAlert size={14} class="shrink-0 text-red-500" />
-          {:else if item.status === 'unfetched'}
-            <FileWarning size={14} class="shrink-0 text-yellow-600" />
+          {#if meta.icon}
+            <meta.icon size={14} class={meta.iconClass} />
           {:else}
             <span class="h-3.5 w-3.5 shrink-0 rounded-full border border-stone-300 dark:border-stone-600"></span>
           {/if}
@@ -171,55 +230,60 @@
             <span
               class="max-w-[45%] shrink-0 truncate text-right text-xs text-stone-500 dark:text-stone-400"
               title={item.message}
-            >
-              {#if item.status === 'duplicate'}duplicate
-              {:else if item.status === 'same-work'}already in library
-              {:else if item.status === 'in-trash'}in trash — run: xuewen restore {item.message}
-              {:else if item.status === 'unfetched'}no PDF — download & drop in inbox
-              {:else if item.status === 'failed'}{item.message}
-              {:else if item.status === 'importing'}importing…
-              {:else}queued{/if}
-            </span>
+            >{meta.label(item)}</span>
           {/if}
         </li>
       {/each}
     </ul>
   {/if}
 
-  <details class="mt-4 rounded-lg border border-stone-200 text-sm dark:border-stone-800">
-    <summary class="cursor-pointer px-3 py-2 text-stone-600 dark:text-stone-300">
-      Institutional access (EZproxy cookie)
-      {#if settings?.proxy_cookie_set}
-        <span class="ml-1 rounded bg-lime-100 px-1.5 py-0.5 text-xs text-lime-700 dark:bg-lime-500/15 dark:text-lime-400">set</span>
-      {:else}
-        <span class="ml-1 rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-500 dark:bg-stone-800 dark:text-stone-400">not set</span>
-      {/if}
-    </summary>
-    <div class="space-y-2 border-t border-stone-200 p-3 dark:border-stone-800">
-      <p class="text-xs text-stone-500 dark:text-stone-400">
-        Paste the <code>Cookie:</code> header for <code>proxy.uchicago.edu</code> (from a browser
-        cookie extension or DevTools) to fetch paywalled ACM/IEEE PDFs. It expires — refresh it here.
-      </p>
-      <div class="flex gap-2">
-        <input
-          bind:value={cookieInput}
-          type="password"
-          placeholder="ezproxy=…; …"
-          class="w-full rounded-lg border border-stone-300 bg-transparent px-2 py-1.5 text-sm outline-none dark:border-stone-700"
-        />
-        <button
-          type="button"
-          onclick={saveCookie}
-          disabled={!cookieInput.trim() || savingCookie}
-          class="rounded-lg bg-stone-700 px-3 py-1.5 text-sm text-white hover:bg-stone-600 disabled:opacity-50"
-        >Save</button>
-      </div>
-      {#if settings?.proxy_cookie_set}
-        <div class="flex items-center justify-between text-xs text-stone-500 dark:text-stone-400">
-          <span>Updated {settings.proxy_cookie_updated_at ?? '—'}</span>
-          <button type="button" onclick={removeCookie} class="text-red-500 hover:underline">Clear</button>
+  <!-- Hidden entirely without a configured [proxy]: a cookie saved on such a
+       deployment is never used by the import fetcher, so offering the form
+       would only mislead. The host comes from the server's own config. -->
+  {#if appSettings.proxyHost}
+    <details class="mt-4 rounded-lg border border-stone-200 text-sm dark:border-stone-800">
+      <summary class="cursor-pointer px-3 py-2 text-stone-600 dark:text-stone-300">
+        Institutional access (EZproxy cookie)
+        {#if appSettings.proxyCookieSet}
+          <span class="ml-1 rounded bg-lime-100 px-1.5 py-0.5 text-xs text-lime-700 dark:bg-lime-500/15 dark:text-lime-400">set</span>
+        {:else}
+          <span class="ml-1 rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-500 dark:bg-stone-800 dark:text-stone-400">not set</span>
+        {/if}
+      </summary>
+      <div class="space-y-2 border-t border-stone-200 p-3 dark:border-stone-800">
+        <p class="text-xs text-stone-500 dark:text-stone-400">
+          Paste the <code>Cookie:</code> header for <code>{appSettings.proxyHost}</code> (from a browser
+          cookie extension or DevTools) to fetch paywalled ACM/IEEE PDFs. It expires — refresh it here.
+        </p>
+        <div class="flex gap-2">
+          <input
+            bind:value={cookieInput}
+            type="password"
+            placeholder="ezproxy=…; …"
+            class="w-full rounded-lg border border-stone-300 bg-transparent px-2 py-1.5 text-sm outline-none dark:border-stone-700"
+          />
+          <button
+            type="button"
+            onclick={saveCookie}
+            disabled={!cookieInput.trim() || cookieBusy}
+            class="rounded-lg bg-stone-700 px-3 py-1.5 text-sm text-white hover:bg-stone-600 disabled:opacity-50"
+          >Save</button>
         </div>
-      {/if}
-    </div>
-  </details>
+        {#if cookieError}
+          <p class="text-xs text-red-600 dark:text-red-400">{cookieError}</p>
+        {/if}
+        {#if appSettings.proxyCookieSet}
+          <div class="flex items-center justify-between text-xs text-stone-500 dark:text-stone-400">
+            <span>Updated {appSettings.proxyCookieUpdatedAt ?? '—'}</span>
+            <button
+              type="button"
+              onclick={removeCookie}
+              disabled={cookieBusy}
+              class="text-red-500 hover:underline disabled:opacity-50"
+            >Clear</button>
+          </div>
+        {/if}
+      </div>
+    </details>
+  {/if}
 </Modal>

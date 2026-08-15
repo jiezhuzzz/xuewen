@@ -1,11 +1,15 @@
+import { render, screen, waitFor } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import ImportModal from './ImportModal.svelte';
 import {
   closeImport,
   enqueueFiles,
   enqueueUrl,
   importState,
   openImport,
-} from '../lib/state.svelte';
+} from '../lib/importQueue.svelte';
+import { appSettings } from '../lib/ui.svelte';
 
 function pdf(name: string): File {
   return new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], name, {
@@ -172,5 +176,97 @@ describe('enqueueUrl', () => {
 
     expect(importState.items[0].status).toBe('unfetched');
     expect(importState.items[0].message).toBe('Paywalled Paper');
+  });
+});
+
+describe('proxy cookie section', () => {
+  // Settings GETs serve from `cookieSet`; the PUT/DELETE handlers mutate or
+  // reject so the modal's inline error path and store refresh are observable.
+  function stubSettingsFetch(opts: { failPut?: boolean; noProxy?: boolean } = {}) {
+    let cookieSet = appSettings.proxyCookieSet;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const u = String(url);
+        const json = (o: unknown, status = 200) =>
+          new Response(JSON.stringify(o), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          });
+        if (u === '/api/settings/proxy-cookie' && init?.method === 'PUT') {
+          if (opts.failPut) return json({ error: 'bad cookie' }, 400);
+          cookieSet = true;
+          return new Response(null, { status: 204 });
+        }
+        if (u === '/api/settings/proxy-cookie' && init?.method === 'DELETE') {
+          cookieSet = false;
+          return new Response(null, { status: 204 });
+        }
+        if (u === '/api/settings') {
+          return json({
+            proxy: opts.noProxy ? null : { host: 'proxy.example.edu' },
+            proxy_cookie_set: cookieSet,
+            proxy_cookie_updated_at: cookieSet ? '2026-08-14' : null,
+            fold_abstract: true,
+          });
+        }
+        return json([]);
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    openImport();
+    appSettings.proxyHost = 'proxy.example.edu';
+    appSettings.proxyCookieSet = false;
+    appSettings.proxyCookieUpdatedAt = null;
+    vi.unstubAllGlobals();
+  });
+
+  it('a rejected save shows the error inline and keeps the typed cookie', async () => {
+    stubSettingsFetch({ failPut: true });
+    render(ImportModal);
+    await userEvent.click(screen.getByText(/institutional access/i));
+    const input = screen.getByPlaceholderText(/ezproxy/);
+    await userEvent.type(input, 'ezproxy=abc');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.getByText('bad cookie')).toBeInTheDocument());
+    expect(input).toHaveValue('ezproxy=abc'); // nothing was saved — don't discard it
+    expect(screen.getByText('not set')).toBeInTheDocument();
+  });
+
+  it('a successful save refreshes the shared settings store and the badge', async () => {
+    stubSettingsFetch();
+    render(ImportModal);
+    await userEvent.click(screen.getByText(/institutional access/i));
+    await userEvent.type(screen.getByPlaceholderText(/ezproxy/), 'ezproxy=abc');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.getByText('set')).toBeInTheDocument());
+    expect(appSettings.proxyCookieSet).toBe(true);
+  });
+
+  it('Clear removes the cookie and surfaces the refreshed state', async () => {
+    appSettings.proxyCookieSet = true;
+    appSettings.proxyCookieUpdatedAt = '2026-08-14';
+    stubSettingsFetch();
+    render(ImportModal);
+    await userEvent.click(screen.getByText(/institutional access/i));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(appSettings.proxyCookieSet).toBe(false));
+    expect(screen.getByText('not set')).toBeInTheDocument();
+  });
+
+  it('names the configured proxy host in the help copy', async () => {
+    stubSettingsFetch();
+    render(ImportModal);
+    await userEvent.click(screen.getByText(/institutional access/i));
+    expect(screen.getByText('proxy.example.edu')).toBeInTheDocument();
+  });
+
+  it('hides institutional access entirely when no proxy is configured', async () => {
+    appSettings.proxyHost = null;
+    stubSettingsFetch({ noProxy: true });
+    render(ImportModal);
+    await waitFor(() => expect(screen.queryByText(/institutional access/i)).toBeNull());
   });
 });

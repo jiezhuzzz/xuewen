@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleKeydown, isEditable } from './shortcuts';
 import { chat } from './chat.svelte';
 import { registerPdfCopy } from './pdfCopy';
-import { dock, identifyState, library, selection, ui, viewer } from './state.svelte';
+import { identifyState } from './identify.svelte';
+import { library } from './library.svelte';
+import { selection, viewer } from './tabs.svelte';
+import { dock, ui } from './ui.svelte';
 import { reader } from './readerState.svelte';
 import type { PaperSummary } from './types';
 
@@ -221,6 +224,14 @@ describe('handleKeydown', () => {
     expect(viewer.tabs).toHaveLength(1); // NOT closed — the key belongs to the find box
   });
 
+  it('Enter on a shadow-DOM button activates the button only, not the selection', () => {
+    handleKeydown(key('j')); // selection = first paper
+    const host = document.createElement('embedpdf-container');
+    const btn = document.createElement('button'); // real target inside the shadow tree
+    handleKeydown(shadowKey('Enter', btn, host));
+    expect(viewer.tabs).toHaveLength(0); // guard sees the button, not its host
+  });
+
   it('still fires shortcuts when the real shadow target is non-editable (viewport)', () => {
     handleKeydown(key('j'));
     handleKeydown(key('Enter'));
@@ -293,6 +304,7 @@ describe('cmd+c in the reader', () => {
     hasSel = true;
     registerPdfCopy({
       hasSelection: () => hasSel,
+      fetchPending: () => false,
       copySelection: async () => {
         copied += 1;
       },

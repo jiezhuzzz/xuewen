@@ -1,3 +1,5 @@
+import type { PdfDocumentObject } from '@embedpdf/models';
+
 /** Given the docs currently opened and the current tab ids, decide which to
  *  open and which to close. Pure — the caller performs the side effects. */
 export function reconcileDocuments(
@@ -31,4 +33,63 @@ export function planOpens(
   const now = activeId !== null && toOpen.includes(activeId) ? [activeId] : [];
   const deferred = toOpen.filter((id) => id !== activeId);
   return { now, deferred };
+}
+
+/** Which half of `openDocumentFully` failed. Callers need the distinction:
+ *  PdfDeck rolls back an 'open' failure so the next effect run retries (the
+ *  maxDocuments cap frees up when a tab closes) but NOT a 'load' one — a
+ *  broken PDF must not be reopened on every tab change. */
+export type DocumentOpenPhase = 'open' | 'load';
+
+export class DocumentOpenError extends Error {
+  constructor(
+    /** 'open': the outer task rejected — the manager's cap was hit or the
+     *  document errored before an id was assigned. 'load': the id exists but
+     *  reading/parsing the document failed. */
+    readonly phase: DocumentOpenPhase,
+    cause: unknown,
+  ) {
+    // Engine/plugin failures arrive as PdfErrorReason — a plain { code,
+    // message }, not an Error — so the message is dug out rather than read
+    // off `.message` and hoped for (same rule as exportErrorMessage).
+    const message = (cause as { message?: unknown } | null)?.message;
+    super(typeof message === 'string' && message !== '' ? message : `document ${phase} failed`);
+    this.name = 'DocumentOpenError';
+  }
+}
+
+/** The slice of the document-manager capability `openDocumentFully` needs,
+ *  declared structurally so the flow is testable without a PDF engine (the
+ *  same reason pdfCopy.ts declares SelectionLike). */
+export interface DocumentOpenerLike {
+  openDocumentUrl(opts: { url: string; documentId: string; autoActivate: boolean }): {
+    toPromise(): Promise<{ task: { toPromise(): Promise<PdfDocumentObject> } }>;
+  };
+}
+
+/** Open a document and resolve only once it is actually LOADED.
+ *
+ *  `openDocumentUrl`'s outer task resolves SYNCHRONOUSLY, carrying the real
+ *  load task nested inside it (plugin-document-manager's openDocumentUrl:169),
+ *  so waiting on the outer one reports "loaded" before a single byte has been
+ *  read. Every caller must chain on the inner task; this helper is the one
+ *  place that knows that — a caller that forgets gets the bug back silently
+ *  (PdfDeck's deferred background opens would all start at once, and an
+ *  export would commit into a half-read document). Failures reject with a
+ *  DocumentOpenError so the two phases stay distinguishable (see above). */
+export async function openDocumentFully(
+  cap: DocumentOpenerLike,
+  opts: { url: string; documentId: string },
+): Promise<PdfDocumentObject> {
+  let opened: { task: { toPromise(): Promise<PdfDocumentObject> } };
+  try {
+    opened = await cap.openDocumentUrl({ ...opts, autoActivate: false }).toPromise();
+  } catch (e) {
+    throw new DocumentOpenError('open', e);
+  }
+  try {
+    return await opened.task.toPromise();
+  } catch (e) {
+    throw new DocumentOpenError('load', e);
+  }
 }

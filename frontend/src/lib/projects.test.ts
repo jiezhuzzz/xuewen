@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteTag,
-  detailRefresh,
-  filters,
   library,
   loadDetail,
   loadProjects,
@@ -10,11 +8,9 @@ import {
   removeProject,
   renameProject,
   renameTag,
-  setProjectFilter,
-  setStarFilter,
-  setTagFilter,
   tags,
-} from './state.svelte';
+} from './library.svelte';
+import { filters, setProjectFilter, setStarFilter, setTagFilter } from './searchState.svelte';
 
 function stubFetch(handler: (url: string, init?: RequestInit) => unknown) {
   vi.stubGlobal(
@@ -104,6 +100,7 @@ describe('global rename/delete clears the per-paper detail cache', () => {
   beforeEach(() => {
     projects.items = [];
     tags.items = [];
+    filters.q = '';
     filters.project = 'all';
     filters.tag = undefined;
     filters.starred = undefined;
@@ -122,45 +119,129 @@ describe('global rename/delete clears the per-paper detail cache', () => {
     });
   }
 
-  it('renameProject and removeProject evict the cached detail and bump detailRefresh', async () => {
+  it('renameProject and removeProject evict the cached detail', async () => {
     stubDetailAnd(() => ({ id: 'p1', name: 'Survey', paper_count: 1 }));
     await loadDetail('x');
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     const callsBefore = fetchMock.mock.calls.length;
-    const refreshBefore = detailRefresh.n;
 
     await renameProject('p1', { name: 'Renamed' });
-    expect(detailRefresh.n).toBeGreaterThan(refreshBefore);
-
     await loadDetail('x'); // must hit the network again: cache was cleared
     expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
 
-    const refreshBefore2 = detailRefresh.n;
     await removeProject('p1');
-    expect(detailRefresh.n).toBeGreaterThan(refreshBefore2);
     const callsBefore2 = fetchMock.mock.calls.length;
     await loadDetail('x');
     expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore2);
   });
 
-  it('renameTag and deleteTag evict the cached detail and bump detailRefresh', async () => {
+  it('renameTag and deleteTag evict the cached detail', async () => {
     stubDetailAnd(() => []);
     await loadDetail('x');
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     const callsBefore = fetchMock.mock.calls.length;
-    const refreshBefore = detailRefresh.n;
 
     await renameTag('t1', 'renamed');
-    expect(detailRefresh.n).toBeGreaterThan(refreshBefore);
-
     await loadDetail('x'); // must hit the network again: cache was cleared
     expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
 
-    const refreshBefore2 = detailRefresh.n;
     await deleteTag('t1');
-    expect(detailRefresh.n).toBeGreaterThan(refreshBefore2);
     const callsBefore2 = fetchMock.mock.calls.length;
     await loadDetail('x');
     expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore2);
+  });
+});
+
+/// The search-box string is the single source of truth for the list filters;
+/// a rename/delete that only patched the cached filters would leave a dead
+/// qualifier in the box for the next sync to resurrect.
+describe('tag/project rename+delete keep the search string in sync', () => {
+  beforeEach(() => {
+    projects.items = [];
+    tags.items = [];
+    filters.q = '';
+    filters.project = 'all';
+    filters.tag = undefined;
+    filters.starred = undefined;
+    library.papers = [];
+    vi.unstubAllGlobals();
+  });
+
+  it('deleteTag drops the dead tag: qualifier from the query string', async () => {
+    stubFetch(() => []);
+    tags.items = [{ id: 't1', name: 'nlp', paper_count: 1, created_at: '' }];
+    await setTagFilter('nlp');
+    expect(filters.q).toContain('tag:nlp');
+
+    await deleteTag('t1');
+    expect(filters.q).not.toContain('tag:');
+    expect(filters.tag).toBeUndefined();
+  });
+
+  it('renameTag rewrites an active tag: qualifier to the new name', async () => {
+    stubFetch((url, init) => {
+      if (init?.method === 'PATCH') return { id: 't1', name: 'ml' };
+      return url === '/api/tags' ? [{ id: 't1', name: 'ml', paper_count: 1, created_at: '' }] : [];
+    });
+    tags.items = [{ id: 't1', name: 'nlp', paper_count: 1, created_at: '' }];
+    await setTagFilter('nlp');
+
+    await renameTag('t1', 'ml');
+    expect(filters.q).toContain('tag:ml');
+    expect(filters.tag).toBe('ml'); // the filter follows the rename
+  });
+
+  it('renameTag rewrites the qualifier with the server-normalized name, not the typed one', async () => {
+    // The server normalizes tag names on rename ('nlp / eval' is stored as
+    // 'nlp/eval') and the tag filter is an exact name match — writing the raw
+    // typed name into the query would leave a qualifier matching nothing.
+    stubFetch((url, init) => {
+      if (init?.method === 'PATCH') return { id: 't1', name: 'nlp/eval' };
+      return url === '/api/tags'
+        ? [{ id: 't1', name: 'nlp/eval', paper_count: 1, created_at: '' }]
+        : [];
+    });
+    tags.items = [{ id: 't1', name: 'nlp', paper_count: 1, created_at: '' }];
+    await setTagFilter('nlp');
+
+    await renameTag('t1', 'nlp / eval');
+    expect(filters.q).toContain('tag:nlp/eval');
+    expect(filters.tag).toBe('nlp/eval');
+  });
+
+  it('an inactive tag filter is left alone by deleteTag', async () => {
+    stubFetch(() => []);
+    tags.items = [
+      { id: 't1', name: 'nlp', paper_count: 1, created_at: '' },
+      { id: 't2', name: 'security', paper_count: 1, created_at: '' },
+    ];
+    await setTagFilter('security');
+
+    await deleteTag('t1');
+    expect(filters.q).toContain('tag:security');
+    expect(filters.tag).toBe('security');
+  });
+
+  it('removeProject drops the dead project: qualifier from the query string', async () => {
+    stubFetch(() => []);
+    projects.items = [{ id: 'p1', name: 'Survey', paper_count: 1 }];
+    await setProjectFilter('p1');
+    expect(filters.q).toContain('project:Survey');
+
+    await removeProject('p1');
+    expect(filters.q).not.toContain('project:');
+    expect(filters.project).toBe('all');
+  });
+
+  it('renameProject rewrites an active project: qualifier to the new name', async () => {
+    stubFetch((url) =>
+      url === '/api/projects' ? [{ id: 'p1', name: 'Renamed', paper_count: 1 }] : [],
+    );
+    projects.items = [{ id: 'p1', name: 'Survey', paper_count: 1 }];
+    await setProjectFilter('p1');
+
+    await renameProject('p1', { name: 'Renamed' });
+    expect(filters.q).toContain('project:Renamed');
+    expect(filters.project).toBe('p1'); // the new name resolves back to the id
   });
 });

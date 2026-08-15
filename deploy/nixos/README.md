@@ -19,7 +19,7 @@ runs `pdftotext` (poppler) in the unit's `PATH`, and applies systemd hardening.
         ({ ... }: {
           services.xuewen = {
             enable = true;
-            # host = "127.0.0.1";  # default; non-loopback auto-adds --allow-remote
+            # host = "127.0.0.1";  # default; non-loopback also needs allowRemote = true
             # port = 8080;
 
             settings.ai = {
@@ -97,8 +97,9 @@ services.nginx.virtualHosts."papers.example.com" = {
 };
 ```
 
-Setting a non-loopback `host` binds publicly (and auto-adds `--allow-remote`);
-only do that on a trusted network.
+Setting a non-loopback `host` binds publicly and requires the explicit
+`allowRemote = true` opt-in (an eval-time assertion reminds you); only do that
+on a trusted network.
 
 ## Options
 
@@ -108,6 +109,7 @@ only do that on a trusted network.
 | `package` | flake build | Xuewen package to run |
 | `agentRunnerPackage` | flake build | Agent Ask runner; defaults `settings.ai.agent.runner` |
 | `host` / `port` | `127.0.0.1` / `8080` | Bind address |
+| `allowRemote` | `false` | Pass `--allow-remote` (required for a non-loopback `host`) |
 | `openFirewall` | `false` | Open the port |
 | `dataDir` | `/var/lib/xuewen` | Library / DB / index state |
 | `user` / `group` | `xuewen` | Service identity (auto-created) |

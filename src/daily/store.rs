@@ -20,13 +20,64 @@ pub struct DailyPaper {
     pub abs_url: String,
     pub pdf_url: String,
     /// Structured five-part summary; `None` for old rows or failed generation.
-    pub summary: Option<super::tldr::Summary>,
+    pub summary: Option<crate::summary::Summary>,
     /// First GitHub repository URL found in the paper text.
     pub code_url: Option<String>,
 }
 
+/// Raw `daily_papers` row; the JSON-in-TEXT columns decode in `into_paper`.
+#[derive(sqlx::FromRow)]
+struct DailyPaperRow {
+    batch_date: String,
+    rank: i64,
+    arxiv_id: String,
+    title: String,
+    authors: String,
+    #[sqlx(rename = "abstract")]
+    abstract_text: String,
+    categories: String,
+    score: f64,
+    tldr: Option<String>,
+    abs_url: String,
+    pdf_url: String,
+    summary: Option<String>,
+    code_url: Option<String>,
+}
+
+impl DailyPaperRow {
+    fn into_paper(self) -> Result<DailyPaper> {
+        // An unparsable stored summary degrades to None (old schema rows);
+        // the other JSON columns are written by us and must parse.
+        let summary = self
+            .summary
+            .as_deref()
+            .and_then(|s| match serde_json::from_str(s) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!("unparsable stored summary for {}: {e}", self.arxiv_id);
+                    None
+                }
+            });
+        Ok(DailyPaper {
+            batch_date: self.batch_date,
+            rank: self.rank,
+            arxiv_id: self.arxiv_id,
+            title: self.title,
+            authors: serde_json::from_str(&self.authors)?,
+            abstract_text: self.abstract_text,
+            categories: serde_json::from_str(&self.categories)?,
+            score: self.score,
+            tldr: self.tldr,
+            abs_url: self.abs_url,
+            pdf_url: self.pdf_url,
+            summary,
+            code_url: self.code_url,
+        })
+    }
+}
+
 /// Outcome row for one day's run. Columns match `daily_runs`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct DailyRun {
     pub batch_date: String,
     /// "ok" | "empty" | "failed"
@@ -57,22 +108,13 @@ pub async fn record_run(pool: &SqlitePool, run: &DailyRun) -> Result<()> {
 }
 
 pub async fn get_run(pool: &SqlitePool, batch_date: &str) -> Result<Option<DailyRun>> {
-    let row: Option<(String, String, i64, Option<String>, String)> = sqlx::query_as(
+    Ok(sqlx::query_as::<_, DailyRun>(
         "SELECT batch_date, status, papers_found, error, ran_at
          FROM daily_runs WHERE batch_date = ?",
     )
     .bind(batch_date)
     .fetch_optional(pool)
-    .await?;
-    Ok(row.map(
-        |(batch_date, status, papers_found, error, ran_at)| DailyRun {
-            batch_date,
-            status,
-            papers_found,
-            error,
-            ran_at,
-        },
-    ))
+    .await?)
 }
 
 /// Replace `batch_date`'s papers in one transaction (re-runs overwrite).
@@ -120,22 +162,7 @@ pub async fn latest_batch(pool: &SqlitePool) -> Result<Option<(String, Vec<Daily
             .fetch_optional(pool)
             .await?;
     let Some((date,)) = date else { return Ok(None) };
-    type Row = (
-        String,
-        i64,
-        String,
-        String,
-        String,
-        String,
-        String,
-        f64,
-        Option<String>,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-    );
-    let rows: Vec<Row> = sqlx::query_as(
+    let rows: Vec<DailyPaperRow> = sqlx::query_as(
         "SELECT batch_date, rank, arxiv_id, title, authors, abstract,
                 categories, score, tldr, abs_url, pdf_url, summary, code_url
          FROM daily_papers WHERE batch_date = ? ORDER BY rank",
@@ -145,30 +172,7 @@ pub async fn latest_batch(pool: &SqlitePool) -> Result<Option<(String, Vec<Daily
     .await?;
     let papers = rows
         .into_iter()
-        .map(|r| -> Result<DailyPaper> {
-            let arxiv_id = r.2.clone();
-            Ok(DailyPaper {
-                batch_date: r.0,
-                rank: r.1,
-                arxiv_id: r.2,
-                title: r.3,
-                authors: serde_json::from_str(&r.4)?,
-                abstract_text: r.5,
-                categories: serde_json::from_str(&r.6)?,
-                score: r.7,
-                tldr: r.8,
-                abs_url: r.9,
-                pdf_url: r.10,
-                summary: r.11.as_deref().and_then(|s| match serde_json::from_str(s) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::warn!("unparsable stored summary for {}: {e}", arxiv_id);
-                        None
-                    }
-                }),
-                code_url: r.12,
-            })
-        })
+        .map(DailyPaperRow::into_paper)
         .collect::<Result<Vec<_>>>()?;
     Ok(Some((date, papers)))
 }
@@ -397,7 +401,7 @@ mod tests {
     async fn summary_and_code_url_roundtrip() {
         let pool = pool().await;
         let mut p = paper("2026-07-10", 1, "2507.00001");
-        p.summary = Some(crate::daily::tldr::Summary {
+        p.summary = Some(crate::summary::Summary {
             tldr: "One line.".into(),
             problem: "Gap.".into(),
             approach: "Idea.".into(),

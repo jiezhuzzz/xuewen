@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestTranslate, translateBox, closeTranslate, translateTrigger } from './translate.svelte';
-import { appSettings } from './state.svelte';
+import { appSettings } from './ui.svelte';
 
 beforeEach(() => {
   closeTranslate();

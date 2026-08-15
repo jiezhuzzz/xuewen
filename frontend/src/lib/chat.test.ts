@@ -8,7 +8,7 @@ import {
   setChatModel,
   stopChatStream,
 } from './chat.svelte';
-import { viewer } from './state.svelte';
+import { viewer } from './tabs.svelte';
 
 function sseBody(text: string): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
@@ -96,7 +96,7 @@ describe('sendChatMessage', () => {
     expect(chat.draft).toBe('');
   });
 
-  it('collects tool events into the exchange and parses stored tools_json', async () => {
+  it('collects tool events into the exchange', async () => {
     vi.stubGlobal('fetch', vi.fn(async () =>
       new Response(
         sseBody(
@@ -181,7 +181,7 @@ describe('thread', () => {
   it('loadThread fetches once per paper and clearChatThread empties it', async () => {
     const fetchSpy = vi.fn(async (url: unknown, init?: RequestInit) => {
       if (init?.method === 'DELETE') return new Response(null, { status: 204 });
-      return json([{ id: 1, role: 'user', content: 'q', model: null, created_at: '' }]);
+      return json([{ id: 1, role: 'user', content: 'q', model: null, created_at: '', tools: null }]);
     });
     vi.stubGlobal('fetch', fetchSpy);
     await loadThread('p1');
@@ -192,7 +192,9 @@ describe('thread', () => {
     expect(chat.messages).toEqual([]);
   });
 
-  it('parses tools_json on history rows, and falls back to null on bad JSON', async () => {
+  it('receives the tool log structured on history rows', async () => {
+    // The backend parses its stored tools_json before it hits the wire
+    // (web/dto.rs ChatTurn) — history rows arrive with `tools` ready to render.
     vi.stubGlobal('fetch', vi.fn(async () =>
       json([
         {
@@ -201,16 +203,14 @@ describe('thread', () => {
           content: 'a',
           model: 'Claude Code',
           created_at: '',
-          tools_json: '[{"name":"Read","detail":"paper.txt"}]',
+          tools: [{ name: 'Read', detail: 'paper.txt' }],
         },
-        { id: 2, role: 'assistant', content: 'b', model: null, created_at: '', tools_json: 'not json' },
-        { id: 3, role: 'user', content: 'c', model: null, created_at: '', tools_json: null },
+        { id: 2, role: 'user', content: 'c', model: null, created_at: '', tools: null },
       ]),
     ));
     await loadThread('p1');
     expect(chat.messages[0].tools).toEqual([{ name: 'Read', detail: 'paper.txt' }]);
     expect(chat.messages[1].tools).toBe(null);
-    expect(chat.messages[2].tools).toBe(null);
   });
 
   it('a failed history load can be retried', async () => {
@@ -218,7 +218,7 @@ describe('thread', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       calls++;
       if (calls === 1) return new Response('boom', { status: 500 });
-      return json([{ id: 1, role: 'user', content: 'q', model: null, created_at: '' }]);
+      return json([{ id: 1, role: 'user', content: 'q', model: null, created_at: '', tools: null }]);
     }));
     await loadThread('p1');
     expect(chat.error).toContain('reopen');

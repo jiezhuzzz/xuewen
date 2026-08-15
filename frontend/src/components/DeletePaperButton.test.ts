@@ -2,7 +2,8 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DeletePaperButton from './DeletePaperButton.svelte';
-import { library, viewer } from '../lib/state.svelte';
+import { library } from '../lib/library.svelte';
+import { viewer } from '../lib/tabs.svelte';
 
 beforeEach(() => {
   library.papers = [];

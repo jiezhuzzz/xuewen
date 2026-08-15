@@ -2,7 +2,8 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Welcome from './Welcome.svelte';
-import { filters, library, projects } from '../lib/state.svelte';
+import { library, projects } from '../lib/library.svelte';
+import { filters } from '../lib/searchState.svelte';
 import type { PaperSummary } from '../lib/types';
 
 vi.mock('../lib/api', async (importOriginal) => {

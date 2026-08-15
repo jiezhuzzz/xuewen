@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import PaperRowTags from './PaperRowTags.svelte';
-import { filters } from '../lib/state.svelte';
+import { filters } from '../lib/searchState.svelte';
 import type { PaperSummary } from '../lib/types';
 
 const paper: PaperSummary = {

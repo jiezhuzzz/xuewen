@@ -6,91 +6,23 @@
 # Runs Xuewen as a per-user `systemd --user` service. Linux only: it relies on
 # systemd user units, which Home Manager does not provide on Darwin. macOS
 # users have the native desktop app (`xuewen-desktop`) instead.
+#
+# The option set and everything derived from it are shared with the NixOS
+# module via ../lib.nix; this file is the user-unit flavor: state under $HOME
+# and the reduced hardening set a user unit supports.
 { config, lib, pkgs, ... }:
 
 let
   cfg = config.services.xuewen;
-  tomlFormat = pkgs.formats.toml { };
-
-  # Paths the backend requires. They default under `dataDir`; anything the
-  # user puts in `settings` wins (recursiveUpdate is deep, so setting
-  # `settings.search.qdrant_url` keeps the `index_dir` default below).
-  derivedSettings = {
-    inbox_dir = "${cfg.dataDir}/inbox";
-    library_root = "${cfg.dataDir}/library";
-    database_url = "sqlite:${cfg.dataDir}/library.db";
-    search.index_dir = "${cfg.dataDir}/search-index";
-  }
-  # The backend resolves `[ai.agent].runner` against its working directory,
-  # whose default (`agent-runner/src/runner.mjs`) only exists in a dev
-  # checkout. Point it at the store copy so Agent Ask needs no unpackaged
-  # files under dataDir.
-  // lib.optionalAttrs (agentConfigured && cfg.agentRunnerPackage != null) {
-    ai.agent.runner = "${cfg.agentRunnerPackage}/lib/xuewen/agent-runner/src/runner.mjs";
+  shared = import ../lib.nix {
+    inherit lib pkgs;
+    modules = "homeManagerModules";
+    environmentFileExample = "/run/user/1000/secrets/xuewen.env";
   };
-  configFile = tomlFormat.generate "xuewen.toml"
-    (lib.recursiveUpdate derivedSettings cfg.settings);
-
-  # Mirror the backend's own `web::is_loopback_host`: non-loopback binds serve
-  # unauthenticated mutating endpoints, so `serve` refuses them without
-  # `--allow-remote`.
-  isLoopback = h: h == "localhost" || h == "::1" || lib.hasPrefix "127." h;
-
-  # Agent Ask ([ai.agent.*]) spawns `node` for its runner; its presence also
-  # decides the MemoryDenyWriteExecute hardening below.
-  agentConfigured = lib.hasAttrByPath [ "ai" "agent" ] cfg.settings;
-
-  # pdftotext (poppler-utils) is required for PDF text extraction, which the
-  # ingest pipeline and paper chat both depend on. git backs the repo-attach
-  # endpoint (PUT /api/papers/{id}/code shallow-clones into the agent
-  # workspace). node and ripgrep are only needed when [ai.agent.*] is
-  # configured.
-  runtimePath = lib.makeBinPath ([ pkgs.poppler-utils pkgs.git ]
-    ++ lib.optionals agentConfigured [ pkgs.nodejs pkgs.ripgrep ]);
+  xw = shared.mkXuewen cfg;
 in
 {
-  options.services.xuewen = {
-    enable = lib.mkEnableOption "Xuewen, a self-hosted reference manager";
-
-    package = lib.mkOption {
-      type = lib.types.package;
-      defaultText = lib.literalMD "the flake's `xuewen` package (via `homeManagerModules.default`)";
-      description = ''
-        The xuewen package to run. `homeManagerModules.default` sets this to the
-        flake's build; with the bare `homeManagerModules.xuewen` you must set it.
-      '';
-    };
-
-    agentRunnerPackage = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      defaultText = lib.literalMD "the flake's `agent-runner` package (via `homeManagerModules.default`)";
-      description = ''
-        The Node runner behind Agent Ask (`[ai.agent.*]`), used to default
-        `settings.ai.agent.runner`. `homeManagerModules.default` sets this to
-        the flake's build; with the bare `homeManagerModules.xuewen`, leaving
-        it `null` means you must set `settings.ai.agent.runner` yourself.
-        Ignored when `[ai.agent.*]` is absent from
-        {option}`services.xuewen.settings`.
-      '';
-    };
-
-    host = lib.mkOption {
-      type = lib.types.str;
-      default = "127.0.0.1";
-      description = ''
-        Address to bind. The web UI has no authentication and exposes mutating
-        endpoints, so a non-loopback address adds `--allow-remote` and should
-        sit behind an authenticating reverse proxy.
-      '';
-    };
-
-    port = lib.mkOption {
-      type = lib.types.port;
-      default = 8080;
-      description = "TCP port to bind.";
-    };
-
+  options.services.xuewen = shared.options // {
     dataDir = lib.mkOption {
       type = lib.types.str;
       default = "${config.xdg.dataHome}/xuewen";
@@ -100,52 +32,11 @@ in
         index. Created automatically before the service starts.
       '';
     };
-
-    environmentFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
-      default = null;
-      example = "/run/user/1000/secrets/xuewen.env";
-      description = ''
-        A systemd `EnvironmentFile` holding secrets that must stay out of the
-        world-readable Nix store — e.g. `OPENAI_API_KEY=sk-…` for the
-        `api_key_env` referenced by `[ai.*]`.
-      '';
-    };
-
-    settings = lib.mkOption {
-      type = tomlFormat.type;
-      default = { };
-      example = lib.literalExpression ''
-        {
-          ai = {
-            api_key_env = "OPENAI_API_KEY";
-            model = "gpt-4o-mini";
-            embedding = { model = "text-embedding-3-small"; dims = 1536; };
-            summary = { };
-            # Paper chat / the Ask tab is Agent Ask — set [ai.agent.*] separately.
-          };
-        }
-      '';
-      description = ''
-        `xuewen.toml` as a Nix attrset. `inbox_dir`, `library_root`,
-        `database_url` and `search.index_dir` default under
-        {option}`services.xuewen.dataDir`; set them here to override.
-
-        Do NOT put API keys here — the generated file lands in the
-        world-readable Nix store. Use `api_key_env` together with
-        {option}`services.xuewen.environmentFile` instead.
-      '';
-    };
   };
 
   config = lib.mkIf cfg.enable {
-    assertions = [{
-      assertion = cfg.package != null;
-      message = "services.xuewen.package must be set (use homeManagerModules.default, or set it explicitly).";
-    }];
-
-    warnings = lib.optional (!isLoopback cfg.host)
-      "services.xuewen binds the non-loopback address ${cfg.host}; the web UI has no auth. Put it behind an authenticating reverse proxy.";
+    assertions = xw.assertions;
+    warnings = xw.warnings;
 
     systemd.user.services.xuewen = {
       Unit = {
@@ -158,26 +49,15 @@ in
         # The data dir lives under $HOME, so create it before first launch
         # rather than through system tmpfiles.
         ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${cfg.dataDir}";
-        ExecStart = lib.escapeShellArgs ([
-          "${cfg.package}/bin/xuewen"
-          "--config" "${configFile}"
-          "serve" "--host" cfg.host "--port" (toString cfg.port)
-        ] ++ lib.optional (!isLoopback cfg.host) "--allow-remote");
+        ExecStart = xw.execStart;
         WorkingDirectory = cfg.dataDir;
         EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
-        Environment = [
-          "RUST_LOG=info"
-          # reqwest talks HTTPS to arXiv/Crossref/OpenAI; give it a CA bundle.
-          "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-          # pdftotext, git, and (when Agent Ask is on) node and ripgrep are
-          # resolved from here.
-          "PATH=${runtimePath}"
-        ] ++ lib.optional agentConfigured
-          # Claude Code's CLI otherwise extracts its own ripgrep out of the Bun
-          # binary into a temp dir and execs it — unpatched, so it finds no ELF
-          # interpreter on a NixOS host and the Grep tool dies. Same fix nixpkgs'
-          # claude-code applies: turn it off and put a real ripgrep on PATH.
-          "USE_BUILTIN_RIPGREP=0";
+        # A user unit inherits no useful PATH, so pdftotext, git, and (when
+        # Agent Ask is on) node and ripgrep are resolved from an explicit one.
+        Environment = lib.mapAttrsToList (k: v: "${k}=${v}") ({
+          RUST_LOG = "info";
+          PATH = lib.makeBinPath xw.runtimePackages;
+        } // xw.environment);
         Restart = "on-failure";
         RestartSec = 5;
 
@@ -191,9 +71,7 @@ in
         ProtectControlGroups = true;
         RestrictRealtime = true;
         LockPersonality = true;
-        # node's JIT needs writable-then-executable mappings, so this hardening
-        # must relax when Agent Ask spawns the runner.
-        MemoryDenyWriteExecute = !agentConfigured;
+        MemoryDenyWriteExecute = !xw.agentConfigured;
         RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
       };
     };

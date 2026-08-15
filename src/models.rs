@@ -7,6 +7,48 @@ pub enum Identifier {
     None,
 }
 
+impl Identifier {
+    /// A DOI in canonical form (see `canonical_doi`). Every `Identifier` built
+    /// from external input — PDF text, pasted import strings, identify
+    /// arguments — goes through here, so stored identifiers compare equal
+    /// across case variants and dedupe works.
+    pub fn doi(s: impl Into<String>) -> Self {
+        Identifier::Doi(canonical_doi(&s.into()))
+    }
+
+    /// An arXiv id in canonical form (see `canonical_arxiv`); same boundary
+    /// rule as `Identifier::doi`.
+    pub fn arxiv(s: impl Into<String>) -> Self {
+        Identifier::Arxiv(canonical_arxiv(&s.into()))
+    }
+}
+
+/// Canonical DOI: lowercase. DOIs compare case-insensitively by spec, but a
+/// PDF banner prints whatever case the publisher chose, while Crossref returns
+/// lowercase — stored as-is the two never matched (`db::find_by_identifier`
+/// additionally tolerates legacy mixed-case rows with COLLATE NOCASE).
+pub fn canonical_doi(doi: &str) -> String {
+    doi.to_ascii_lowercase()
+}
+
+/// Canonical arXiv id: the trailing `v<N>` version suffix is stripped —
+/// `1706.03762v5` and `1706.03762` are the same work, and a versioned stored
+/// id would never dedupe against a bare one (`db::find_by_identifier`
+/// additionally tolerates legacy versioned rows).
+pub fn canonical_arxiv(id: &str) -> String {
+    let id = id.trim();
+    match id.rfind(['v', 'V']) {
+        Some(i)
+            if i > 0
+                && !id[i + 1..].is_empty()
+                && id[i + 1..].bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            id[..i].to_string()
+        }
+        _ => id.to_string(),
+    }
+}
+
 /// Author list stored as a JSON array in a nullable TEXT column.
 /// NULL ⇄ empty; unparseable stored JSON decodes to empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -129,18 +171,6 @@ pub struct TagSummary {
     pub paper_count: i64,
 }
 
-/// A paper's attached code repository (`paper_code` row).
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct PaperCode {
-    pub paper_id: String,
-    pub repo_url: String,
-    pub commit_sha: Option<String>,
-    pub status: String, // 'cloning' | 'ready' | 'error'
-    pub error: Option<String>,
-    pub cloned_at: Option<String>,
-    pub size_bytes: Option<i64>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +194,27 @@ mod tests {
             Identifier::Doi("10.1/x".into())
         );
         assert_ne!(Identifier::Doi("10.1/x".into()), Identifier::None);
+    }
+
+    #[test]
+    fn identifier_constructors_canonicalize() {
+        assert_eq!(
+            Identifier::doi("10.1145/AbC.XYZ"),
+            Identifier::Doi("10.1145/abc.xyz".into())
+        );
+        assert_eq!(
+            Identifier::arxiv("1706.03762v5"),
+            Identifier::Arxiv("1706.03762".into())
+        );
+    }
+
+    #[test]
+    fn canonical_arxiv_strips_only_a_version_suffix() {
+        assert_eq!(canonical_arxiv("1706.03762v5"), "1706.03762");
+        assert_eq!(canonical_arxiv("1706.03762V12"), "1706.03762");
+        assert_eq!(canonical_arxiv("1706.03762"), "1706.03762");
+        // Old-style ids: a 'v' inside the archive name is not a version.
+        assert_eq!(canonical_arxiv("cs.CV/9901002"), "cs.CV/9901002");
+        assert_eq!(canonical_arxiv("math.NA/0303029v1"), "math.NA/0303029");
     }
 }

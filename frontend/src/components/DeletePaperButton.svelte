@@ -1,24 +1,20 @@
 <script lang="ts">
   import { Trash2 } from 'lucide-svelte';
   import ConfirmButtons from './ConfirmButtons.svelte';
-  import { removePaper } from '../lib/state.svelte';
+  import { removePaper } from '../lib/library.svelte';
 
   let { id }: { id: string } = $props();
 
   let confirming = $state(false);
   let deleting = $state(false);
-  let error = $state<string | null>(null);
 
   async function doDelete() {
     deleting = true;
-    error = null;
-    try {
-      await removePaper(id); // shows the Deleted/Undo toast itself
-      // On success the surrounding panel unmounts (its tab closes).
-    } catch (e) {
-      error = (e as Error).message;
-      deleting = false;
-    }
+    // removePaper never rejects — success and failure both surface as its
+    // own toasts. On success the surrounding panel unmounts (its tab
+    // closes); on failure it doesn't, so Deleting… must reset either way.
+    await removePaper(id);
+    deleting = false;
   }
 </script>
 
@@ -31,7 +27,7 @@
       <ConfirmButtons
         confirmLabel="Delete"
         onConfirm={doDelete}
-        onCancel={() => { confirming = false; error = null; }}
+        onCancel={() => (confirming = false)}
       />
     </div>
   {/if}
@@ -43,7 +39,4 @@
   >
     <Trash2 size={13} /> Delete paper
   </button>
-{/if}
-{#if error}
-  <p class="mt-1 text-xs text-red-600 dark:text-red-400">Delete failed: {error}</p>
 {/if}

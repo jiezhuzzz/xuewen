@@ -8,16 +8,14 @@
   import {
     addPapersToProject,
     addTagToPapers,
-    filters,
     library,
-    openTab,
     projects,
     removePapers,
-    selectPaper,
-    selection,
-    setSortFilter,
     toggleStar,
-  } from '../lib/state.svelte';
+  } from '../lib/library.svelte';
+  import { filters, setSortFilter } from '../lib/searchState.svelte';
+  import { openTab, selection, selectPaper } from '../lib/tabs.svelte';
+  import { toast } from '../lib/toasts.svelte';
   import { abbreviateVenue } from '../lib/venue';
   import { fitToAvailable, measureColumnFromDom } from '../lib/columnAutoFit';
   import {
@@ -32,8 +30,9 @@
     ICON_COLUMN_PX,
     PINNED_COLUMNS,
     PINNED_KEYS,
-    TAGS_MIN_PX,
-    TAGS_TARGET_PX,
+    autoFitBudget,
+    dragCeiling,
+    tableMinWidth,
     type PinnedColumnKey,
   } from '../lib/tableColumns';
   import type { PaperSummary, Sort } from '../lib/types';
@@ -81,6 +80,20 @@
   // would lie, so they go inert (arrows off, buttons disabled, no aria-sort).
   const searching = $derived(filters.q.trim() !== '');
 
+  // One sort per header for Name/Title/Added; Year toggles between both
+  // directions. The sortHeader snippet derives aria-sort, the arrow, and the
+  // click target from this one spec, so the direction logic exists once.
+  type SortSpec = { label: string; sort: Sort } | { label: string; asc: Sort; desc: Sort };
+  function directionOf(spec: SortSpec, current: Sort): 'ascending' | 'descending' | undefined {
+    const variants = 'sort' in spec ? [spec.sort] : [spec.asc, spec.desc];
+    if (!variants.includes(current)) return undefined;
+    return current.endsWith('_desc') ? 'descending' : 'ascending';
+  }
+  function nextSortOf(spec: SortSpec): Sort {
+    if ('sort' in spec) return spec.sort;
+    return filters.sort === spec.desc ? spec.asc : spec.desc;
+  }
+
   let tableEl = $state<HTMLTableElement | null>(null);
   let paneEl = $state<HTMLDivElement | null>(null);
   let headerMenu = $state<{ x: number; y: number } | null>(null);
@@ -91,26 +104,14 @@
   // with the most tags stood several rows tall next to their neighbours. The
   // floor turns that into the honest outcome instead: the pane scrolls
   // sideways and every column keeps a width you can read.
-  const tableMinWidth = $derived(
-    2 * ICON_COLUMN_PX + PINNED_KEYS.reduce((s, k) => s + columnWidths[k], 0) + TAGS_MIN_PX,
-  );
+  const minTableWidth = $derived(tableMinWidth(columnWidths));
 
-  // Widest `key` may grow while every other pinned column keeps its width
-  // and Tags keeps its reserve — the invariant that keeps the table filling
-  // the pane with no horizontal scroll. Measured against the *pane*, not the
-  // table: the table can no longer be narrower than tableMinWidth, so sizing
-  // to it would let auto-fit grow columns into surplus that only exists
-  // because the columns are already too wide. Falls back to the static max
-  // when layout isn't available (jsdom).
+  // Measured against the *pane*, not the table: the table can no longer be
+  // narrower than minTableWidth, so sizing to it would let auto-fit grow
+  // columns into surplus that only exists because the columns are already
+  // too wide.
   function maxFor(key: PinnedColumnKey): number {
-    const stat = PINNED_COLUMNS[key].maxWidth;
-    const container = paneEl?.clientWidth ?? 0;
-    if (container <= 0) return stat;
-    const others = PINNED_KEYS.reduce((s, k) => (k === key ? s : s + columnWidths[k]), 0);
-    return Math.max(
-      PINNED_COLUMNS[key].minWidth,
-      Math.min(stat, container - 2 * ICON_COLUMN_PX - others - TAGS_MIN_PX),
-    );
+    return dragCeiling(key, columnWidths, paneEl?.clientWidth ?? 0);
   }
 
   function autoFit(key: PinnedColumnKey) {
@@ -145,9 +146,7 @@
     }
     const container = paneEl?.clientWidth ?? 0;
     const fitted =
-      container > 0
-        ? fitToAvailable(natural, bounds, container - 2 * ICON_COLUMN_PX - TAGS_TARGET_PX)
-        : natural;
+      container > 0 ? fitToAvailable(natural, bounds, autoFitBudget(container)) : natural;
     commitColumnWidths(fitted);
   }
 
@@ -172,10 +171,15 @@
     openContextMenu(e, p);
   }
 
+  // One busy flag and one error surface for every bulk action — without the
+  // catch, a failed request is an unhandled rejection with zero UI feedback
+  // (the single-paper delete paths all catch and toast; bulk must too).
   async function run(fn: () => Promise<void>) {
     busy = true;
     try {
       await fn();
+    } catch (e) {
+      toast('error', (e as Error).message);
     } finally {
       busy = false;
     }
@@ -291,10 +295,26 @@
     />
   {/snippet}
 
+  {#snippet sortHeader(key: PinnedColumnKey, spec: SortSpec, edge: 'left' | 'right' = 'right')}
+    {@const dir = searching ? undefined : directionOf(spec, filters.sort)}
+    <th class={`${th} relative`} data-col={key} aria-sort={dir}>
+      <button
+        type="button"
+        class={sortBtn}
+        disabled={searching}
+        title={searching ? 'Sorted by relevance during search' : undefined}
+        onclick={() => setSort(nextSortOf(spec))}
+      >
+        {spec.label}{#if dir === 'descending'}<ArrowDown size={11} />{:else if dir === 'ascending'}<ArrowUp size={11} />{/if}
+      </button>
+      {@render resizeHandle(key, edge)}
+    </th>
+  {/snippet}
+
   <div bind:this={paneEl} class="min-h-0 flex-1 overflow-auto">
     <table
       bind:this={tableEl}
-      style={`min-width:${tableMinWidth}px`}
+      style={`min-width:${minTableWidth}px`}
       class="w-full table-fixed border-collapse text-sm"
     >
       <!-- Single source of column widths. Tags has no <col> width on
@@ -330,38 +350,8 @@
             />
           </th>
           <th></th>
-          <th
-            class={`${th} relative`}
-            data-col="name"
-            aria-sort={!searching && filters.sort === 'name' ? 'ascending' : undefined}
-          >
-            <button
-              type="button"
-              class={sortBtn}
-              disabled={searching}
-              title={searching ? 'Sorted by relevance during search' : undefined}
-              onclick={() => setSort('name')}
-            >
-              Name{#if !searching && filters.sort === 'name'}<ArrowUp size={11} />{/if}
-            </button>
-            {@render resizeHandle('name')}
-          </th>
-          <th
-            class={`${th} relative`}
-            data-col="title"
-            aria-sort={!searching && filters.sort === 'title' ? 'ascending' : undefined}
-          >
-            <button
-              type="button"
-              class={sortBtn}
-              disabled={searching}
-              title={searching ? 'Sorted by relevance during search' : undefined}
-              onclick={() => setSort('title')}
-            >
-              Title{#if !searching && filters.sort === 'title'}<ArrowUp size={11} />{/if}
-            </button>
-            {@render resizeHandle('title')}
-          </th>
+          {@render sortHeader('name', { label: 'Name', sort: 'name' })}
+          {@render sortHeader('title', { label: 'Title', sort: 'title' })}
           <th class={`${th} relative`} data-col="firstAuthor">
             First author
             {@render resizeHandle('firstAuthor')}
@@ -374,46 +364,11 @@
             Venue
             {@render resizeHandle('venue')}
           </th>
-          <th
-            class={`${th} relative`}
-            data-col="year"
-            aria-sort={!searching && filters.sort === 'year_desc'
-              ? 'descending'
-              : !searching && filters.sort === 'year_asc'
-                ? 'ascending'
-                : undefined}
-          >
-            <button
-              type="button"
-              class={sortBtn}
-              disabled={searching}
-              title={searching ? 'Sorted by relevance during search' : undefined}
-              onclick={() => setSort(filters.sort === 'year_desc' ? 'year_asc' : 'year_desc')}
-            >
-              Year
-              {#if !searching}{#if filters.sort === 'year_desc'}<ArrowDown size={11} />{:else if filters.sort === 'year_asc'}<ArrowUp size={11} />{/if}{/if}
-            </button>
-            {@render resizeHandle('year')}
-          </th>
+          {@render sortHeader('year', { label: 'Year', asc: 'year_asc', desc: 'year_desc' })}
           <th class={th}>Tags</th>
-          <th
-            class={`${th} relative`}
-            data-col="added"
-            aria-sort={!searching && filters.sort === 'added_desc' ? 'descending' : undefined}
-          >
-            <button
-              type="button"
-              class={sortBtn}
-              disabled={searching}
-              title={searching ? 'Sorted by relevance during search' : undefined}
-              onclick={() => setSort('added_desc')}
-            >
-              Added{#if !searching && filters.sort === 'added_desc'}<ArrowDown size={11} />{/if}
-            </button>
-            <!-- Left-edge: Added's right edge IS the table edge; the divider
-                 it owns is the Tags|Added boundary on its left. -->
-            {@render resizeHandle('added', 'left')}
-          </th>
+          <!-- Added's handle is left-edge: its right edge IS the table edge;
+               the divider it owns is the Tags|Added boundary on its left. -->
+          {@render sortHeader('added', { label: 'Added', sort: 'added_desc' }, 'left')}
         </tr>
       </thead>
       <tbody>

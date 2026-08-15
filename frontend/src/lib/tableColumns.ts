@@ -1,8 +1,9 @@
 /// Layout metadata for the library table's columns. The markup in
 /// LibraryTable.svelte stays hand-written per column (checkbox, star, sort
 /// buttons, and plain labels are too heterogeneous to generalize); this
-/// module is only the single source of truth for widths, so the colgroup,
-/// drag-resize, auto-fit, and persistence all agree on one set of numbers.
+/// module is only the single source of truth for widths — and the budget
+/// arithmetic composed from them — so the colgroup, drag-resize, auto-fit,
+/// and persistence all agree on one set of numbers.
 
 /// The seven columns with a user-adjustable width. The two icon columns
 /// (checkbox, star) are fixed, and Tags deliberately has no width at all:
@@ -58,3 +59,45 @@ export const TAGS_TARGET_PX = 280;
 /// Cell padding (px-3 on both sides = 24px) plus a small buffer, added on
 /// top of the measured text when auto-fitting.
 export const AUTO_FIT_PADDING = 32;
+
+// --- width-budget arithmetic ---
+// The table is exactly chrome + pinned + Tags. That invariant lives HERE,
+// once: LibraryTable feeds in the DOM reads (pane width, current widths) and
+// every clamp/floor/budget below composes from the same formula.
+
+/// The fixed chrome flanking the pinned columns: the two icon columns
+/// (checkbox, star).
+export function chromePx(): number {
+  return 2 * ICON_COLUMN_PX;
+}
+
+/// The floor below which the flexible Tags column would collapse to zero
+/// and wrap: chrome + every pinned width + the Tags reserve.
+export function tableMinWidth(widths: Record<PinnedColumnKey, number>): number {
+  return chromePx() + PINNED_KEYS.reduce((s, k) => s + widths[k], 0) + TAGS_MIN_PX;
+}
+
+/// Ceiling for dragging/auto-fitting ONE column: it may grow while every
+/// other pinned column keeps its width and Tags keeps its reserve — what
+/// keeps the table filling the pane with no horizontal scroll. Falls back
+/// to the static maxWidth cap when layout isn't available (paneWidth <= 0,
+/// e.g. jsdom).
+export function dragCeiling(
+  key: PinnedColumnKey,
+  widths: Record<PinnedColumnKey, number>,
+  paneWidth: number,
+): number {
+  const stat = PINNED_COLUMNS[key].maxWidth;
+  if (paneWidth <= 0) return stat;
+  const others = PINNED_KEYS.reduce((s, k) => (k === key ? s : s + widths[k]), 0);
+  return Math.max(
+    PINNED_COLUMNS[key].minWidth,
+    Math.min(stat, paneWidth - chromePx() - others - TAGS_MIN_PX),
+  );
+}
+
+/// What auto-fit-all may distribute across the pinned columns: the pane
+/// minus chrome, leaving Tags its comfortable TAGS_TARGET_PX strip.
+export function autoFitBudget(paneWidth: number): number {
+  return paneWidth - chromePx() - TAGS_TARGET_PX;
+}

@@ -20,8 +20,8 @@ export function anchoredPosition(
 }
 
 /// Clamp a cursor-anchored, already-measured menu so a click near the
-/// right/bottom viewport edge doesn't render it off-screen (shared by
-/// PaperContextMenu and FilterRow's pill menu).
+/// right/bottom viewport edge doesn't render it off-screen (wired once in
+/// ContextMenuShell).
 export function clampMenuPosition(
   x: number,
   y: number,

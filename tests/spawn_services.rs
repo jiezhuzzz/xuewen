@@ -28,7 +28,10 @@ async fn spawn_services_with_minimal_config() {
     assert!(svc.agent.is_none());
     assert!(svc.daily.is_none());
     assert!(svc.translate.is_none());
-    assert_eq!(svc.ingest.staging_dir, cfg.inbox_dir.join("_uploads"));
+    assert_eq!(
+        svc.ingest.ctx.dirs.staging_dir,
+        cfg.inbox_dir.join("_uploads")
+    );
 }
 
 #[tokio::test]

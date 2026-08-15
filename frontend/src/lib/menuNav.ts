@@ -1,5 +1,5 @@
-/// Roving focus for a `role="menu"` popover (WAI menu pattern), shared by
-/// the paper context menu and FilterRow's pill menu.
+/// Roving focus for a `role="menu"` popover (WAI menu pattern), wired once
+/// in ContextMenuShell for every cursor-anchored menu.
 
 export function menuItems(menuEl: HTMLElement | null): HTMLElement[] {
   return menuEl ? Array.from(menuEl.querySelectorAll<HTMLElement>('[role="menuitem"]')) : [];

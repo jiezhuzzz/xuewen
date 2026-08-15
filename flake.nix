@@ -11,15 +11,28 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      # Single source of truth for the release version: the desktop crate
+      # inherits it via `version.workspace = true`, tauri.conf.json falls back
+      # to the crate version, and the packages here read it from the manifest.
+      version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
+      # Both `*.default` module wrappers do the same thing: fill the package
+      # options from this flake's build for the host system.
+      defaultModule = base: { pkgs, lib, ... }: {
+        imports = [ base ];
+        services.xuewen.package =
+          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.xuewen;
+        services.xuewen.agentRunnerPackage =
+          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.agent-runner;
+      };
       # Bound locally (rather than read back through `self.packages`) so the
       # x86_64-linux image override below can extend it without a
       # self-referential infinite recursion.
       perSystemPackages = forAll (pkgs: rec {
         frontend = pkgs.buildNpmPackage {
           pname = "xuewen-frontend";
-          version = "0.1.2";
+          inherit version;
           src = ./frontend;
-          npmDepsHash = "sha256-nxyXu5U454pgQGVlnkSE2MQKgblLtFAaIYl3f26ccjw=";
+          npmDepsHash = "sha256-qnYKZTCGWrzUmaIli00VaZ2ssMB+E9sEcJ0aNOVgLIk=";
           # `npm run build` is the default buildPhase; run vitest before install.
           doCheck = true;
           checkPhase = ''
@@ -35,7 +48,7 @@
         };
         agent-runner = pkgs.buildNpmPackage {
           pname = "xuewen-agent-runner";
-          version = "0.1.2";
+          inherit version;
           src = ./agent-runner;
           npmDepsHash = "sha256-+ERsdA8rx5Nf9IeYd98huAWPixBsOZWEBC4dZttfHnI=";
           # No build script — this is plain ESM shipped as-is with its deps.
@@ -78,19 +91,31 @@
         };
         xuewen = pkgs.rustPlatform.buildRustPackage {
           pname = "xuewen";
-          version = "0.1.2";
-          # Exclude the frontend sources (dist comes from the `frontend`
-          # package), docs, and deploy manifests so editing them never
-          # rebuilds the backend.
+          inherit version;
+          # Exclude everything the backend build never reads — the frontend
+          # sources (dist comes from the `frontend` package), agent-runner
+          # (its own package, consumed only at runtime; the agent tests use
+          # tests/fixtures/stub_runner.mjs), docs, deploy manifests, and CI —
+          # so editing them never rebuilds the backend. One carve-out:
+          # agent-runner/test/fixtures holds the wire-contract fixture that a
+          # Rust unit test asserts against (via CARGO_MANIFEST_DIR), so that
+          # subtree must stay visible to this build.
           src = pkgs.lib.cleanSourceWith {
             src = self;
             filter = path: _type:
               let
                 rel = pkgs.lib.removePrefix (toString self + "/") (toString path);
                 under = dir: rel == dir || pkgs.lib.hasPrefix (dir + "/") rel;
+                fixturePath = builtins.elem rel [
+                  "agent-runner"
+                  "agent-runner/test"
+                  "agent-runner/test/fixtures"
+                ] || pkgs.lib.hasPrefix "agent-runner/test/fixtures/" rel;
               in !(under "frontend" || under "docs" || under "deploy"
+                || (under "agent-runner" && !fixturePath) || under ".github"
                 || rel == "flake.nix" || rel == "flake.lock"
-                || rel == ".gitignore" || rel == ".envrc");
+                || rel == ".gitignore" || rel == ".envrc"
+                || rel == "README.md" || rel == "CLAUDE.md" || rel == "DEMO.md");
           };
           cargoLock.lockFile = ./Cargo.lock;
           # rust-embed reads frontend/dist at compile time; build.rs would
@@ -119,26 +144,14 @@
       # `services.xuewen.package` to this flake's build for the host system.
       # `nixosModules.xuewen` is the bare module (set `package` yourself).
       nixosModules.xuewen = ./deploy/nixos/module.nix;
-      nixosModules.default = { pkgs, lib, ... }: {
-        imports = [ self.nixosModules.xuewen ];
-        services.xuewen.package =
-          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.xuewen;
-        services.xuewen.agentRunnerPackage =
-          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.agent-runner;
-      };
+      nixosModules.default = defaultModule self.nixosModules.xuewen;
 
       # Home Manager counterparts: `homeManagerModules.default` fills
       # `services.xuewen.package` from this flake's build; `homeManagerModules.xuewen`
       # is the bare module (set `package` yourself). Linux only — the module runs a
       # `systemd --user` service.
       homeManagerModules.xuewen = ./deploy/home-manager/module.nix;
-      homeManagerModules.default = { pkgs, lib, ... }: {
-        imports = [ self.homeManagerModules.xuewen ];
-        services.xuewen.package =
-          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.xuewen;
-        services.xuewen.agentRunnerPackage =
-          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.agent-runner;
-      };
+      homeManagerModules.default = defaultModule self.homeManagerModules.xuewen;
 
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {

@@ -19,13 +19,16 @@ pub fn extract_arxiv(text: &str) -> Option<String> {
     ARXIV_RE.captures(text).map(|c| c[1].to_string())
 }
 
-/// Prefer a DOI (published record) over an arXiv id (preprint) when both appear.
+/// Prefer a DOI (published record) over an arXiv id (preprint) when both
+/// appear. The extracted strings pass through the canonicalizing constructors
+/// so a printed-case DOI or a versioned arXiv banner dedupes against the
+/// resolver's form of the same identifier.
 pub fn identify(text: &str) -> Identifier {
     if let Some(doi) = extract_doi(text) {
-        return Identifier::Doi(doi);
+        return Identifier::doi(doi);
     }
     if let Some(id) = extract_arxiv(text) {
-        return Identifier::Arxiv(id);
+        return Identifier::arxiv(id);
     }
     Identifier::None
 }
@@ -126,6 +129,20 @@ mod tests {
     #[test]
     fn no_identifier() {
         assert_eq!(identify("Just some prose with no ids."), Identifier::None);
+    }
+
+    #[test]
+    fn identify_canonicalizes_what_it_extracts() {
+        // The banner's version suffix and the publisher's printed case are
+        // extraction detail; the identifier boundary strips/folds them.
+        assert_eq!(
+            identify("arXiv:1706.03762v5 [cs.CL]"),
+            Identifier::Arxiv("1706.03762".into())
+        );
+        assert_eq!(
+            identify("doi:10.1109/TSE.2019.2946563"),
+            Identifier::Doi("10.1109/tse.2019.2946563".into())
+        );
     }
 
     #[test]

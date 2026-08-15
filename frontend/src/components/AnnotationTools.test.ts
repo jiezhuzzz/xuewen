@@ -8,11 +8,9 @@ const scope = {
   getSelectedAnnotations: vi.fn(() => [] as unknown[]),
   updateAnnotation: vi.fn(),
 };
-const capability = { setToolDefaults: vi.fn() };
 
 vi.mock('@embedpdf/plugin-annotation/svelte', () => ({
   useAnnotation: () => ({ provides: scope, state: {} }),
-  useAnnotationCapability: () => ({ provides: capability, isLoading: false }),
 }));
 
 import AnnotationTools from './AnnotationTools.svelte';
@@ -112,19 +110,9 @@ describe('arming a tool', () => {
 });
 
 describe('picking a color', () => {
-  it('pushes the color into every tool default', async () => {
-    render(AnnotationTools, { props });
-    await openMenu();
-    await userEvent.click(screen.getByRole('menuitemradio', { name: 'Violet' }));
-    const hex = colorHex('violet');
-    expect(capability.setToolDefaults).toHaveBeenCalledWith('highlight', {
-      color: hex,
-      strokeColor: hex,
-    });
-    // A sticky note is an icon: stroke only, no fill.
-    expect(capability.setToolDefaults).toHaveBeenCalledWith('textComment', { strokeColor: hex });
-  });
-
+  // The push into the plugin's global tool defaults happens in PdfDeck (the
+  // defaults are registry-wide, this component is per-tab) — see
+  // applyToolDefaults in annotationAdapter.test.ts.
   it('remembers the color across a reload', async () => {
     render(AnnotationTools, { props });
     await openMenu();

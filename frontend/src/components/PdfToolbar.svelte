@@ -2,14 +2,17 @@
   import { ChevronDown, ChevronLeft, ChevronRight, Contrast, Eclipse, PanelLeft, Search, SunDim, ZoomIn, ZoomOut } from 'lucide-svelte';
   import { useZoom } from '@embedpdf/plugin-zoom/svelte';
   import { useScroll } from '@embedpdf/plugin-scroll/svelte';
-  import { clickOutside } from '../lib/clickOutside';
   import AnnotationHistory from './AnnotationHistory.svelte';
   import AnnotationTools from './AnnotationTools.svelte';
+  import ToolbarMenu from './ToolbarMenu.svelte';
   import { DUR, dur, EASE } from '../lib/motion';
-  import { cyclePdfAppearance, pdfAppearance, ui, viewer } from '../lib/state.svelte';
+  import { viewer } from '../lib/tabs.svelte';
+  import { cyclePdfAppearance, nextPdfAppearance, pdfAppearance } from '../lib/theme.svelte';
+  import { ui } from '../lib/ui.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
   import { clampPage } from '../lib/pageNav';
   import { formatScale, isActivePreset, ZOOM_PRESETS } from '../lib/zoomPresets';
+  import { activeBtn, btn } from '../lib/pillStyles';
   import type { PillHide } from '../lib/pillHide.svelte';
 
   let { documentId, pill }: { documentId: string; pill: PillHide } = $props();
@@ -45,18 +48,9 @@
   const title = $derived(viewer.tabs.find((t) => t.id === documentId)?.title ?? '');
   const panel = $derived(reader.panel);
 
-  const btn =
-    'rounded-lg p-1.5 text-stone-600 hover:bg-parchment hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent dark:text-stone-300 dark:hover:bg-stone-800';
-  const activeBtn = 'rounded-lg p-1.5 bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500';
-
-  const APPEARANCE_ORDER = ['normal', 'dim', 'invert'] as const;
   const APPEARANCE_NAMES = { normal: 'Normal', dim: 'Dimmed', invert: 'Inverted' } as const;
   const appearanceLabel = $derived(APPEARANCE_NAMES[pdfAppearance.mode]);
-  const nextAppearanceLabel = $derived(
-    APPEARANCE_NAMES[
-      APPEARANCE_ORDER[(APPEARANCE_ORDER.indexOf(pdfAppearance.mode) + 1) % APPEARANCE_ORDER.length]
-    ],
-  );
+  const nextAppearanceLabel = $derived(APPEARANCE_NAMES[nextPdfAppearance()]);
 </script>
 
 <!-- svelte-ignore a11y_interactive_supports_focus -- every control inside
@@ -139,59 +133,37 @@
   <button type="button" class={btn} aria-label="Zoom out" title="Zoom out" onclick={() => zoom.provides?.zoomOut()}>
     <ZoomOut size={16} />
   </button>
-  <!-- svelte-ignore a11y_no_static_element_interactions -- the keydown only
-       contains Escape while the zoom menu is open (same pattern as the find
-       bar). It lives on the wrapper — not the menu — because the trigger
-       button keeps focus after opening; a handler on the sibling menu would
-       never see that Escape. Every interactive child is a real button. -->
-  <div
-    class="relative"
-    use:clickOutside={() => {
-      if (zoomMenuOpen) zoomMenuOpen = false;
-    }}
-    onkeydown={(e) => {
-      if (zoomMenuOpen && e.key === 'Escape') {
-        e.stopPropagation(); // the global cascade must not see this
-        zoomMenuOpen = false;
-      }
-    }}
-  >
-    <button
-      type="button"
-      class={`${zoomMenuOpen ? activeBtn : btn} flex items-center gap-0.5 text-sm tabular-nums`}
-      aria-label="Zoom level"
-      aria-expanded={zoomMenuOpen}
-      onclick={() => (zoomMenuOpen = !zoomMenuOpen)}
-    >
-      {formatScale(zoom.state.currentZoomLevel)}
-      <ChevronDown size={12} />
-    </button>
-    {#if zoomMenuOpen}
-      <div
-        role="menu"
-        aria-label="Zoom presets"
-        class="absolute left-1/2 top-full z-30 mt-1.5 w-28 -translate-x-1/2 rounded-xl border border-stone-200 bg-paper/95 p-1 shadow-lg backdrop-blur dark:border-stone-800 dark:bg-soot/95"
+  <ToolbarMenu bind:open={zoomMenuOpen} label="Zoom presets" panelClass="w-28 p-1">
+    {#snippet trigger()}
+      <button
+        type="button"
+        class={`${zoomMenuOpen ? activeBtn : btn} flex items-center gap-0.5 text-sm tabular-nums`}
+        aria-label="Zoom level"
+        aria-expanded={zoomMenuOpen}
+        onclick={() => (zoomMenuOpen = !zoomMenuOpen)}
       >
-        {#each ZOOM_PRESETS as p (p.label)}
-          <button
-            type="button"
-            role="menuitem"
-            class={`block w-full rounded-lg px-2 py-1 text-left text-xs ${
-              isActivePreset(p, zoom.state.currentZoomLevel)
-                ? 'bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500'
-                : 'text-stone-600 hover:bg-parchment hover:text-ink dark:text-stone-300 dark:hover:bg-stone-800'
-            }`}
-            onclick={() => {
-              zoom.provides?.requestZoom(p.level);
-              zoomMenuOpen = false;
-            }}
-          >
-            {p.label}
-          </button>
-        {/each}
-      </div>
-    {/if}
-  </div>
+        {formatScale(zoom.state.currentZoomLevel)}
+        <ChevronDown size={12} />
+      </button>
+    {/snippet}
+    {#each ZOOM_PRESETS as p (p.label)}
+      <button
+        type="button"
+        role="menuitem"
+        class={`block w-full rounded-lg px-2 py-1 text-left text-xs ${
+          isActivePreset(p, zoom.state.currentZoomLevel)
+            ? 'bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500'
+            : 'text-stone-600 hover:bg-parchment hover:text-ink dark:text-stone-300 dark:hover:bg-stone-800'
+        }`}
+        onclick={() => {
+          zoom.provides?.requestZoom(p.level);
+          zoomMenuOpen = false;
+        }}
+      >
+        {p.label}
+      </button>
+    {/each}
+  </ToolbarMenu>
   <button type="button" class={btn} aria-label="Zoom in" title="Zoom in" onclick={() => zoom.provides?.zoomIn()}>
     <ZoomIn size={16} />
   </button>

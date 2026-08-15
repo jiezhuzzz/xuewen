@@ -71,6 +71,20 @@ describe('segmentReferences — numbered', () => {
     expect(seg.numberOf.get(2)).toBe(1);
   });
 
+  it('does not attach a same-baseline URL from the other column', () => {
+    // Two-column page (mid=300): the left column's entry shares its baseline
+    // with a DOI link that belongs to the RIGHT column's entry.
+    const twoCol = page(2, 600, 800, [
+      { text: 'References', x: 50, y: 40, width: 90, height: 16 },
+      { text: '[1] Left entry. 2020.', x: 50, y: 80, width: 180, height: 12 },
+      { text: '[2] Right entry. 2021.', x: 320, y: 80, width: 200, height: 12 },
+    ], [{ x: 340, y: 80, width: 60, height: 12, url: 'https://doi.org/10.1/right' }]);
+    const seg = segmentReferences([twoCol], refStart)!;
+    expect(seg.references).toHaveLength(2);
+    expect(seg.references[0].externalUrl).toBeUndefined();
+    expect(seg.references[1].externalUrl).toBe('https://doi.org/10.1/right');
+  });
+
   it('returns null for a single [n] line (below the MIN_ENTRIES=2 guard)', () => {
     const tiny = page(0, 600, 800, [
       { text: 'References', x: 50, y: 40, width: 90, height: 16 },

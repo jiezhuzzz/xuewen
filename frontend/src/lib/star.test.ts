@@ -6,7 +6,8 @@ vi.mock('./api', async (importOriginal) => {
 });
 
 import * as api from './api';
-import { filters, library, toggleStar } from './state.svelte';
+import { library, toggleStar } from './library.svelte';
+import { filters } from './searchState.svelte';
 import { toasts } from './toasts.svelte';
 import type { PaperSummary } from './types';
 

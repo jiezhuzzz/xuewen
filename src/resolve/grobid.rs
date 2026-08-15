@@ -3,7 +3,8 @@ use anyhow::Result;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{collapse_ws, ResolvedMetadata};
+use super::ResolvedMetadata;
+use crate::text::collapse_ws;
 
 /// Parse a GROBID `processHeaderDocument` TEI response into metadata.
 /// Returns `Ok(None)` if no title, abstract, or authors could be found.

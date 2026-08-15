@@ -26,7 +26,6 @@ async fn serve_on_serves_api_on_an_ephemeral_port() {
         pool: pool.clone(),
         library_root: cfg.library_root.clone(),
         ingest: None,
-        proxy_login_url: None,
         search: None,
         daily: None,
         agent: None,

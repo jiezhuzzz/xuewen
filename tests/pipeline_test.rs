@@ -4,7 +4,7 @@ use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use xuewen::db;
 use xuewen::models::{Authors, Identifier, PaperMeta, PaperStatus};
-use xuewen::pipeline::{IngestCtx, Libraries, Outcome};
+use xuewen::pipeline::{Disposal, IngestCtx, Libraries, Outcome};
 use xuewen::resolve::grobid::Grobid;
 use xuewen::resolve::Resolver;
 
@@ -35,10 +35,7 @@ async fn ingests_pdf_and_dedups() {
     let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: None,
     };
@@ -66,10 +63,12 @@ async fn ingests_pdf_and_dedups() {
     assert!(!pdf_path.exists());
     assert!(processed.join("paper.pdf").exists());
 
-    // Re-ingest identical content (from processed copy) -> Duplicate.
+    // Re-ingest identical content (from processed copy) -> Duplicate carrying
+    // the existing paper's id; the already-archived file stays put.
     let again = processed.join("paper.pdf");
     let out2 = ctx.ingest_file(&again).await.unwrap();
-    assert_eq!(out2, Outcome::Duplicate);
+    assert_eq!(out2, Outcome::Duplicate(id));
+    assert!(again.exists());
 }
 
 #[tokio::test]
@@ -91,10 +90,7 @@ async fn same_doi_different_bytes_reports_same_work() {
     let mock = MockServer::start().await;
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver: Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap(),
         grobid: None,
     };
@@ -125,7 +121,6 @@ async fn ingest_with_doi_resolves_via_crossref() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
-    let processed = inbox.join("_processed");
     std::fs::create_dir_all(&inbox).unwrap();
 
     let doi = "10.1145/3292500.3330701";
@@ -147,10 +142,7 @@ async fn ingest_with_doi_resolves_via_crossref() {
     let pool = db::connect(&url).await.unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: None,
     };
@@ -180,7 +172,6 @@ async fn ingest_with_arxiv_resolves_via_api() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
-    let processed = inbox.join("_processed");
     std::fs::create_dir_all(&inbox).unwrap();
 
     let arxiv_id = "1706.03762";
@@ -202,10 +193,7 @@ async fn ingest_with_arxiv_resolves_via_api() {
     let pool = db::connect(&url).await.unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: None,
     };
@@ -236,7 +224,6 @@ async fn ingest_without_identifier_resolves_via_dblp() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
-    let processed = inbox.join("_processed");
     std::fs::create_dir_all(&inbox).unwrap();
 
     // No DOI/arXiv anywhere; the first substantive line is the title.
@@ -261,10 +248,7 @@ async fn ingest_without_identifier_resolves_via_dblp() {
     let pool = db::connect(&url).await.unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: None,
     };
@@ -291,7 +275,6 @@ async fn grobid_title_drives_dblp_resolution() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
-    let processed = inbox.join("_processed");
     std::fs::create_dir_all(&inbox).unwrap();
 
     // The PDF's own text is a poor/truncated title; GROBID supplies the clean one.
@@ -321,10 +304,7 @@ async fn grobid_title_drives_dblp_resolution() {
     let pool = db::connect(&url).await.unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: Some(grobid),
     };
@@ -352,7 +332,6 @@ async fn grobid_enriches_needs_review_when_unmatched() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
-    let processed = inbox.join("_processed");
     std::fs::create_dir_all(&inbox).unwrap();
 
     let pdf_path = inbox.join("paper.pdf");
@@ -376,10 +355,7 @@ async fn grobid_enriches_needs_review_when_unmatched() {
     let pool = db::connect(&url).await.unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: Some(grobid),
     };
@@ -404,7 +380,6 @@ async fn colliding_cite_key_gets_letter_suffix() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
-    let processed = inbox.join("_processed");
     std::fs::create_dir_all(&inbox).unwrap();
 
     let doi = "10.1145/3292500.3330701";
@@ -450,10 +425,7 @@ async fn colliding_cite_key_gets_letter_suffix() {
 
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: None,
     };
@@ -465,6 +437,128 @@ async fn colliding_cite_key_gets_letter_suffix() {
     let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
     assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgata"));
     assert!(library.join("wang2019kgata.pdf").exists());
+}
+
+#[tokio::test]
+async fn citekey_collision_on_disk_only_picks_the_next_suffix() {
+    // A concurrent ingest copies its PDF to the cite-key path BEFORE inserting
+    // its row. Simulate having lost that race: the disambiguated path exists
+    // on disk with no DB row claiming its key. The loser must not overwrite it
+    // (create_new) and must advance past it via its local taken set — the DB
+    // alone would keep handing back the same "free" key.
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::create_dir_all(&library).unwrap();
+
+    let doi = "10.1145/3292500.3330701";
+    let pdf_path = inbox.join("paper.pdf");
+    common::write_test_pdf(&pdf_path, &["Header", &format!("https://doi.org/{doi}")]);
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path(format!("/works/{doi}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    // The DB knows about "wang2019kgat"…
+    let seed = xuewen::models::Paper {
+        id: "01890000-0000-7000-8000-0000000000ff".to_string(),
+        content_hash: "seedhash".to_string(),
+        rel_path: "wang2019kgat.pdf".to_string(),
+        cite_key: Some("wang2019kgat".to_string()),
+        added_at: "2026-07-07T00:00:00Z".to_string(),
+        deleted_at: None,
+        starred: false,
+        name: None,
+        meta: PaperMeta {
+            title: Some("Seed".to_string()),
+            abstract_text: None,
+            authors: Authors::default(),
+            venue: None,
+            year: Some(2019),
+            doi: None,
+            arxiv_id: None,
+            dblp_key: None,
+            url: None,
+            source: Some("crossref".to_string()),
+            status: PaperStatus::Resolved,
+        },
+    };
+    db::insert_paper(&pool, &seed).await.unwrap();
+    // …while "wang2019kgata.pdf" exists only on disk (the racing winner's copy).
+    std::fs::write(library.join("wang2019kgata.pdf"), b"winner bytes").unwrap();
+
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries::under(&inbox, &library),
+        resolver: Resolver::with_bases(None, server.uri(), server.uri()).unwrap(),
+        grobid: None,
+    };
+    let id = match ctx.ingest_file(&pdf_path).await.unwrap() {
+        Outcome::Ingested(id) => id,
+        other => panic!("expected Ingested, got {other:?}"),
+    };
+    let paper = db::get_by_id(&pool, &id).await.unwrap().unwrap();
+    assert_eq!(paper.cite_key.as_deref(), Some("wang2019kgatb"));
+    assert!(library.join("wang2019kgatb.pdf").exists());
+    assert_eq!(
+        std::fs::read(library.join("wang2019kgata.pdf")).unwrap(),
+        b"winner bytes",
+        "the racing winner's file must not be overwritten"
+    );
+}
+
+#[tokio::test]
+async fn ingest_bytes_discards_the_staged_copy_on_success() {
+    // Uploads and URL imports feed ingest an app-created staged copy whose
+    // bytes step 5 files into the library; nothing of it belongs in
+    // `_processed` (that would store every import twice forever).
+    let dir = tempfile::tempdir().unwrap();
+    let inbox = dir.path().join("inbox");
+    let library = dir.path().join("library");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let src = dir.path().join("fetched.pdf");
+    common::write_test_pdf(&src, &["A Paper Imported From A Url"]);
+    let bytes = std::fs::read(&src).unwrap();
+
+    let url = format!("sqlite:{}", dir.path().join("library.db").display());
+    let pool = db::connect(&url).await.unwrap();
+    let ctx = IngestCtx {
+        pool: pool.clone(),
+        dirs: Libraries::under(&inbox, &library),
+        resolver: Resolver::with_bases(
+            None,
+            "http://127.0.0.1:1".to_string(),
+            "http://127.0.0.1:1".to_string(),
+        )
+        .unwrap()
+        .with_dblp_base("http://127.0.0.1:1".to_string()),
+        grobid: None,
+    };
+
+    let out = ctx.ingest_bytes(&bytes, "import.pdf", None).await.unwrap();
+    assert!(matches!(out, Outcome::Ingested(_)), "got {out:?}");
+    assert_eq!(
+        std::fs::read_dir(&ctx.dirs.staging_dir).unwrap().count(),
+        0,
+        "staged copy must be deleted once ingested"
+    );
+    assert!(
+        !ctx.dirs.processed_dir.exists(),
+        "imports must not be archived to _processed"
+    );
+    // The library holds the one and only copy.
+    assert_eq!(
+        std::fs::read_dir(library.join("_unsorted"))
+            .unwrap()
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -490,10 +584,7 @@ async fn reingesting_a_trashed_paper_reports_in_trash() {
     let resolver = Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: None,
     };
@@ -516,7 +607,6 @@ async fn same_doi_of_trashed_paper_reports_in_trash() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
-    let processed = inbox.join("_processed");
     std::fs::create_dir_all(&inbox).unwrap();
 
     let doi_line = "https://doi.org/10.1000/xyz123";
@@ -530,10 +620,7 @@ async fn same_doi_of_trashed_paper_reports_in_trash() {
     let mock = MockServer::start().await;
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver: Resolver::with_bases(None, mock.uri(), mock.uri()).unwrap(),
         grobid: None,
     };
@@ -555,7 +642,6 @@ async fn wrapped_two_line_title_resolves_via_dblp() {
     let dir = tempfile::tempdir().unwrap();
     let inbox = dir.path().join("inbox");
     let library = dir.path().join("library");
-    let processed = inbox.join("_processed");
     std::fs::create_dir_all(&inbox).unwrap();
 
     // USENIX-style cover sheet: the title wraps across two lines, no DOI.
@@ -580,10 +666,7 @@ async fn wrapped_two_line_title_resolves_via_dblp() {
     let pool = db::connect(&url).await.unwrap();
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: processed.clone(),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver: Resolver::with_bases(None, server.uri(), server.uri())
             .unwrap()
             .with_dblp_base(server.uri()),
@@ -621,10 +704,7 @@ async fn ingest_with_hint_seeds_identifier() {
     .with_dblp_base("http://127.0.0.1:1".to_string());
     let ctx = IngestCtx {
         pool: pool.clone(),
-        dirs: Libraries {
-            library_root: library.clone(),
-            processed_dir: inbox.join("_processed"),
-        },
+        dirs: Libraries::under(&inbox, &library),
         resolver,
         grobid: None,
     };
@@ -636,7 +716,11 @@ async fn ingest_with_hint_seeds_identifier() {
     // Import with a DOI hint: the hint seeds the stored identifier even though
     // the PDF text has none.
     let id = match ctx
-        .ingest_file_with_hint(&pdf_path, Some(Identifier::Doi("10.1234/hinted".into())))
+        .ingest_file_with_hint(
+            &pdf_path,
+            Some(Identifier::Doi("10.1234/hinted".into())),
+            Disposal::Archive,
+        )
         .await
         .unwrap()
     {

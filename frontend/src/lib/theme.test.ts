@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { initTheme, theme, toggleTheme } from './state.svelte';
+import { initTheme, theme, toggleTheme } from './theme.svelte';
 
 // Control the OS preference the code reads via matchMedia, and capture the
 // 'change' listener so we can simulate the OS flipping at runtime.
@@ -75,6 +75,36 @@ describe('theme', () => {
     // OS flip should not move an explicitly-light theme.
     changeListener?.();
     expect(isDark()).toBe(false);
+  });
+
+  // localStorage access throws outright where storage is disabled (cookies
+  // blocked, some webviews). initTheme is the first call in App's onMount, so
+  // a throw here used to abort the whole app init.
+  it('initTheme survives a throwing localStorage', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage disabled');
+    });
+    try {
+      expect(() => initTheme()).not.toThrow();
+      expect(theme.mode).toBe('system');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('toggleTheme still applies the mode when persistence throws', () => {
+    initTheme();
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage disabled');
+    });
+    try {
+      theme.mode = 'light';
+      toggleTheme(); // -> dark; the setItem throw must not skip applyTheme
+      expect(theme.mode).toBe('dark');
+      expect(isDark()).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('cycles light -> dark -> system and persists', () => {

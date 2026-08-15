@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPdfCopy, type PdfCopy, type SelectionLike } from './pdfCopy';
+import {
+  createPdfCopy,
+  onPdfSelectionSettled,
+  pdfSelectionFetchPending,
+  registerPdfCopy,
+  type PdfCopy,
+  type SelectionLike,
+} from './pdfCopy';
 
 /// A controllable stand-in for the PdfTask `getSelectedText` returns — the same
 /// `{ toPromise }` idiom loadCitations.test.ts uses, but resolvable by hand so a
@@ -269,5 +276,89 @@ describe('createPdfCopy', () => {
     expect(h.unsubs.change).toHaveBeenCalled();
     expect(h.unsubs.end).toHaveBeenCalled();
     expect(copier.hasSelection()).toBe(false);
+  });
+});
+
+/// What PdfPages' pointerup consults to drop a stale mid-drag parked settle:
+/// pending must cover the whole settle-timer + fetch-in-flight window, and
+/// nothing outside it.
+describe('fetchPending', () => {
+  it('is true from settle-arm through fetch-in-flight, false once the text lands', async () => {
+    expect(copier.fetchPending('a')).toBe(false);
+    h.handlers.change?.({ documentId: 'a', selection: { start: {}, end: {} } });
+    expect(copier.fetchPending('a')).toBe(true); // settle timer armed
+    vi.advanceTimersByTime(200);
+    expect(copier.fetchPending('a')).toBe(true); // fetch in flight
+    const job = h.pending.pop();
+    job?.d.resolve(['text']);
+    await job?.d.promise;
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(copier.fetchPending('a')).toBe(false);
+  });
+
+  it('pdfSelectionFetchPending reads the registered copier and is false without one', () => {
+    expect(pdfSelectionFetchPending('a')).toBe(false); // no copier registered
+    registerPdfCopy(copier);
+    h.handlers.change?.({ documentId: 'a', selection: { start: {}, end: {} } });
+    expect(pdfSelectionFetchPending('a')).toBe(true);
+    registerPdfCopy(null);
+    expect(pdfSelectionFetchPending('a')).toBe(false);
+  });
+});
+
+describe('onPdfSelectionSettled', () => {
+  let seen: [string, string][];
+  let off: () => void;
+
+  beforeEach(() => {
+    seen = [];
+    off = onPdfSelectionSettled((id, text) => seen.push([id, text]));
+  });
+
+  afterEach(() => off());
+
+  /// Resolve a pending fetch and drain the whole then-chain behind it (the
+  /// notify sits several hops down), which one `await` would not reach.
+  async function resolvePending(text: string[]): Promise<void> {
+    const job = h.pending.pop();
+    job?.d.resolve(text);
+    await job?.d.promise;
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+  }
+
+  it('announces the settled text even when no end event ever fires', async () => {
+    // The gutter-release case translate depends on: a live selection, no
+    // onEndSelection, only the settle timer.
+    h.handlers.change?.({ documentId: 'a', selection: { start: {}, end: {} } });
+    vi.advanceTimersByTime(200);
+    await resolvePending(['line one', 'line two']);
+    expect(seen).toEqual([['a', 'line one\nline two']]);
+  });
+
+  it('does not re-announce identical text when the end event follows a settle', async () => {
+    h.handlers.change?.({ documentId: 'a', selection: { start: {}, end: {} } });
+    vi.advanceTimersByTime(200);
+    await resolvePending(['same']);
+    // The release-on-page drag now fires onEndSelection too; its re-fetch of
+    // the same text must not announce a second time (one selection, one
+    // translation).
+    h.handlers.end?.({ documentId: 'a' });
+    await resolvePending(['same']);
+    expect(seen).toEqual([['a', 'same']]);
+  });
+
+  it('announces an empty settle so a consumer can dismiss its UI', async () => {
+    h.handlers.change?.({ documentId: 'a', selection: { start: {}, end: {} } });
+    h.handlers.end?.({ documentId: 'a' });
+    await resolvePending(['shown']);
+    // A click on the page: the change clears the cache, then the end-driven
+    // fetch comes back empty.
+    h.handlers.change?.({ documentId: 'a', selection: null });
+    h.handlers.end?.({ documentId: 'a' });
+    await resolvePending([]);
+    expect(seen).toEqual([
+      ['a', 'shown'],
+      ['a', ''],
+    ]);
   });
 });

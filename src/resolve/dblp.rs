@@ -1,8 +1,9 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::http::HttpClient;
-use super::{collapse_ws, ResolvedMetadata};
+use super::ResolvedMetadata;
+use crate::http::HttpClient;
+use crate::text::collapse_ws;
 
 /// Search DBLP publications by title. Returns raw JSON.
 pub async fn fetch(http: &HttpClient, base: &str, title: &str) -> Result<String> {

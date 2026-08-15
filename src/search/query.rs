@@ -211,6 +211,16 @@ mod tests {
     }
 
     #[test]
+    fn splits_only_on_ascii_whitespace_nbsp_stays_in_token() {
+        // Pasted-from-PDF text carries NBSP; splitting is ASCII-only, so it
+        // stays inside the value. The TS mirror pins the same case — JS `\s`
+        // would split there and desync the pill bar from the server filter.
+        let p = parse("tag:deep\u{00A0}learning");
+        assert_eq!(p.tag.as_deref(), Some("deep\u{00A0}learning"));
+        assert_eq!(p.text, "");
+    }
+
+    #[test]
     fn compose_prepends_author_scoped_terms() {
         assert_eq!(
             compose_keyword_query(&["smith".into()], "attention"),

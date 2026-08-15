@@ -33,12 +33,11 @@ async fn code_endpoints_gate_validate_and_report() {
         .await
         .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
 
-    let server = TestServer::new(xuewen::web::build_router_with_agent(
-        pool,
-        root,
-        stub_agent(),
-    ))
-    .unwrap();
+    let server = {
+        let mut state = xuewen::web::AppState::base(pool.clone(), root);
+        state.agent = Some(stub_agent());
+        TestServer::new(xuewen::web::build_router_from(state)).unwrap()
+    };
 
     // Nothing attached yet.
     let v: serde_json::Value = server.get("/api/papers/p1/code").await.json();
@@ -109,25 +108,32 @@ async fn code_endpoints_gate_validate_and_report() {
         .delete("/api/papers/missing/code")
         .await
         .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    // Trashed paper -> 404: the code endpoints deny trashed papers
+    // (`Trash::Deny` in api.rs).
+    xuewen::db::soft_delete(&pool, "p1").await.unwrap();
+    server
+        .get("/api/papers/p1/code")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
 }
 
 /// Regression for the whole-branch-review purge bug: `paper_code` had no
 /// `ON DELETE CASCADE` on its `paper_id` FK, so purging a paper with an
 /// attached repo hit `FOREIGN KEY constraint failed` after the PDF was
-/// already removed. This exercises the same sequence `xuewen purge` runs at
-/// the db/fs level (chat clear, explicit `delete_paper_code`, agent
-/// workspace removal, then `delete_row`) and asserts everything is gone
-/// afterward — both belt-and-braces (explicit delete) and the migration's
-/// cascade are covered, since the explicit `delete_paper_code` call would
-/// mask a cascade regression on its own.
+/// already removed. This drives `pipeline::purge_paper` — the sequence
+/// `xuewen purge` itself runs — and asserts everything is gone afterward.
+/// Its explicit sidecar deletes are belt-and-braces beside the migrations'
+/// cascades, which is why the cascade gets its own test below: the explicit
+/// `delete_paper_code` call would mask a cascade regression on its own.
 #[tokio::test]
 async fn purge_clears_paper_code_and_agent_workspace() {
     let (pool, root) = common::pool_and_root_with_paper("p1").await;
 
-    xuewen::db::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+    xuewen::agent::store::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
         .await
         .unwrap();
-    assert!(xuewen::db::get_paper_code(&pool, "p1")
+    assert!(xuewen::agent::store::get_paper_code(&pool, "p1")
         .await
         .unwrap()
         .is_some());
@@ -138,13 +144,12 @@ async fn purge_clears_paper_code_and_agent_workspace() {
     std::fs::write(repo_dir.join("dummy.txt"), b"hello").unwrap();
     assert!(ws.exists());
 
-    // Mirror `Command::Purge`'s per-paper cleanup sequence in src/main.rs.
-    xuewen::chat::store::clear(&pool, "p1").await.unwrap();
-    xuewen::db::delete_paper_code(&pool, "p1").await.unwrap();
-    tokio::fs::remove_dir_all(&ws).await.unwrap();
-    xuewen::db::delete_row(&pool, "p1").await.unwrap();
+    let paper = xuewen::db::get_by_id(&pool, "p1").await.unwrap().unwrap();
+    xuewen::pipeline::purge_paper(&pool, &root, &paper)
+        .await
+        .unwrap();
 
-    assert!(xuewen::db::get_paper_code(&pool, "p1")
+    assert!(xuewen::agent::store::get_paper_code(&pool, "p1")
         .await
         .unwrap()
         .is_none());
@@ -165,10 +170,10 @@ async fn purge_clears_paper_code_and_agent_workspace() {
 async fn deleting_paper_cascades_to_paper_code() {
     let (pool, _root) = common::pool_and_root_with_paper("p1").await;
 
-    xuewen::db::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+    xuewen::agent::store::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
         .await
         .unwrap();
-    assert!(xuewen::db::get_paper_code(&pool, "p1")
+    assert!(xuewen::agent::store::get_paper_code(&pool, "p1")
         .await
         .unwrap()
         .is_some());
@@ -179,7 +184,7 @@ async fn deleting_paper_cascades_to_paper_code() {
         .await
         .expect("delete should succeed under the ON DELETE CASCADE fix");
 
-    assert!(xuewen::db::get_paper_code(&pool, "p1")
+    assert!(xuewen::agent::store::get_paper_code(&pool, "p1")
         .await
         .unwrap()
         .is_none());

@@ -2,7 +2,9 @@
 //! the agent workspace as `repo/`, pin the commit, and record the outcome
 //! in `paper_code`. Clones are local-only and never redistributed.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use sqlx::SqlitePool;
 use tokio::process::Command;
@@ -67,6 +69,136 @@ fn host_is_allowed(host: &str, extra_hosts: &[String]) -> bool {
         .any(|allowed| host == allowed || host.ends_with(&format!(".{allowed}")))
 }
 
+/// One publish lock per paper: the generation check and the remove+rename in
+/// `run_clone`'s publish section are not atomic, and a stale job that passed
+/// the check but then stalled (its `remove_dir_all` of a previous multi-hundred-MB
+/// checkout can take seconds) could otherwise delete the checkout a newer job
+/// published and reported ready. Serialized, the stale job re-reads the bumped
+/// generation and takes the superseded path.
+static PUBLISH_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn publish_lock(paper_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    PUBLISH_LOCKS
+        .lock()
+        .unwrap()
+        .entry(paper_id.to_string())
+        .or_default()
+        .clone()
+}
+
+/// Startup reconciliation: a crash/shutdown mid-clone strands the row at
+/// 'cloning' forever (a dead process's job resolves nothing) and orphans the
+/// generation-scoped staging dir, which no later job's cleanup matches.
+/// Being before any clone job in *this* process is not enough to make the
+/// sweep safe: a sibling process on the same database and library root — CLI
+/// `xuewen code set` clones inline, and the desktop app boots the same stack
+/// — may have a clone running right now. Each job therefore holds a lock
+/// file naming its pid, and only lockless or dead-pid debris is swept; a
+/// live owner keeps both its staging dir and its 'cloning' row.
+pub async fn reconcile_startup(pool: &SqlitePool, library_root: &Path) {
+    let live = sweep_staging(library_root).await;
+    match super::store::fail_interrupted_clones(pool, &live).await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("{n} interrupted clone(s) marked as error — re-attach to retry"),
+        Err(e) => tracing::error!("reconciling interrupted clones: {e}"),
+    }
+}
+
+/// Remove crash debris (`.repo.cloning.*` staging dirs and their pid locks)
+/// under every agent workspace, returning the paper ids whose clone a live
+/// process still owns. A live lock protects the whole workspace even before
+/// git has created the staging dir — the lock is written first, so that
+/// window is real.
+async fn sweep_staging(library_root: &Path) -> Vec<String> {
+    let mut live = Vec::new();
+    let Ok(mut workspaces) = tokio::fs::read_dir(library_root.join("agent")).await else {
+        return live; // no agent workspaces yet
+    };
+    while let Ok(Some(ws)) = workspaces.next_entry().await {
+        let Ok(mut entries) = tokio::fs::read_dir(ws.path()).await else {
+            continue;
+        };
+        let (mut dirs, mut locks) = (Vec::new(), Vec::new());
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with(".repo.cloning.") {
+                continue;
+            }
+            if name.ends_with(".lock") {
+                locks.push(entry.path());
+            } else {
+                dirs.push(entry.path());
+            }
+        }
+        // Locks first: dead ones are removed here, so the dir pass below can
+        // treat "no readable live lock" uniformly as "no owner".
+        let mut ws_live = false;
+        for lock in locks {
+            if lock_owner_alive(&lock).await {
+                ws_live = true;
+            } else {
+                let _ = tokio::fs::remove_file(&lock).await;
+            }
+        }
+        for dir in dirs {
+            let mut lock = dir.clone().into_os_string();
+            lock.push(".lock");
+            if lock_owner_alive(Path::new(&lock)).await {
+                continue;
+            }
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+        }
+        if ws_live {
+            live.push(ws.file_name().to_string_lossy().into_owned());
+        }
+    }
+    live
+}
+
+/// Whether `lock` names a pid that is still running. Absent or unparseable
+/// content reads as dead — the lock is written whole before git spawns, so
+/// garbage means a crashed writer, and sweeping is the safe reading.
+async fn lock_owner_alive(lock: &Path) -> bool {
+    let Ok(content) = tokio::fs::read_to_string(lock).await else {
+        return false;
+    };
+    content
+        .trim()
+        .parse::<i32>()
+        .ok()
+        .filter(|pid| *pid > 0)
+        .is_some_and(pid_alive)
+}
+
+/// `kill(pid, 0)` probes existence without signaling; EPERM still proves a
+/// live process (one owned by another user).
+#[cfg(unix)]
+fn pid_alive(pid: i32) -> bool {
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn pid_alive(_pid: i32) -> bool {
+    false
+}
+
+/// Removes `run_clone`'s pid lock on every exit path — early returns, panics,
+/// and task cancellation at shutdown all drop the guard. A hard kill leaves
+/// the lock behind with a dead pid, which is exactly what `sweep_staging`
+/// treats as debris.
+struct CloneLockGuard(PathBuf);
+
+impl Drop for CloneLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Fire-and-forget background clone; the row is already 'cloning'. `clone_gen`
 /// is the generation returned by `upsert_paper_code_cloning`, used to detect
 /// supersession by a later attach.
@@ -105,7 +237,8 @@ pub async fn run_clone(
         let paper_id = paper_id.clone();
         async move {
             // Ok(false) = a newer attach superseded this job; drop the outcome.
-            if let Err(db) = crate::db::set_paper_code_error(&pool, &paper_id, &e, clone_gen).await
+            if let Err(db) =
+                super::store::set_paper_code_error(&pool, &paper_id, &e, clone_gen).await
             {
                 tracing::error!("paper_code error write failed: {db}");
             }
@@ -121,6 +254,14 @@ pub async fn run_clone(
     if let Err(e) = tokio::fs::create_dir_all(&ws).await {
         return fail(format!("could not create the workspace: {e}")).await;
     }
+    // Held for the whole job: a concurrently booting sibling process
+    // (`reconcile_startup`) swept staging dirs and 'cloning' rows as crash
+    // debris until this pid lock taught it to tell a live clone from one.
+    let lock_path = ws.join(format!(".repo.cloning.{clone_gen}.lock"));
+    if let Err(e) = tokio::fs::write(&lock_path, std::process::id().to_string()).await {
+        return fail(format!("could not write the clone lock: {e}")).await;
+    }
+    let _lock = CloneLockGuard(lock_path);
     let _ = tokio::fs::remove_dir_all(&staging).await; // any remnant of this gen
 
     let out = Command::new("git")
@@ -179,9 +320,13 @@ pub async fn run_clone(
         .await;
     }
 
-    // Publish only if still the current generation. Checking before the swap
-    // keeps a superseded job from clobbering the live checkout a newer job owns.
-    match crate::db::current_clone_gen(&pool, &paper_id).await {
+    // Publish only if still the current generation, with the whole
+    // check-remove-rename-record sequence under the per-paper publish lock:
+    // the check alone cannot stop a stale job that passed it and then
+    // stalled from clobbering the checkout a newer job publishes meanwhile.
+    let lock = publish_lock(&paper_id);
+    let _publish = lock.lock().await;
+    match super::store::current_clone_gen(&pool, &paper_id).await {
         Ok(Some(g)) if g == clone_gen => {}
         Ok(_) => {
             let _ = tokio::fs::remove_dir_all(&staging).await; // superseded
@@ -197,7 +342,7 @@ pub async fn run_clone(
         return fail(format!("could not place the checkout: {e}")).await;
     }
 
-    match crate::db::set_paper_code_ready(&pool, &paper_id, &sha, size as i64, clone_gen).await {
+    match super::store::set_paper_code_ready(&pool, &paper_id, &sha, size as i64, clone_gen).await {
         Ok(true) => {}
         Ok(false) => {
             // Raced a newer attach or a detach between the generation check and
@@ -235,6 +380,7 @@ fn dir_size(path: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::store::{self, CodeStatus};
 
     #[test]
     fn validate_rejects_non_https_and_credentials() {
@@ -315,7 +461,7 @@ mod tests {
         sqlx::query("INSERT INTO papers (id, content_hash, rel_path, added_at, status) VALUES ('p1','h','p.pdf',datetime('now'),'resolved')")
             .execute(&pool).await.unwrap();
         let url = format!("file://{}", src.path().display());
-        let gen = crate::db::upsert_paper_code_cloning(&pool, "p1", &url)
+        let gen = store::upsert_paper_code_cloning(&pool, "p1", &url)
             .await
             .unwrap();
 
@@ -329,15 +475,15 @@ mod tests {
         )
         .await;
 
-        let c = crate::db::get_paper_code(&pool, "p1")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(c.status, "ready", "error: {:?}", c.error);
+        let c = store::get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, CodeStatus::Ready, "error: {:?}", c.error);
         assert!(c.commit_sha.is_some());
-        assert!(crate::agent::workspace_dir(lib.path(), "p1")
-            .join("repo/.git")
-            .exists());
+        let ws = crate::agent::workspace_dir(lib.path(), "p1");
+        assert!(ws.join("repo/.git").exists());
+        assert!(
+            !ws.join(format!(".repo.cloning.{gen}.lock")).exists(),
+            "the pid lock must not outlive the job"
+        );
     }
 
     #[tokio::test]
@@ -348,7 +494,7 @@ mod tests {
         sqlx::query("INSERT INTO papers (id, content_hash, rel_path, added_at, status) VALUES ('p1','h','p.pdf',datetime('now'),'resolved')")
             .execute(&pool).await.unwrap();
         let url = format!("file://{}/nonexistent-repo", std::env::temp_dir().display());
-        let gen = crate::db::upsert_paper_code_cloning(&pool, "p1", &url)
+        let gen = store::upsert_paper_code_cloning(&pool, "p1", &url)
             .await
             .unwrap();
 
@@ -362,12 +508,165 @@ mod tests {
         )
         .await;
 
-        let c = crate::db::get_paper_code(&pool, "p1")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(c.status, "error");
+        let c = store::get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, CodeStatus::Error);
         assert!(c.error.is_some());
+        assert!(
+            !crate::agent::workspace_dir(lib.path(), "p1")
+                .join(format!(".repo.cloning.{gen}.lock"))
+                .exists(),
+            "the pid lock must not outlive a failed job"
+        );
+    }
+
+    /// A crash mid-clone leaves status='cloning' and a staging dir behind;
+    /// the boot sweep must resolve the row and delete the staging dir while
+    /// leaving the published checkout and paper.txt alone.
+    #[tokio::test]
+    async fn reconcile_startup_fails_stranded_rows_and_sweeps_staging() {
+        let lib = tempfile::tempdir().unwrap();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO papers (id, content_hash, rel_path, added_at, status) VALUES ('p1','h','p.pdf',datetime('now'),'resolved')")
+            .execute(&pool).await.unwrap();
+        store::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+            .await
+            .unwrap();
+        let ws = crate::agent::workspace_dir(lib.path(), "p1");
+        tokio::fs::create_dir_all(ws.join(".repo.cloning.0"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(ws.join("repo")).await.unwrap();
+        tokio::fs::write(ws.join("paper.txt"), "text")
+            .await
+            .unwrap();
+
+        reconcile_startup(&pool, lib.path()).await;
+
+        let c = store::get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, CodeStatus::Error);
+        assert!(c.error.unwrap().contains("re-attach"));
+        assert!(!ws.join(".repo.cloning.0").exists());
+        assert!(ws.join("repo").exists(), "published checkout untouched");
+        assert!(ws.join("paper.txt").exists());
+    }
+
+    /// A clone running in a sibling process (CLI `xuewen code set`, the
+    /// desktop app) holds a live-pid lock; the boot sweep must leave its
+    /// staging dir and its 'cloning' row alone.
+    #[tokio::test]
+    async fn reconcile_startup_skips_a_clone_owned_by_a_live_process() {
+        let lib = tempfile::tempdir().unwrap();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO papers (id, content_hash, rel_path, added_at, status) VALUES ('p1','h','p.pdf',datetime('now'),'resolved')")
+            .execute(&pool).await.unwrap();
+        let gen = store::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+            .await
+            .unwrap();
+        let ws = crate::agent::workspace_dir(lib.path(), "p1");
+        tokio::fs::create_dir_all(ws.join(format!(".repo.cloning.{gen}")))
+            .await
+            .unwrap();
+        // This test process stands in for the sibling: its pid is live.
+        tokio::fs::write(
+            ws.join(format!(".repo.cloning.{gen}.lock")),
+            std::process::id().to_string(),
+        )
+        .await
+        .unwrap();
+
+        reconcile_startup(&pool, lib.path()).await;
+
+        let c = store::get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, CodeStatus::Cloning, "live clone must survive");
+        assert_eq!(
+            store::current_clone_gen(&pool, "p1").await.unwrap(),
+            Some(gen)
+        );
+        assert!(ws.join(format!(".repo.cloning.{gen}")).exists());
+        assert!(ws.join(format!(".repo.cloning.{gen}.lock")).exists());
+    }
+
+    /// A dead-pid lock and an unparseable one both read as crash debris:
+    /// rows failed, dirs and locks swept — and the generation bump means a
+    /// job the sweep failed anyway has its late writes dropped.
+    #[tokio::test]
+    async fn reconcile_startup_sweeps_dead_pid_and_garbage_locks() {
+        let lib = tempfile::tempdir().unwrap();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        for id in ["p1", "p2"] {
+            sqlx::query("INSERT INTO papers (id, content_hash, rel_path, added_at, status) VALUES (?,?,?,datetime('now'),'resolved')")
+                .bind(id).bind(format!("hash-{id}")).bind(format!("{id}.pdf"))
+                .execute(&pool).await.unwrap();
+        }
+        let gen1 = store::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+            .await
+            .unwrap();
+        let gen2 = store::upsert_paper_code_cloning(&pool, "p2", "https://github.com/x/z")
+            .await
+            .unwrap();
+        let ws1 = crate::agent::workspace_dir(lib.path(), "p1");
+        let ws2 = crate::agent::workspace_dir(lib.path(), "p2");
+        tokio::fs::create_dir_all(ws1.join(format!(".repo.cloning.{gen1}")))
+            .await
+            .unwrap();
+        // i32::MAX exceeds every platform's pid ceiling: reliably dead.
+        tokio::fs::write(
+            ws1.join(format!(".repo.cloning.{gen1}.lock")),
+            i32::MAX.to_string(),
+        )
+        .await
+        .unwrap();
+        tokio::fs::create_dir_all(ws2.join(format!(".repo.cloning.{gen2}")))
+            .await
+            .unwrap();
+        tokio::fs::write(ws2.join(format!(".repo.cloning.{gen2}.lock")), "not a pid")
+            .await
+            .unwrap();
+
+        reconcile_startup(&pool, lib.path()).await;
+
+        for (id, ws, gen) in [("p1", &ws1, gen1), ("p2", &ws2, gen2)] {
+            let c = store::get_paper_code(&pool, id).await.unwrap().unwrap();
+            assert_eq!(c.status, CodeStatus::Error, "{id}");
+            assert!(!ws.join(format!(".repo.cloning.{gen}")).exists());
+            assert!(!ws.join(format!(".repo.cloning.{gen}.lock")).exists());
+        }
+
+        // The bump: the dead job's own late failure write misses the guard.
+        assert!(
+            !store::set_paper_code_error(&pool, "p1", "late write", gen1)
+                .await
+                .unwrap(),
+            "late writes from the failed job must be dropped"
+        );
+        let c = store::get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert!(c.error.unwrap().contains("re-attach"));
+    }
+
+    /// The sweep is idempotent and leaves resolved rows alone.
+    #[tokio::test]
+    async fn reconcile_startup_leaves_ready_and_error_rows_alone() {
+        let lib = tempfile::tempdir().unwrap();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO papers (id, content_hash, rel_path, added_at, status) VALUES ('p1','h','p.pdf',datetime('now'),'resolved')")
+            .execute(&pool).await.unwrap();
+        let gen = store::upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
+            .await
+            .unwrap();
+        store::set_paper_code_ready(&pool, "p1", "abc1234", 42, gen)
+            .await
+            .unwrap();
+
+        reconcile_startup(&pool, lib.path()).await;
+        reconcile_startup(&pool, lib.path()).await;
+
+        let c = store::get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, CodeStatus::Ready);
+        assert_eq!(c.commit_sha.as_deref(), Some("abc1234"));
     }
 
     /// A stale clone (lower generation) must not overwrite the row a newer
@@ -406,10 +705,10 @@ mod tests {
 
         // gen 0 is captured, then a re-attach bumps the row to gen 1 before the
         // stale gen-0 job runs.
-        let stale_gen = crate::db::upsert_paper_code_cloning(&pool, "p1", &url)
+        let stale_gen = store::upsert_paper_code_cloning(&pool, "p1", &url)
             .await
             .unwrap();
-        let current_gen = crate::db::upsert_paper_code_cloning(&pool, "p1", &url)
+        let current_gen = store::upsert_paper_code_cloning(&pool, "p1", &url)
             .await
             .unwrap();
         assert!(current_gen > stale_gen);
@@ -426,11 +725,8 @@ mod tests {
 
         // The stale job dropped its outcome: the row is still 'cloning' (gen 1),
         // not 'ready', and no checkout was published.
-        let c = crate::db::get_paper_code(&pool, "p1")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(c.status, "cloning");
+        let c = store::get_paper_code(&pool, "p1").await.unwrap().unwrap();
+        assert_eq!(c.status, CodeStatus::Cloning);
         assert!(!crate::agent::workspace_dir(lib.path(), "p1")
             .join("repo")
             .exists());

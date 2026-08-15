@@ -19,25 +19,14 @@
   import { initAnnotationTools } from './lib/annotationState.svelte';
   import { loadChatModels, loadThread } from './lib/chat.svelte';
   import { initColumnWidths } from './lib/columnWidths.svelte';
-  import { DUR, dur, prefersReducedMotion, SPRINGS } from './lib/motion';
+  import { DUR, dur, springTo, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
-  import {
-    dock,
-    identifyState,
-    initDock,
-    initPdfAppearance,
-    initResponsiveSidebar,
-    initTabs,
-    initTheme,
-    library,
-    loadPapers,
-    loadProjects,
-    loadSearchStatus,
-    loadSettings,
-    loadStats,
-    ui,
-    viewer,
-  } from './lib/state.svelte';
+  import { identifyState } from './lib/identify.svelte';
+  import { library, loadPapers, loadProjects, loadStats } from './lib/library.svelte';
+  import { loadSearchStatus } from './lib/searchState.svelte';
+  import { initTabs, viewer } from './lib/tabs.svelte';
+  import { initPdfAppearance, initTheme } from './lib/theme.svelte';
+  import { dock, initDock, initResponsiveSidebar, loadSettings, ui } from './lib/ui.svelte';
 
   onMount(() => {
     initTheme();
@@ -60,12 +49,7 @@
   let peek = $state(false);
   const paneHidden = $derived(!ui.sidebarOpen || ui.zen);
   $effect(() => {
-    const target = paneHidden ? 0 : PANE_W;
-    if (import.meta.env.MODE === 'test' || prefersReducedMotion()) {
-      paneW.set(target, { instant: true });
-    } else {
-      paneW.target = target;
-    }
+    springTo(paneW, paneHidden ? 0 : PANE_W);
   });
   $effect(() => {
     if (!paneHidden) peek = false;

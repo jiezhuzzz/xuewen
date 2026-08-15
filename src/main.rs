@@ -4,13 +4,11 @@ use std::path::PathBuf;
 
 use xuewen::config::Config;
 use xuewen::db;
+use xuewen::http::RetryPolicy;
+use xuewen::import::ImportError;
 use xuewen::models::Identifier;
-use xuewen::pipeline::{IdentifyOutcome, IngestCtx, Libraries, Outcome};
+use xuewen::pipeline::{IdentifyOutcome, IngestCtx, Outcome};
 use xuewen::refresh::{self, RefreshTarget};
-use xuewen::resolve::grobid::Grobid;
-use xuewen::resolve::http::RetryPolicy;
-use xuewen::resolve::Resolver;
-use xuewen::search::fts::FieldSel;
 use xuewen::search::{indexer, SearchService};
 use xuewen::web;
 
@@ -337,28 +335,20 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load(&cli.config)?;
     let pool = db::connect(&cfg.database_url).await?;
-    // Interactive serving answers uploads synchronously; keep retries short there.
-    let retry = match &cli.command {
-        Command::Serve { .. } => RetryPolicy::interactive(),
-        _ => RetryPolicy::production(),
-    };
-    let resolver = Resolver::new_with_policy(cfg.contact_email.as_deref(), retry)?;
-    let grobid = cfg.grobid_url.as_deref().map(Grobid::new).transpose()?;
-    let dirs = Libraries {
-        library_root: cfg.library_root.clone(),
-        processed_dir: cfg.inbox_dir.join("_processed"),
-    };
-    let ctx = IngestCtx {
-        pool: pool.clone(),
-        dirs,
-        resolver,
-        grobid,
-    };
+    // Only the arms that ingest build an IngestCtx (two HTTP clients), always
+    // with the production retry policy; `serve` gets its own interactive one
+    // inside `spawn_services`.
+    let ingest_ctx = || IngestCtx::from_config(&cfg, pool.clone(), RetryPolicy::production());
 
     match cli.command {
-        Command::Ingest { path } => match ctx.ingest_file(&path).await? {
+        Command::Ingest { path } => match ingest_ctx()?.ingest_file(&path).await? {
             Outcome::Ingested(id) => println!("ingested {id}"),
-            Outcome::Duplicate => println!("duplicate, skipped"),
+            Outcome::Duplicate(id) => {
+                match db::get_by_id(&pool, &id).await?.and_then(|p| p.cite_key) {
+                    Some(key) => println!("duplicate of {key} ({id}), skipped"),
+                    None => println!("duplicate ({id}), skipped"),
+                }
+            }
             Outcome::SameWork(id) => {
                 match db::get_by_id(&pool, &id).await?.and_then(|p| p.cite_key) {
                     Some(key) => println!("already in library as {key} ({id})"),
@@ -368,39 +358,31 @@ async fn main() -> Result<()> {
             Outcome::InTrash(id) => println!("in trash — run: xuewen restore {id}"),
         },
         Command::Import { input } => {
+            let ctx = ingest_ctx()?;
             let fetcher =
                 xuewen::import::Fetcher::new(cfg.proxy.as_ref().map(|p| p.login_url.clone()))?;
             let cookie = db::get_setting(&pool, "proxy_cookie").await?;
-            match xuewen::import::import_source(&fetcher, &ctx.resolver, &input, cookie.as_deref())
+            match xuewen::import::fetch_stage_ingest(&ctx, &fetcher, &input, cookie.as_deref())
                 .await
             {
-                Ok(fetched) => {
-                    let staged = cfg
-                        .inbox_dir
-                        .join("_uploads")
-                        .join(format!("{}-import.pdf", uuid::Uuid::now_v7()));
-                    tokio::fs::create_dir_all(staged.parent().unwrap()).await?;
-                    tokio::fs::write(&staged, &fetched.bytes).await?;
-                    match ctx.ingest_file_with_hint(&staged, fetched.hint).await {
-                        Ok(Outcome::Ingested(id)) => println!("ingested {id}"),
-                        Ok(Outcome::Duplicate) => println!("duplicate, skipped"),
-                        Ok(Outcome::SameWork(id)) => println!("already in library ({id})"),
-                        Ok(Outcome::InTrash(id)) => {
-                            println!("in trash — run: xuewen restore {id}")
-                        }
-                        Err(e) => {
-                            let _ = tokio::fs::remove_file(&staged).await;
-                            return Err(e);
-                        }
+                Ok(Outcome::Ingested(id)) => println!("ingested {id}"),
+                Ok(Outcome::Duplicate(id)) => {
+                    match db::get_by_id(&pool, &id).await?.and_then(|p| p.cite_key) {
+                        Some(key) => println!("duplicate of {key} ({id}), skipped"),
+                        None => println!("duplicate ({id}), skipped"),
                     }
                 }
-                Err(xuewen::import::ImportError::Unsupported) => {
+                Ok(Outcome::SameWork(id)) => println!("already in library ({id})"),
+                Ok(Outcome::InTrash(id)) => {
+                    println!("in trash — run: xuewen restore {id}")
+                }
+                Err(ImportError::Unsupported) => {
                     anyhow::bail!("could not recognize {input:?} as a URL, DOI, or arXiv id")
                 }
-                Err(xuewen::import::ImportError::CookieExpired) => anyhow::bail!(
+                Err(ImportError::CookieExpired) => anyhow::bail!(
                     "proxy session expired — refresh it: xuewen proxy-cookie --set '<cookie>'"
                 ),
-                Err(xuewen::import::ImportError::Unfetched { metadata }) => {
+                Err(ImportError::Unfetched { metadata }) => {
                     let title = metadata
                         .as_ref()
                         .and_then(|m| m.title.as_deref())
@@ -411,9 +393,8 @@ async fn main() -> Result<()> {
                          and drop it in the inbox."
                     )
                 }
-                Err(xuewen::import::ImportError::Network(e)) => {
-                    return Err(e.context("fetch failed"))
-                }
+                Err(ImportError::Network(e)) => return Err(e.context("fetch failed")),
+                Err(ImportError::Ingest(e)) => return Err(e),
             }
         }
         Command::ProxyCookie { set, clear } => {
@@ -441,7 +422,7 @@ async fn main() -> Result<()> {
                 }
                 Err(e) => tracing::warn!("search indexing disabled: {e}"),
             }
-            xuewen::watcher::run(&ctx, &cfg.inbox_dir).await?;
+            xuewen::watcher::run(&ingest_ctx()?, &cfg.inbox_dir).await?;
         }
         Command::Refresh { id, all } => {
             let target = match (id, all) {
@@ -449,7 +430,7 @@ async fn main() -> Result<()> {
                 (None, true) => RefreshTarget::All,
                 (None, false) => RefreshTarget::NeedsReview,
             };
-            let summary = refresh::run(&ctx, target).await?;
+            let summary = refresh::run(&ingest_ctx()?, target).await?;
             println!(
                 "refresh: {} processed, {} re-resolved, {} re-filed",
                 summary.processed, summary.reresolved, summary.refiled
@@ -463,6 +444,7 @@ async fn main() -> Result<()> {
             pick,
             yes,
         } => {
+            let ctx = ingest_ctx()?;
             let mut paper = db::find_one(&pool, &id).await?;
             // Early UX check; the enforced guard lives in apply_match. This lets us
             // bail before the interactive search/confirm flow rather than after.
@@ -475,14 +457,14 @@ async fn main() -> Result<()> {
             }
             let md = if let Some(doi) = doi {
                 ctx.resolver
-                    .resolve(&Identifier::Doi(doi.clone()), None)
+                    .resolve(&Identifier::doi(doi.clone()), None)
                     .await
                     .ok_or_else(|| {
                         anyhow::anyhow!("no Crossref record for doi {doi} — try --title")
                     })?
             } else if let Some(axv) = arxiv {
                 ctx.resolver
-                    .resolve(&Identifier::Arxiv(axv.clone()), None)
+                    .resolve(&Identifier::arxiv(axv.clone()), None)
                     .await
                     .ok_or_else(|| anyhow::anyhow!("no arXiv record for {axv} — try --title"))?
             } else if let Some(query) = title {
@@ -610,23 +592,20 @@ async fn main() -> Result<()> {
                     targets.len()
                 ))?
             {
+                // One paper's failure must not strand the rest half-purged:
+                // keep going and report the stragglers at the end.
+                let mut failures = 0usize;
                 for p in &targets {
-                    let path = cfg.library_root.join(&p.rel_path);
-                    match std::fs::remove_file(&path) {
-                        Ok(()) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => tracing::warn!("could not remove {}: {e}", path.display()),
+                    if let Err(e) = xuewen::pipeline::purge_paper(&pool, &cfg.library_root, p).await
+                    {
+                        eprintln!("could not purge {}: {e:#}", p.id);
+                        failures += 1;
                     }
-                    xuewen::chat::store::clear(&pool, &p.id).await?;
-                    xuewen::db::delete_paper_code(&pool, &p.id).await?;
-                    let _ = tokio::fs::remove_dir_all(xuewen::agent::workspace_dir(
-                        &cfg.library_root,
-                        &p.id,
-                    ))
-                    .await;
-                    db::delete_row(&pool, &p.id).await?;
                 }
-                println!("purged {} paper(s)", targets.len());
+                println!("purged {} paper(s)", targets.len() - failures);
+                if failures > 0 {
+                    anyhow::bail!("{failures} paper(s) could not be purged — re-run to retry");
+                }
             } else {
                 println!("cancelled");
             }
@@ -675,8 +654,11 @@ async fn main() -> Result<()> {
             }
             ProjectCmd::Show { project } => {
                 let proj = db::find_one_project(&pool, &project).await?;
-                let papers =
-                    db::list_papers(&pool, None, None, None, Some(&proj.id), None, None).await?;
+                let filter = db::PaperFilter {
+                    project: Some(proj.id.clone()),
+                    ..Default::default()
+                };
+                let papers = db::list_papers(&pool, None, None, &filter).await?;
                 println!("{} — {} paper(s)", proj.name, papers.len());
                 for p in papers {
                     println!(
@@ -732,8 +714,11 @@ async fn main() -> Result<()> {
                 println!("deleted tag {}", tag.name);
             }
             TagCmd::Show { name } => {
-                let papers =
-                    db::list_papers(&pool, None, None, None, None, Some(&name), None).await?;
+                let filter = db::PaperFilter {
+                    tag: Some(name.clone()),
+                    ..Default::default()
+                };
+                let papers = db::list_papers(&pool, None, None, &filter).await?;
                 println!("{name} — {} paper(s)", papers.len());
                 for p in papers {
                     println!(
@@ -751,8 +736,12 @@ async fn main() -> Result<()> {
                     let paper_id = paper.id.clone();
                     xuewen::agent::code::validate_repo_url(&url, &cfg.ai.agent.clone_allowed_hosts)
                         .map_err(|e| anyhow::anyhow!(e))?;
-                    let clone_gen =
-                        xuewen::db::upsert_paper_code_cloning(&pool, &paper_id, url.trim()).await?;
+                    let clone_gen = xuewen::agent::store::upsert_paper_code_cloning(
+                        &pool,
+                        &paper_id,
+                        url.trim(),
+                    )
+                    .await?;
                     // CLI clones inline so the outcome prints immediately.
                     xuewen::agent::code::run_clone(
                         pool.clone(),
@@ -763,8 +752,8 @@ async fn main() -> Result<()> {
                         clone_gen,
                     )
                     .await;
-                    match xuewen::db::get_paper_code(&pool, &paper_id).await? {
-                        Some(c) if c.status == "ready" => {
+                    match xuewen::agent::store::get_paper_code(&pool, &paper_id).await? {
+                        Some(c) if c.status == xuewen::agent::store::CodeStatus::Ready => {
                             println!(
                                 "attached {} at {}",
                                 c.repo_url,
@@ -781,7 +770,7 @@ async fn main() -> Result<()> {
                 CodeCmd::Status { paper } => {
                     let paper = db::find_one(&pool, &paper).await?;
                     let paper_id = paper.id;
-                    match xuewen::db::get_paper_code(&pool, &paper_id).await? {
+                    match xuewen::agent::store::get_paper_code(&pool, &paper_id).await? {
                         None => println!("no repo attached"),
                         Some(c) => println!(
                             "{} — {}{}",
@@ -795,7 +784,7 @@ async fn main() -> Result<()> {
                     let paper = db::find_one(&pool, &paper).await?;
                     let paper_id = paper.id;
                     xuewen::agent::code::remove_checkout(&cfg.library_root, &paper_id).await;
-                    xuewen::db::delete_paper_code(&pool, &paper_id).await?;
+                    xuewen::agent::store::delete_paper_code(&pool, &paper_id).await?;
                     println!("detached");
                 }
             }
@@ -891,16 +880,13 @@ async fn main() -> Result<()> {
                     Some(sel) => Some(db::find_one_project(&pool, sel).await?.id),
                     None => None,
                 };
-                let papers = db::list_papers(
-                    &pool,
-                    query.as_deref(),
-                    status.as_deref(),
-                    None,
-                    project_id.as_deref(),
-                    tag.as_deref(),
-                    starred.then_some(true),
-                )
-                .await?;
+                let filter = db::PaperFilter {
+                    status,
+                    project: project_id,
+                    tag,
+                    starred: starred.then_some(true),
+                };
+                let papers = db::list_papers(&pool, query.as_deref(), None, &filter).await?;
                 xuewen::export::format_entries(&papers, fmt)
             };
             // Normalize to exactly one trailing newline so single-entry output
@@ -926,30 +912,20 @@ async fn main() -> Result<()> {
             semantic_only,
         } => {
             let svc = SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await?;
-            let parsed = xuewen::search::query::parse(&query);
-            // `project:` carries a name; an unknown one matches no paper.
-            let project = match parsed.project {
-                Some(name) => Some(
-                    xuewen::db::find_project_by_name(&pool, &name)
-                        .await?
-                        .map(|p| p.id)
-                        .unwrap_or(name),
-                ),
-                None => None,
-            };
-            let req = xuewen::search::SearchRequest {
-                q: parsed.text,
-                author_terms: parsed.authors,
-                fields: parsed
-                    .fields
-                    .unwrap_or_else(|| FieldSel::parse(fields.as_deref())),
-                keyword: !semantic_only,
-                semantic: !keyword_only,
-                status: parsed.status,
-                project,
-                tag: parsed.tag,
-                starred: parsed.starred.then_some(true),
-            };
+            let req = xuewen::search::SearchRequest::assemble(
+                &pool,
+                &query,
+                xuewen::search::RequestOverrides {
+                    keyword: !semantic_only,
+                    semantic: !keyword_only,
+                    fields,
+                    status: None,
+                    project: None,
+                    tag: None,
+                    starred: None,
+                },
+            )
+            .await?;
             let out = svc.search(&req).await?;
             if let Some(reason) = &out.semantic.reason {
                 if !keyword_only {
@@ -969,29 +945,33 @@ async fn main() -> Result<()> {
                 );
                 let loc = match m.page {
                     Some(pg) => format!("{} p.{pg}", m.field),
-                    None => m.field.clone(),
+                    None => m.field.to_string(),
                 };
                 println!("      [{loc}] {}", strip_snippet_html(&m.snippet));
             }
         }
         Command::Summarize { id, all } => {
             let Some(svc) = xuewen::summary::SummaryService::from_config(pool.clone(), &cfg) else {
+                // Say precisely why the service is off: an absent section, a
+                // missing model, or a key whose env var came up empty.
+                let Some(use_) = cfg.ai.summary.as_ref() else {
+                    anyhow::bail!("[ai.summary] is not configured — nothing to do");
+                };
+                let r = cfg.ai.resolve(use_);
+                if r.model.is_none() {
+                    anyhow::bail!(
+                        "[ai.summary] has no model — set `model` under [ai] or [ai.summary]"
+                    );
+                }
                 anyhow::bail!(
-                    "[ai.summary] is not configured (or no model/API key) — nothing to do"
+                    "[ai.summary] has no API key — set ${} or `api_key_env`",
+                    r.api_key_env
                 );
             };
             if all {
                 xuewen::summary::store::clear(&pool, None).await?;
                 xuewen::summary::store::clear_failure(&pool, None).await?;
-                let mut total = 0usize;
-                loop {
-                    let n = svc.sweep().await?;
-                    total += n;
-                    if n == 0 {
-                        break;
-                    }
-                }
-                println!("generated {total} summaries");
+                println!("generated {} summaries", svc.sweep_all().await?);
             } else if let Some(id) = &id {
                 xuewen::summary::store::clear(&pool, Some(id)).await?;
                 xuewen::summary::store::clear_failure(&pool, Some(id)).await?;
@@ -1005,15 +985,7 @@ async fn main() -> Result<()> {
                     }
                 );
             } else {
-                let mut total = 0usize;
-                loop {
-                    let n = svc.sweep().await?;
-                    total += n;
-                    if n == 0 {
-                        break;
-                    }
-                }
-                println!("generated {total} summaries");
+                println!("generated {} summaries", svc.sweep_all().await?);
             }
         }
         Command::Index { cmd } => match cmd {
@@ -1037,39 +1009,15 @@ async fn main() -> Result<()> {
                 fts_only,
                 vectors_only,
             } => {
-                let do_fts = !vectors_only;
-                let do_vectors = !fts_only;
-                if do_fts {
-                    // Refuse to wipe an index another process is writing
-                    // (tantivy's writer lock, e.g. a running `xuewen serve`).
-                    if cfg.search.index_dir.join("meta.json").exists() {
-                        let (probe, _) =
-                            xuewen::search::fts::FtsIndex::open(&cfg.search.index_dir)?;
-                        probe.delete("__rebuild_lock_probe__").map_err(|e| {
-                            anyhow::anyhow!(
-                                "search index at {} is in use (is `xuewen serve` running?) — stop it and retry ({e})",
-                                cfg.search.index_dir.display()
-                            )
-                        })?;
-                        drop(probe);
-                    }
-                    // Wipe before opening: SearchService::open detects the
-                    // fresh directory and clears the FTS stamps itself.
-                    match std::fs::remove_dir_all(&cfg.search.index_dir) {
-                        Ok(()) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => anyhow::bail!(
-                            "could not clear search index dir {}: {e}",
-                            cfg.search.index_dir.display()
-                        ),
-                    }
-                }
-                let svc = SearchService::open(pool.clone(), &cfg.search, &cfg.ai).await?;
-                xuewen::search::store::clear_stamps(&pool, do_fts, do_vectors).await?;
-                if do_vectors && svc.embedder.is_some() {
-                    svc.vectors.recreate_collection().await?;
-                }
-                let s = indexer::sweep(&svc, &cfg.library_root).await?;
+                let scope = match (fts_only, vectors_only) {
+                    (true, false) => indexer::RebuildScope::Fts,
+                    (false, true) => indexer::RebuildScope::Vectors,
+                    // clap's conflicts_with forbids both flags at once.
+                    _ => indexer::RebuildScope::Both,
+                };
+                let s =
+                    indexer::rebuild(pool.clone(), &cfg.search, &cfg.ai, &cfg.library_root, scope)
+                        .await?;
                 println!(
                     "rebuild: {} indexed, {} removed, {} failed",
                     s.indexed, s.deindexed, s.failed

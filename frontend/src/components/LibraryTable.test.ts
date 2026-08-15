@@ -22,7 +22,9 @@ import * as api from '../lib/api';
 import LibraryTable from './LibraryTable.svelte';
 import { columnWidths, resetColumnWidths } from '../lib/columnWidths.svelte';
 import { ICON_COLUMN_PX, PINNED_COLUMNS, PINNED_KEYS, TAGS_MIN_PX } from '../lib/tableColumns';
-import { filters, library, projects, selection, viewer } from '../lib/state.svelte';
+import { library, projects } from '../lib/library.svelte';
+import { filters } from '../lib/searchState.svelte';
+import { selection, viewer } from '../lib/tabs.svelte';
 import { toasts } from '../lib/toasts.svelte';
 import type { PaperSummary } from '../lib/types';
 
@@ -153,6 +155,33 @@ describe('LibraryTable', () => {
     const undoToasts = toasts.items.filter((t) => t.action);
     expect(undoToasts).toHaveLength(1);
     expect(undoToasts[0].message).toMatch(/2 papers deleted/);
+  });
+
+  it('a failed bulk tag surfaces an error toast instead of vanishing silently', async () => {
+    (api.addTag as Mock).mockRejectedValueOnce(new Error('tag exploded'));
+    render(LibraryTable);
+    await userEvent.click(screen.getByRole('checkbox', { name: /select all/i }));
+    await userEvent.type(screen.getByPlaceholderText(/add tag/i), 'nlp');
+    await userEvent.click(screen.getByRole('button', { name: /apply tag/i }));
+    await vi.waitFor(() => {
+      expect(toasts.items.some((t) => t.kind === 'error' && /tag exploded/.test(t.message))).toBe(
+        true,
+      );
+    });
+  });
+
+  it('a partial bulk add-to-project failure reports the failed count', async () => {
+    (api.addPaperToProject as Mock)
+      .mockImplementationOnce(async () => {})
+      .mockRejectedValueOnce(new Error('boom'));
+    render(LibraryTable);
+    await userEvent.click(screen.getByRole('checkbox', { name: /select all/i }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /add to project/i }), 'pr1');
+    await vi.waitFor(() => {
+      expect(
+        toasts.items.some((t) => t.kind === 'error' && /1 of 2 papers.*boom/.test(t.message)),
+      ).toBe(true);
+    });
   });
 
   it('highlights the j/k selection cursor row', async () => {

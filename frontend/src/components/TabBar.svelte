@@ -3,7 +3,7 @@
   import { flip } from 'svelte/animate';
   import { crossfade, fade } from 'svelte/transition';
   import { DUR, dur } from '../lib/motion';
-  import { activateTab, closeTab, goHome, viewer } from '../lib/state.svelte';
+  import { activateTab, closeTab, goHome, viewer } from '../lib/tabs.svelte';
 
   // The active-tab underline crossfades between tabs — a real sliding
   // indicator with no measurement code.

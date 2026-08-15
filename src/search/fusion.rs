@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 /// Reciprocal Rank Fusion: score(id) = Σ over lists 1/(k + rank), rank 1-based.
 /// Items appearing in several lists rise; no score normalization needed.
-pub fn rrf(lists: &[Vec<String>], k: f32) -> Vec<(String, f32)> {
+/// Returns ids only — a single non-empty list comes back in its own order
+/// (scores are strictly decreasing in rank), so callers need no special case.
+pub fn rrf(lists: &[Vec<String>], k: f32) -> Vec<String> {
     let mut scores: HashMap<String, f32> = HashMap::new();
     for list in lists {
         for (i, id) in list.iter().enumerate() {
@@ -11,21 +13,17 @@ pub fn rrf(lists: &[Vec<String>], k: f32) -> Vec<(String, f32)> {
     }
     let mut out: Vec<(String, f32)> = scores.into_iter().collect();
     out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then_with(|| a.0.cmp(&b.0)));
-    out
+    out.into_iter().map(|(id, _)| id).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn ids(v: &[(String, f32)]) -> Vec<&str> {
-        v.iter().map(|(id, _)| id.as_str()).collect()
-    }
-
     #[test]
     fn single_list_preserves_order() {
         let out = rrf(&[vec!["a".into(), "b".into(), "c".into()]], 60.0);
-        assert_eq!(ids(&out), vec!["a", "b", "c"]);
+        assert_eq!(out, vec!["a", "b", "c"]);
     }
 
     #[test]
@@ -38,7 +36,7 @@ mod tests {
             ],
             60.0,
         );
-        assert_eq!(ids(&out)[0], "x"); // 2/(60+2) beats 1/(60+1)
+        assert_eq!(out[0], "x"); // 2/(60+2) beats 1/(60+1)
     }
 
     #[test]
@@ -50,6 +48,6 @@ mod tests {
     #[test]
     fn ties_break_by_id_for_determinism() {
         let out = rrf(&[vec!["b".into()], vec!["a".into()]], 60.0);
-        assert_eq!(ids(&out), vec!["a", "b"]); // equal scores → lexicographic
+        assert_eq!(out, vec!["a", "b"]); // equal scores → lexicographic
     }
 }

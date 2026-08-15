@@ -3,6 +3,24 @@ use regex::Regex;
 use std::path::Path;
 use std::process::Command;
 
+/// `pdftotext` ran and exited non-zero: the input itself is unreadable, and
+/// re-running on the same bytes is deterministic — callers with a retry
+/// policy (the watcher) downcast for this and quarantine immediately. The
+/// failed-to-*spawn* case stays an untyped error on purpose: a missing binary
+/// is environmental and may well be fixed between retries.
+#[derive(Debug)]
+pub struct PdftotextFailed {
+    pub stderr: String,
+}
+
+impl std::fmt::Display for PdftotextFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "pdftotext failed: {}", self.stderr)
+    }
+}
+
+impl std::error::Error for PdftotextFailed {}
+
 /// Run `pdftotext <extra-args…> <path> -` and return stdout.
 fn run_pdftotext(path: &Path, extra_args: &[&str]) -> Result<String> {
     let out = Command::new("pdftotext")
@@ -12,10 +30,10 @@ fn run_pdftotext(path: &Path, extra_args: &[&str]) -> Result<String> {
         .output()
         .map_err(|e| anyhow!("failed to run pdftotext (is poppler-utils installed?): {e}"))?;
     if !out.status.success() {
-        return Err(anyhow!(
-            "pdftotext failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+        return Err(PdftotextFailed {
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+        .into());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -43,13 +61,20 @@ pub fn repair_smallcaps(text: &str, title: &str) -> String {
         if token.len() < 4 || token.chars().filter(|c| c.is_ascii_uppercase()).count() < 2 {
             continue;
         }
+        // One alternation over every valid split — a single compile and a
+        // single scan per token instead of one per split point. (Token bytes
+        // are ASCII alphanumeric by the split above, so byte slicing is safe.)
         let upper = token.to_ascii_uppercase();
-        for i in 2..=upper.len() - 2 {
-            let split = format!("{} {}", &upper[..i], &upper[i..]);
-            // \b on both ends: only whole-word pairs, never inside words.
-            let re = Regex::new(&format!(r"\b{}\b", regex::escape(&split)))
-                .expect("escaped literal is a valid regex");
-            out = re.replace_all(&out, token).into_owned();
+        let splits: Vec<String> = (2..=upper.len() - 2)
+            .map(|i| regex::escape(&format!("{} {}", &upper[..i], &upper[i..])))
+            .collect();
+        // \b on both ends: only whole-word pairs, never inside words.
+        let re = Regex::new(&format!(r"\b(?:{})\b", splits.join("|")))
+            .expect("escaped literals are a valid regex");
+        // replace_all borrows when nothing matched (the common case for a
+        // full-document `out`); only take the copy when it actually changed.
+        if let std::borrow::Cow::Owned(s) = re.replace_all(&out, token) {
+            out = s;
         }
     }
     out
@@ -152,5 +177,19 @@ mod tests {
     #[test]
     fn repair_smallcaps_with_empty_title_is_identity() {
         assert_eq!(super::repair_smallcaps("any text", ""), "any text");
+    }
+
+    #[test]
+    fn corrupt_pdf_error_downcasts_to_pdftotext_failed() {
+        // The watcher's quarantine fast path depends on this downcast.
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad.pdf");
+        std::fs::write(&bad, b"this is not a pdf").unwrap();
+        let err = extract_text(&bad, 1).unwrap_err();
+        assert!(
+            err.chain()
+                .any(|c| c.downcast_ref::<PdftotextFailed>().is_some()),
+            "got: {err:#}"
+        );
     }
 }

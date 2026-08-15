@@ -1,18 +1,7 @@
 import { deleteChatThread, getChatModels, getChatThread, postChatMessage } from './api';
+import { readLocal, writeLocal } from './persist';
 import { readSse } from './sse';
-
-export interface ChatModelInfo {
-  id: string;
-  label: string;
-}
-export interface ChatTurn {
-  id: number;
-  role: 'user' | 'assistant';
-  content: string;
-  model: string | null;
-  created_at: string;
-  tools: { name: string; detail: string }[] | null;
-}
+import type { ChatModelInfo, ChatTurnRow } from './types';
 
 /// The floating paper-chat. `pending` is the user message awaiting a reply,
 /// `streaming` the assistant text accumulating under it; both fold into
@@ -22,7 +11,7 @@ export const chat = $state<{
   models: ChatModelInfo[];
   modelId: string | null;
   paperId: string | null;
-  messages: ChatTurn[];
+  messages: ChatTurnRow[];
   pending: string | null;
   streaming: string | null;
   streamTools: { name: string; detail: string }[];
@@ -43,9 +32,11 @@ export const chat = $state<{
   draft: '',
 });
 
+const CHAT_MODEL_KEY = 'xuewen-chat-model';
+
 // Bumped whenever the thread identity changes; in-flight streams from a
 // superseded thread must not write into the current one (same pattern as
-// identifySession in state.svelte.ts).
+// identifySession in identify.svelte.ts).
 let session = 0;
 let aborter: AbortController | null = null;
 // Client-assigned ids for optimistic turns: negative and descending, so they
@@ -54,10 +45,10 @@ let localId = -1;
 
 export async function loadChatModels(): Promise<void> {
   try {
-    const body = (await getChatModels()) as { available: boolean; models: ChatModelInfo[] };
+    const body = await getChatModels();
     chat.models = body.models;
     chat.available = body.available && body.models.length > 0;
-    const saved = localStorage.getItem('xuewen-chat-model');
+    const saved = readLocal(CHAT_MODEL_KEY);
     chat.modelId = chat.models.some((m) => m.id === saved)
       ? saved
       : (chat.models[0]?.id ?? null);
@@ -68,7 +59,7 @@ export async function loadChatModels(): Promise<void> {
 
 export function setChatModel(id: string): void {
   chat.modelId = id;
-  localStorage.setItem('xuewen-chat-model', id);
+  writeLocal(CHAT_MODEL_KEY, id);
 }
 
 export async function loadThread(paperId: string): Promise<void> {
@@ -83,22 +74,8 @@ export async function loadThread(paperId: string): Promise<void> {
   chat.busy = false;
   chat.error = null;
   try {
-    const rows = (await getChatThread(paperId)) as (Omit<ChatTurn, 'tools'> & {
-      tools_json?: string | null;
-    })[];
-    if (my === session) {
-      chat.messages = rows.map(({ tools_json, ...row }) => {
-        let tools: ChatTurn['tools'] = null;
-        if (tools_json) {
-          try {
-            tools = JSON.parse(tools_json);
-          } catch {
-            tools = null;
-          }
-        }
-        return { ...row, tools };
-      });
-    }
+    const rows = await getChatThread(paperId);
+    if (my === session) chat.messages = rows;
   } catch {
     if (my === session) {
       chat.paperId = null; // un-latch so reopening the panel retries the load

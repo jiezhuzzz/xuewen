@@ -3,7 +3,8 @@
   import { fly } from 'svelte/transition';
   import { chat } from '../lib/chat.svelte';
   import { DUR, dur } from '../lib/motion';
-  import { closeDock, dock, openDock, toggleZen, ui } from '../lib/state.svelte';
+  import { toggleZen } from '../lib/tabs.svelte';
+  import { closeDock, dock, openDock, ui } from '../lib/ui.svelte';
   import DockAsk from './DockAsk.svelte';
   import DockDetails from './DockDetails.svelte';
 

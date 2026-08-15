@@ -1,5 +1,6 @@
 import { reader } from './readerState.svelte';
-import { ui, viewer } from './state.svelte';
+import { viewer } from './tabs.svelte';
+import { ui } from './ui.svelte';
 import { HIDE_DELAY_MS, HOT_ZONE_PX, holdVisible, toolbarVisible, type ToolbarHold } from './zenToolbar';
 
 /// Shared zen auto-hide for the reader's floating pills (center toolbar +
@@ -35,8 +36,7 @@ export function createPillHide(getDocumentId: () => string): PillHide {
     pointerOver,
     focusWithin,
     findOpen: !!reader.find[getDocumentId()],
-    // Historical field name; carries every toolbar-local interaction hold.
-    pageEditing: extraHold(),
+    localHold: extraHold(),
   });
   const visible = $derived(toolbarVisible(hold, idleExpired));
 

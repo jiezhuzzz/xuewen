@@ -3,13 +3,13 @@ import {
   applyIdentify,
   classifyIdentifyInput,
   closeIdentify,
-  detailRefresh,
   dropsIdentifier,
   identifyState,
   openIdentify,
   pseudoDoiHint,
   runIdentifySearch,
-} from '../lib/state.svelte';
+} from '../lib/identify.svelte';
+import { cachedDetail } from '../lib/library.svelte';
 
 const CAND = {
   title: 'AntiFuzz: Impeding Fuzzing Audits of Binary Executables',
@@ -91,12 +91,12 @@ describe('identify', () => {
     await runIdentifySearch();
     expect(identifyState.candidates.length).toBe(1);
 
-    const refreshBefore = detailRefresh.n;
     identifyState.selected = identifyState.candidates[0];
     await applyIdentify();
     expect(identifyState.open).toBe(false); // closed on success
     expect(identifyState.error).toBeNull();
-    expect(detailRefresh.n).toBe(refreshBefore + 1); // open panels re-read the detail
+    // Open panels see the applied record through the reactive detail cache.
+    expect(cachedDetail('paper-1')?.title).toBe(CAND.title);
   });
 
   it('stages a direct DOI without fetching and applies it as a doi body', async () => {

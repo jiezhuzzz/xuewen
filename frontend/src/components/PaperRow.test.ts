@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PaperRow from './PaperRow.svelte';
 import { closeContextMenu, contextMenu } from '../lib/contextMenu.svelte';
-import { selection, viewer } from '../lib/state.svelte';
+import { selection, viewer } from '../lib/tabs.svelte';
 import type { PaperSummary } from '../lib/types';
 
 const paper: PaperSummary = {

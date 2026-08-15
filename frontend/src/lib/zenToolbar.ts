@@ -10,14 +10,14 @@ export interface ToolbarHold {
   hotZone: boolean; //     pointer inside the top hot zone
   pointerOver: boolean; // pointer over the pill itself
   focusWithin: boolean; // keyboard focus inside the pill
-  findOpen: boolean;
-  pageEditing: boolean; // the page-number input is focused
+  findOpen: boolean; //   reader state, not a toolbar-local interaction
+  localHold: boolean; //  any toolbar-local interaction (page input, open menus)
 }
 
 /// While any hold is active the toolbar stays visible and the hide timer
 /// must be cancelled. Outside zen the toolbar is unconditionally visible.
 export function holdVisible(s: ToolbarHold): boolean {
-  return !s.zen || s.hotZone || s.pointerOver || s.focusWithin || s.findOpen || s.pageEditing;
+  return !s.zen || s.hotZone || s.pointerOver || s.focusWithin || s.findOpen || s.localHold;
 }
 
 /// Final visibility: held, or the hide timer hasn't fired yet.

@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import ShortcutHelp from './ShortcutHelp.svelte';
-import { ui } from '../lib/state.svelte';
+import { ui } from '../lib/ui.svelte';
 
 beforeEach(() => {
   ui.helpOpen = true;

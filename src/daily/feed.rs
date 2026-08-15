@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 
-use crate::resolve::collapse_ws;
-use crate::resolve::http::HttpClient;
+use crate::http::HttpClient;
+use crate::text::collapse_ws;
 
 /// A new arXiv paper parsed from the announcement feed.
 #[derive(Debug, Clone, PartialEq)]
@@ -218,9 +218,9 @@ Abstract: New version.</summary>
             .expect(1)
             .mount(&server)
             .await;
-        let http = crate::resolve::http::HttpClient::new(
+        let http = crate::http::HttpClient::new(
             reqwest::Client::new(),
-            crate::resolve::http::RetryPolicy::fast_for_tests(),
+            crate::http::RetryPolicy::fast_for_tests(),
         );
         let base = format!("{}/atom", server.uri());
         let xml = fetch_feed(&http, &base, &["cs.AI".into(), "cs.LG".into()])

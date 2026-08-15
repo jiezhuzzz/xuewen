@@ -1,21 +1,29 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
+use std::time::Duration;
 
 use crate::config::DeeplConfig;
+use crate::http::{HttpClient, RetryPolicy};
 
 pub struct DeeplTranslator {
     base_url: String,
     api_key_env: Option<String>,
-    http: reqwest::Client,
+    /// Shared retrying transport with a bounded timeout: `/api/translate`
+    /// answers synchronously, so a hung DeepL endpoint must not hang it.
+    http: HttpClient,
 }
 
 impl DeeplTranslator {
     pub fn new(cfg: &DeeplConfig) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("building DeepL HTTP client");
         Self {
             base_url: cfg.plan.base_url().to_string(),
             api_key_env: cfg.api_key_env.clone(),
-            http: reqwest::Client::new(),
+            http: HttpClient::new(client, RetryPolicy::interactive()),
         }
     }
 
@@ -54,23 +62,21 @@ impl super::Translator for DeeplTranslator {
     async fn translate(&self, text: &str, target: &str) -> Result<(String, Option<String>)> {
         let key = self.key()?;
         let url = format!("{}/v2/translate", self.base_url.trim_end_matches('/'));
-        let resp = self
+        let req = self
             .http
             .post(&url)
             .header("Authorization", format!("DeepL-Auth-Key {key}"))
             .json(&serde_json::json!({
                 "text": [text],
                 "target_lang": deepl_target(target),
-            }))
-            .send()
+            }));
+        let body = self
+            .http
+            .send_text(req)
             .await
             .context("DeepL request failed")?;
-        if !resp.status().is_success() {
-            let code = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("DeepL returned {code}: {body}"));
-        }
-        let parsed: DeeplResp = resp.json().await.context("DeepL response parse failed")?;
+        let parsed: DeeplResp =
+            serde_json::from_str(&body).context("DeepL response parse failed")?;
         let item = parsed
             .translations
             .into_iter()
@@ -110,5 +116,38 @@ mod tests {
         let (text, src) = t.translate("hello world", "zh").await.unwrap();
         assert_eq!(text, "你好世界");
         assert_eq!(src.as_deref(), Some("EN"));
+    }
+
+    #[tokio::test]
+    async fn retries_a_429_then_succeeds() {
+        // Pins the wiring to the shared retrying transport.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/translate"))
+            .respond_with(ResponseTemplate::new(429))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/translate"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "translations": [{ "text": "你好" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        std::env::set_var("DEEPL_KEY_TEST", "secret");
+        let cfg = DeeplConfig {
+            api_key_env: Some("DEEPL_KEY_TEST".into()),
+            plan: DeeplPlan::Free,
+        };
+        let mut t = DeeplTranslator::new(&cfg);
+        t.set_base_url_for_test(server.uri());
+
+        let (text, src) = t.translate("hello", "zh").await.unwrap();
+        assert_eq!(text, "你好");
+        assert_eq!(src, None);
     }
 }

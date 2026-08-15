@@ -3,7 +3,6 @@ pub mod job;
 pub mod scheduler;
 pub mod score;
 pub mod store;
-pub mod tldr;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,20 +10,14 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::config::{Config, DailyConfig};
-use crate::resolve::http::{HttpClient, RetryPolicy};
+use crate::http::{user_agent, HttpClient, RetryPolicy};
+use crate::llm::LlmClient;
 use crate::search::embedder::Embedder;
 use crate::search::vector::QdrantStore;
 
 pub const ARXIV_FEED_BASE: &str = "https://rss.arxiv.org/atom";
 pub const ARXIV_PDF_BASE: &str = "https://arxiv.org/pdf";
 pub const ARXIV_ABS_BASE: &str = "https://arxiv.org/abs";
-
-fn user_agent(contact_email: Option<&str>) -> String {
-    match contact_email {
-        Some(email) => format!("xuewen/0.1 (mailto:{email})"),
-        None => "xuewen/0.1".to_string(),
-    }
-}
 
 /// Daily arXiv recommendations. Owns its own HTTP clients (all stateless)
 /// so it stays independent of `SearchService`.
@@ -37,7 +30,7 @@ pub struct DailyService {
     pub(crate) plain_http: reqwest::Client,
     pub(crate) embedder: Embedder,
     pub(crate) vectors: QdrantStore,
-    pub(crate) chat: tldr::ChatClient,
+    pub(crate) chat: LlmClient,
     pub(crate) feed_base: String,
     pub(crate) pdf_base: String,
     running: AtomicBool,
@@ -68,8 +61,7 @@ impl DailyService {
             tracing::warn!("[daily] set but [ai.daily] missing — daily papers disabled");
             return Ok(None);
         };
-        let Some(chat) = crate::summary::Summarizer::from_resolved(&cfg.ai.resolve(daily_use))
-        else {
+        let Some(chat) = cfg.ai.resolve(daily_use).client() else {
             tracing::warn!("[ai.daily] has no model or API key — daily papers disabled");
             return Ok(None);
         };
@@ -105,7 +97,7 @@ impl DailyService {
         pool: SqlitePool,
         embedder: Embedder,
         vectors: QdrantStore,
-        chat: tldr::ChatClient,
+        chat: LlmClient,
         feed_base: &str,
         pdf_base: &str,
     ) -> Arc<Self> {

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { chat } from '../lib/chat.svelte';
   import { DUR, dur, EASE } from '../lib/motion';
-  import { dock, toggleDock, toggleZen, ui } from '../lib/state.svelte';
+  import { toggleZen } from '../lib/tabs.svelte';
+  import { dock, toggleDock, ui } from '../lib/ui.svelte';
   import type { PillHide } from '../lib/pillHide.svelte';
 
   let { pill }: { pill: PillHide } = $props();

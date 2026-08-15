@@ -8,8 +8,19 @@ use xuewen::db;
 use xuewen::models::{Authors, Paper, PaperMeta, PaperStatus};
 use xuewen::pipeline::{IngestCtx, Libraries};
 use xuewen::resolve::Resolver;
-use xuewen::web::build_router_with_ingest_proxy;
-use xuewen::web::{build_router, build_router_with_ingest, Ingest};
+use xuewen::web::{build_router, build_router_from, AppState, Ingest};
+
+/// Router with the ingest bundle wired: the library ships no per-service
+/// constructors, so tests compose `AppState::base` themselves.
+fn build_router_with_ingest(
+    pool: sqlx::SqlitePool,
+    library_root: std::path::PathBuf,
+    ingest: std::sync::Arc<Ingest>,
+) -> axum::Router {
+    let mut state = AppState::base(pool, library_root);
+    state.ingest = Some(ingest);
+    build_router_from(state)
+}
 
 const DBLP_FIXTURE: &str = include_str!("fixtures/dblp_kgat.json");
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
@@ -297,6 +308,30 @@ async fn deletes_a_paper_softly() {
         .assert_status(axum::http::StatusCode::NOT_FOUND);
 }
 
+/// Pins the `Trash::Allow` choices in api.rs: a trashed paper's detail,
+/// export, and annotations stay reachable (an open reader tab on a
+/// just-trashed paper keeps working; marks survive a restore). Chat/code
+/// deny trashed papers — their own test files pin that.
+#[tokio::test]
+async fn trashed_paper_detail_export_and_annotations_stay_reachable() {
+    let (dir, pool) = temp_pool().await;
+    db::insert_paper(&pool, &paper("aaaa1111", "First", PaperStatus::Resolved))
+        .await
+        .unwrap();
+    db::soft_delete(&pool, "aaaa1111").await.unwrap();
+    let server = TestServer::new(build_router(pool, dir.path().join("library"))).unwrap();
+
+    server.get("/api/papers/aaaa1111").await.assert_status_ok();
+    server
+        .get("/api/papers/aaaa1111/export")
+        .await
+        .assert_status_ok();
+    server
+        .get("/api/papers/aaaa1111/annotations")
+        .await
+        .assert_status_ok();
+}
+
 #[tokio::test]
 async fn imports_a_pdf_dedups_and_rejects_non_pdf() {
     let dir = tempfile::tempdir().unwrap();
@@ -319,14 +354,11 @@ async fn imports_a_pdf_dedups_and_rejects_non_pdf() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
     let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
 
@@ -396,14 +428,11 @@ async fn import_sanitizes_traversal_filenames() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
     let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
 
@@ -457,14 +486,11 @@ async fn import_reports_in_trash_for_deleted_paper() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
     let server = TestServer::new(build_router_with_ingest(
         pool.clone(),
@@ -523,14 +549,11 @@ async fn import_reports_same_work_for_known_doi() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
     let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
 
@@ -573,14 +596,11 @@ async fn identify_search_returns_candidates() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
     let server_http =
         TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
@@ -653,14 +673,11 @@ async fn identify_applies_doi_candidate_and_guards() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
     let server = TestServer::new(build_router_with_ingest(
         pool.clone(),
@@ -775,14 +792,11 @@ async fn identify_applies_candidate_without_network() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
     let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
 
@@ -853,14 +867,11 @@ async fn identify_applies_arxiv_id_via_api() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
     let server = TestServer::new(build_router_with_ingest(pool, library.clone(), ingest)).unwrap();
 
@@ -894,26 +905,26 @@ async fn settings_report_and_set_proxy_cookie() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        // The proxy prefix now rides in the fetcher, mirroring production.
+        fetcher: xuewen::import::Fetcher::new(Some("https://proxy.uchicago.edu/login?url=".into()))
+            .unwrap(),
     });
-    let server = TestServer::new(build_router_with_ingest_proxy(
+    let server = TestServer::new(build_router_with_ingest(
         pool.clone(),
         library.clone(),
         ingest,
-        Some("https://proxy.uchicago.edu/login?url=".into()),
     ))
     .unwrap();
 
-    // Initially unset.
+    // Initially unset; the configured proxy host is reported so the UI can
+    // name it instead of hardcoding one deployment's university.
     let s: serde_json::Value = server.get("/api/settings").await.json();
     assert_eq!(s["proxy_cookie_set"], false);
+    assert_eq!(s["proxy"]["host"], "proxy.uchicago.edu");
 
     // Set it.
     server
@@ -945,10 +956,11 @@ async fn settings_reports_fold_abstract() {
 
     let res = server.get("/api/settings").await;
     res.assert_status_ok();
-    assert_eq!(
-        res.json::<serde_json::Value>()["fold_abstract"],
-        serde_json::json!(true)
-    );
+    let s: serde_json::Value = res.json();
+    assert_eq!(s["fold_abstract"], serde_json::json!(true));
+    // No ingest/[proxy] here -> `proxy` is null and the UI hides
+    // institutional access.
+    assert!(s["proxy"].is_null());
 }
 
 #[tokio::test]
@@ -969,17 +981,13 @@ async fn import_url_rejects_unsupported_input() {
     let ingest = std::sync::Arc::new(Ingest {
         ctx: IngestCtx {
             pool: pool.clone(),
-            dirs: Libraries {
-                library_root: library.clone(),
-                processed_dir: inbox.join("_processed"),
-            },
+            dirs: Libraries::under(&inbox, &library),
             resolver,
             grobid: None,
         },
-        staging_dir: inbox.join("_uploads"),
+        fetcher: xuewen::import::Fetcher::new(None).unwrap(),
     });
-    let server =
-        TestServer::new(build_router_with_ingest_proxy(pool, library, ingest, None)).unwrap();
+    let server = TestServer::new(build_router_with_ingest(pool, library, ingest)).unwrap();
 
     server
         .post("/api/import")
@@ -1383,6 +1391,21 @@ async fn exports_bibtex_and_biblatex() {
         .text();
     assert!(scoped.contains("aaaa1111"));
     assert!(!scoped.contains("bbbb2222"));
+
+    // format + filter combine: the handler extracts the same query string
+    // twice (FormatParam and the list endpoint's ListParams).
+    let scoped_bl = server
+        .get(&format!(
+            "/api/papers/export?format=biblatex&project={}",
+            proj.id
+        ))
+        .await
+        .text();
+    assert!(
+        scoped_bl.contains("journaltitle = {KDD},"),
+        "got: {scoped_bl}"
+    );
+    assert!(!scoped_bl.contains("bbbb2222"));
 }
 
 #[tokio::test]
@@ -1484,7 +1507,7 @@ async fn list_filters_by_tag_prefix_and_starred() {
 
 mod search_api {
     use super::*; // reuse the file's pool/server helpers
-    use xuewen::search::{fts, vector, SearchService};
+    use xuewen::search::{fts, SearchService};
 
     // This file's pool/paper helpers are named `temp_pool`/`paper` (not
     // `test_pool`/`insert_sample_paper` as in the brief); these two small
@@ -1505,8 +1528,7 @@ mod search_api {
         let idx = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(idx.path()).unwrap();
         std::mem::forget(idx);
-        let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
-        let svc = SearchService::open_with(pool.clone(), fts_idx, vectors, None);
+        let svc = SearchService::open_with(pool.clone(), fts_idx, None);
         svc.fts
             .upsert(&fts::PaperDoc {
                 id: "p1".into(),
@@ -1518,12 +1540,9 @@ mod search_api {
                 notes: String::new(),
             })
             .unwrap();
-        let router = xuewen::web::build_router_with_search(
-            pool,
-            std::path::PathBuf::from("/nonexistent"),
-            svc,
-        );
-        axum_test::TestServer::new(router).unwrap()
+        let mut state = AppState::base(pool, std::path::PathBuf::from("/nonexistent"));
+        state.search = Some(svc);
+        axum_test::TestServer::new(build_router_from(state)).unwrap()
     }
 
     #[tokio::test]
@@ -1590,8 +1609,7 @@ mod search_api {
         let idx = tempfile::tempdir().unwrap();
         let (fts_idx, _) = fts::FtsIndex::open(idx.path()).unwrap();
         std::mem::forget(idx);
-        let vectors = vector::QdrantStore::new("http://127.0.0.1:1", "xuewen", 4).unwrap();
-        let svc = SearchService::open_with(pool.clone(), fts_idx, vectors, None);
+        let svc = SearchService::open_with(pool.clone(), fts_idx, None);
         for (id, title) in [("a", "Fuzzing Firmware"), ("b", "Fuzzing Kernels")] {
             svc.fts
                 .upsert(&fts::PaperDoc {
@@ -1605,12 +1623,9 @@ mod search_api {
                 })
                 .unwrap();
         }
-        let router = xuewen::web::build_router_with_search(
-            pool,
-            std::path::PathBuf::from("/nonexistent"),
-            svc,
-        );
-        axum_test::TestServer::new(router).unwrap()
+        let mut state = AppState::base(pool, std::path::PathBuf::from("/nonexistent"));
+        state.search = Some(svc);
+        axum_test::TestServer::new(build_router_from(state)).unwrap()
     }
 
     #[tokio::test]

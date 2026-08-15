@@ -63,6 +63,25 @@ async fn resolves_arxiv_via_api() {
 }
 
 #[tokio::test]
+async fn doi_with_fragment_char_reaches_crossref_percent_encoded() {
+    // '#' is legal in a DOI; sent raw it would truncate the request path to
+    // /works/10.7912/c2 as a URL fragment. The mock answers only the encoded
+    // form, so resolution succeeding proves the path arrived encoded.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/works/10.7912/c2%23abc"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_FIXTURE))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri()).unwrap();
+    let res = resolver
+        .resolve(&Identifier::Doi("10.7912/c2#abc".to_string()), None)
+        .await;
+    assert!(res.is_some(), "encoded request must reach the mock");
+}
+
+#[tokio::test]
 async fn http_error_degrades_to_unresolved() {
     // A server with no stubs returns 404 for everything.
     let server = MockServer::start().await;

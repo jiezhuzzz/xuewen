@@ -1,5 +1,5 @@
 import { translateText } from './api';
-import { appSettings } from './state.svelte';
+import { appSettings } from './ui.svelte';
 
 type Provider = 'llm' | 'deepl';
 

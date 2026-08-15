@@ -81,6 +81,14 @@ describe('parseQuery', () => {
   it('runs an unclosed quote to end of string', () => {
     expect(parseQuery('tag:"unclosed').tag).toBe('unclosed');
   });
+
+  it('splits only on ASCII whitespace — NBSP stays inside a token', () => {
+    // Pasted-from-PDF text carries NBSP; the Rust parser keeps it in the
+    // value, so the mirror must not let JS `\s` split there.
+    const p = parseQuery('tag:deep\u00A0learning');
+    expect(p.tag).toBe('deep\u00A0learning');
+    expect(p.text).toBe('');
+  });
 });
 
 describe('setQualifier', () => {

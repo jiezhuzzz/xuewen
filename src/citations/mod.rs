@@ -4,6 +4,7 @@ pub mod store;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::config::Config;
@@ -43,11 +44,27 @@ pub struct CitationsService {
     /// LLM fallback for entries the heuristic can't parse; `None` (no
     /// `[ai.citations]`) leaves those entries null.
     llm: Option<crate::llm::LlmClient>,
+    /// Per-paper single-flight. The reader POSTs on every paper open and the
+    /// LLM leg takes seconds with the cache only written at the end, so a
+    /// reopened tab (or a second window) would otherwise pay the full token
+    /// cost again; a second caller awaits the first and then hits the cache
+    /// it just wrote. An entry is dropped when its last flight lands, so the
+    /// map stays O(open papers).
+    in_flight: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
-/// Provenance tag stored in the cache's `model` column. Bump the version to
-/// force reparse after heuristic improvements.
+/// Row-level provenance stored in the cache's `model` column: `heuristic-v1`
+/// when heuristics alone wrote the row, `heuristic-v1+<model>` when an LLM
+/// filled leftovers. The exact-`heuristic-v1` spelling gates the "retry
+/// nulls once an LLM appears" upgrade — `+<model>` means the LLM already
+/// declined those nulls, so they are not retried on every open.
 const HEURISTIC_VERSION: &str = "heuristic-v1";
+/// Per-entry provenance (`src` in the cached JSON) for a heuristic parse;
+/// LLM entries carry `llm:<model>`. Bump the generation here AND in
+/// `HEURISTIC_VERSION` after heuristic improvements: entries from an older
+/// `h*` generation are re-parsed and overwritten — a wrong `Some` included —
+/// while LLM and origin-unknown entries are never degraded.
+const HEURISTIC_SRC: &str = "h1";
 
 /// Max bibliography entries per LLM call. Large batches make the model drop
 /// or merge entries (observed live: 111 in → 69 out; 68 → 52), which trips
@@ -57,6 +74,29 @@ const CHUNK_SIZE: usize = 25;
 
 const SYSTEM: &str = "You convert bibliography entries from research papers into structured JSON. \
 Output ONLY a JSON array — no prose, no markdown fences.";
+
+/// One cached entry as stored in the `parsed` column: the wire fields plus
+/// per-entry provenance. `src` is `None` on rows written before per-entry
+/// provenance existed (and is kept off such entries when a row is
+/// rewritten): entries in one row have mixed origins, and only the entry
+/// itself can say whether it is safe to overwrite. The wire type stays
+/// `StructuredReference` — `src` never leaves the cache.
+#[derive(Serialize, Deserialize)]
+struct CachedReference {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    src: Option<String>,
+    #[serde(flatten)]
+    reference: StructuredReference,
+}
+
+/// Whether a cached entry is one a `HEURISTIC_SRC` bump overwrites: a
+/// heuristic parse (`h*`) from a generation other than the current one.
+/// LLM (`llm:*`) and origin-unknown (`None`) entries are never overwritten —
+/// degrading a possible LLM parse is worse than serving a stale heuristic
+/// one.
+fn stale_heuristic(src: Option<&str>) -> bool {
+    src.is_some_and(|s| s.starts_with('h') && s != HEURISTIC_SRC)
+}
 
 impl CitationsService {
     /// Always available — the heuristic needs no config. `[ai.citations]`
@@ -73,58 +113,114 @@ impl CitationsService {
         if llm.is_none() {
             tracing::info!("citation parsing: heuristics only (no [ai.citations] LLM fallback)");
         }
-        Arc::new(Self { pool, llm })
+        Arc::new(Self::new(pool, llm))
     }
 
     /// Heuristics-only service (no LLM). Test-router support; production
     /// goes through `from_config`, which handles the no-LLM case itself.
     pub fn heuristic_only(pool: SqlitePool) -> Arc<Self> {
-        Arc::new(Self { pool, llm: None })
+        Arc::new(Self::new(pool, None))
     }
 
     /// Keyless client pointed at a mock server. Test support only.
     pub fn for_tests(pool: SqlitePool, base_url: &str, model: &str) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::new(
             pool,
-            llm: Some(crate::llm::LlmClient::new(base_url, model, None)),
-        })
+            Some(crate::llm::LlmClient::new(base_url, model, None)),
+        ))
+    }
+
+    fn new(pool: SqlitePool, llm: Option<crate::llm::LlmClient>) -> Self {
+        Self {
+            pool,
+            llm,
+            in_flight: Default::default(),
+        }
     }
 
     /// Parse `refs` for `paper_id`: exact-input cache hit, else heuristics
     /// (style vote seeded by `venue`), then the LLM — in `CHUNK_SIZE`
     /// batches — for only the entries heuristics couldn't parse. The result
-    /// is index-aligned with `refs`.
+    /// is index-aligned with `refs`. Concurrent calls for one paper
+    /// single-flight (see `in_flight`).
     pub async fn parse(
         &self,
         paper_id: &str,
         refs: &[String],
         venue: Option<&str>,
     ) -> Result<Vec<Option<StructuredReference>>> {
+        let gate = self
+            .in_flight
+            .lock()
+            .unwrap()
+            .entry(paper_id.to_string())
+            .or_default()
+            .clone();
+        let _flight = gate.lock().await;
+        let result = self.parse_inner(paper_id, refs, venue).await;
+        let mut map = self.in_flight.lock().unwrap();
+        // 2 = the map's Arc + our `gate`: nobody else is waiting on this
+        // paper. A late waiter still holding the old gate just re-locks it;
+        // at worst it races a brand-new flight, which is what happened on
+        // every call before the guard existed.
+        if map.get(paper_id).is_some_and(|g| Arc::strong_count(g) <= 2) {
+            map.remove(paper_id);
+        }
+        result
+    }
+
+    /// The pipeline proper; `parse` holds the per-paper flight lock.
+    async fn parse_inner(
+        &self,
+        paper_id: &str,
+        refs: &[String],
+        venue: Option<&str>,
+    ) -> Result<Vec<Option<StructuredReference>>> {
         let refs_json = serde_json::to_string(refs)?;
-        // Cached rows with nulls can be upgradeable; the non-null entries of
-        // an upgradeable row seed the re-parse so they are never degraded.
-        let mut seed: Option<Vec<Option<StructuredReference>>> = None;
+        // An upgradeable row's keepable entries seed the re-parse so they
+        // are never degraded.
+        let mut seed: Option<Vec<Option<CachedReference>>> = None;
         if let Some((cached, provenance)) = store::get(&self.pool, paper_id, &refs_json).await? {
-            let parsed: Vec<Option<StructuredReference>> = serde_json::from_str(&cached)?;
-            let has_nulls = parsed.iter().any(|p| p.is_none());
-            // Two upgrade triggers for a null-bearing row:
-            //  - a row from an older parser generation (legacy pure-LLM rows,
-            //    or any future HEURISTIC_VERSION bump): heuristics never saw
-            //    it, so re-parse even without an LLM;
-            //  - a heuristics-only row once an LLM is configured.
+            let cached: Vec<Option<CachedReference>> = serde_json::from_str(&cached)?;
+            let has_nulls = cached.iter().any(|p| p.is_none());
+            // Three upgrade triggers:
+            //  - an entry from an older heuristic generation (a
+            //    HEURISTIC_SRC bump): the re-parse overwrites it, wrong
+            //    `Some` included — nulls or no nulls;
+            //  - a null-bearing row from an older parser generation (legacy
+            //    pure-LLM rows): heuristics never saw it, so re-parse even
+            //    without an LLM;
+            //  - a null-bearing heuristics-only row once an LLM is
+            //    configured.
             let older_generation = !provenance.starts_with(HEURISTIC_VERSION);
-            let upgradeable = has_nulls
-                && (older_generation || (self.llm.is_some() && provenance == HEURISTIC_VERSION));
+            let upgradeable = cached
+                .iter()
+                .flatten()
+                .any(|c| stale_heuristic(c.src.as_deref()))
+                || (has_nulls
+                    && (older_generation
+                        || (self.llm.is_some() && provenance == HEURISTIC_VERSION)));
             if !upgradeable {
-                return Ok(parsed);
+                return Ok(cached.into_iter().map(|c| c.map(|c| c.reference)).collect());
             }
-            seed = Some(parsed);
+            seed = Some(cached);
         }
         let mut parsed = heuristic::parse_all(refs, venue);
+        let mut srcs: Vec<Option<String>> = parsed
+            .iter()
+            .map(|p| p.as_ref().map(|_| HEURISTIC_SRC.to_string()))
+            .collect();
         if let Some(seed) = seed {
-            for (slot, old) in parsed.iter_mut().zip(seed) {
-                if old.is_some() {
-                    *slot = old; // cached parse wins over a fresh heuristic one
+            for ((slot, src), old) in parsed.iter_mut().zip(srcs.iter_mut()).zip(seed) {
+                // A kept cached entry wins over a fresh heuristic parse (same
+                // generation ⇒ same output anyway); only a stale heuristic
+                // entry is dropped — re-derived, or retracted to null when
+                // the current heuristics reject what an older one accepted.
+                if let Some(old) = old {
+                    if !stale_heuristic(old.src.as_deref()) {
+                        *slot = Some(old.reference);
+                        *src = old.src;
+                    }
                 }
             }
         }
@@ -141,6 +237,7 @@ impl CitationsService {
                 match Self::parse_leftovers(llm, &leftover_refs).await {
                     Ok(results) => {
                         for (&slot, r) in leftover.iter().zip(results) {
+                            srcs[slot] = r.as_ref().map(|_| format!("llm:{}", llm.model()));
                             parsed[slot] = r;
                         }
                         provenance = format!("{HEURISTIC_VERSION}+{}", llm.model());
@@ -154,11 +251,19 @@ impl CitationsService {
                 }
             }
         }
+        let cached: Vec<Option<CachedReference>> = parsed
+            .iter()
+            .zip(srcs)
+            .map(|(p, src)| {
+                p.clone()
+                    .map(|reference| CachedReference { src, reference })
+            })
+            .collect();
         store::upsert(
             &self.pool,
             paper_id,
             &refs_json,
-            &serde_json::to_string(&parsed)?,
+            &serde_json::to_string(&cached)?,
             &provenance,
         )
         .await?;
@@ -251,7 +356,7 @@ mod tests {
             .expect(1) // second parse() must hit the cache
             .mount(&server)
             .await;
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
         let refs = vec![
             "[1] D. Kingma, J. Ba. Adam...".to_string(),
@@ -275,7 +380,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply("not json")))
             .mount(&server)
             .await;
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
         // LLM failure → heuristic partial (here: all-None) with NO cache
         // write, so the next open retries.
@@ -316,7 +421,7 @@ mod tests {
         let refs: Vec<String> = (1..=55)
             .map(|i| format!("REF-{i} some paper title"))
             .collect();
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
 
         let out = svc.parse("p1", &refs, None).await.unwrap();
@@ -340,7 +445,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(reply)))
             .mount(&server)
             .await;
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
         let out = svc.parse("p1", &["x".to_string()], None).await.unwrap();
         assert_eq!(out[0].as_ref().unwrap().title.as_deref(), Some("T"));
@@ -362,7 +467,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(reply)))
             .mount(&server)
             .await;
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
         let out = svc
             .parse("p1", &["a".to_string(), "b".to_string()], None)
@@ -380,7 +485,7 @@ mod tests {
     #[tokio::test]
     async fn heuristics_parse_without_any_llm() {
         // No MockServer at all: heuristics must not do I/O.
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let svc = CitationsService::heuristic_only(pool.clone());
         let refs = vec![IEEE_REF.to_string(), IEEE_REF2.to_string()];
         let out = svc.parse("p1", &refs, None).await.unwrap();
@@ -410,7 +515,7 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let svc = CitationsService::for_tests(pool.clone(), &format!("{}/v1", server.uri()), "m");
         let refs = vec![
             IEEE_REF.to_string(),
@@ -423,16 +528,20 @@ mod tests {
             out[2].as_ref().unwrap().title.as_deref(),
             Some("Recovered Title")
         );
-        let (_, provenance) = store::get(&pool, "p1", &serde_json::to_string(&refs).unwrap())
+        let (cached, provenance) = store::get(&pool, "p1", &serde_json::to_string(&refs).unwrap())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(provenance, "heuristic-v1+m");
+        // Each entry records its own origin in the cache.
+        let v: serde_json::Value = serde_json::from_str(&cached).unwrap();
+        assert_eq!(v[0]["src"], "h1");
+        assert_eq!(v[2]["src"], "llm:m");
     }
 
     #[tokio::test]
     async fn heuristic_only_cache_upgrades_once_llm_is_configured() {
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let refs = vec![IEEE_REF.to_string(), GARBLED.to_string()];
         // Pass 1: heuristics only → entry 2 is null, cached as heuristic-v1.
         let out = CitationsService::heuristic_only(pool.clone())
@@ -466,7 +575,7 @@ mod tests {
         // row was served forever). Such rows re-parse once with the current
         // generation: heuristics fill what they can, but cached NON-null
         // entries are kept — a legacy LLM parse is never degraded.
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         // GARBLED votes Ieee (quoted) but fails validation, so the style vote
         // clears 60% while the entry itself stays heuristically unparseable.
         let refs = vec![IEEE_REF.to_string(), GARBLED.to_string()];
@@ -488,15 +597,87 @@ mod tests {
             out[1].as_ref().unwrap().title.as_deref(),
             Some("Legacy Keep")
         );
-        let (_, provenance) = store::get(&pool, "p1", &refs_json).await.unwrap().unwrap();
+        let (cached, provenance) = store::get(&pool, "p1", &refs_json).await.unwrap().unwrap();
         assert_eq!(provenance, "heuristic-v1"); // row rewritten to current gen
+                                                // Per-entry provenance on the rewrite: the fresh parse is tagged with
+                                                // the current generation; the kept legacy entry stays origin-unknown
+                                                // (no src), so no future generation bump will overwrite it either.
+        let v: serde_json::Value = serde_json::from_str(&cached).unwrap();
+        assert_eq!(v[0]["src"], "h1");
+        assert!(v[1].get("src").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_generation_bump_reparses_stale_heuristic_entries_and_keeps_llm_ones() {
+        // A fully-parsed row from an older heuristic generation: the old
+        // has_nulls-gated upgrade would have served it forever, wrong `Some`
+        // included. Per-entry provenance re-parses exactly the h* entries
+        // and leaves the LLM one untouched.
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
+        let refs = vec![IEEE_REF.to_string(), GARBLED.to_string()];
+        let refs_json = serde_json::to_string(&refs).unwrap();
+        let stale = r#"[{"src":"h0","authors":["W. Wrong"],"title":"A Wrong Title","venue":null,"year":2000,"doi":null,"arxiv_id":null,"url":null},{"src":"llm:m","authors":["G. Author"],"title":"LLM Keep","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#;
+        store::upsert(&pool, "p1", &refs_json, stale, "heuristic-v0+m")
+            .await
+            .unwrap();
+        let out = CitationsService::heuristic_only(pool.clone())
+            .parse("p1", &refs, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            out[0].as_ref().unwrap().title.as_deref(),
+            Some("PGFUZZ: Policy-guided fuzzing for robotic vehicles"),
+            "the stale heuristic parse is re-derived"
+        );
+        assert_eq!(out[1].as_ref().unwrap().title.as_deref(), Some("LLM Keep"));
+        let (_, provenance) = store::get(&pool, "p1", &refs_json).await.unwrap().unwrap();
+        assert_eq!(provenance, "heuristic-v1");
+    }
+
+    #[tokio::test]
+    async fn a_generation_bump_retracts_a_false_some_the_new_heuristics_reject() {
+        // The bump's whole purpose: a wrong `Some` from an older generation
+        // must not survive just because it is non-null. Current heuristics
+        // can't parse GARBLED at all, so the entry goes back to null (and
+        // would go to the LLM leg, were one configured).
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
+        let refs = vec![GARBLED.to_string()];
+        let refs_json = serde_json::to_string(&refs).unwrap();
+        let stale = r#"[{"src":"h0","authors":["W. Wrong"],"title":"A Wrong Title","venue":null,"year":2000,"doi":null,"arxiv_id":null,"url":null}]"#;
+        store::upsert(&pool, "p1", &refs_json, stale, "heuristic-v0")
+            .await
+            .unwrap();
+        let out = CitationsService::heuristic_only(pool.clone())
+            .parse("p1", &refs, None)
+            .await
+            .unwrap();
+        assert_eq!(out, vec![None]);
+        let (cached, provenance) = store::get(&pool, "p1", &refs_json).await.unwrap().unwrap();
+        assert_eq!(cached, "[null]");
+        assert_eq!(provenance, "heuristic-v1");
+    }
+
+    #[tokio::test]
+    async fn concurrent_parses_of_one_paper_share_a_single_flight() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(chat_reply(PARSED)))
+            .expect(1) // the second caller waits, then hits the cache
+            .mount(&server)
+            .await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
+        let svc = CitationsService::for_tests(pool, &format!("{}/v1", server.uri()), "m");
+        let refs = vec!["[1] D. Kingma, J. Ba. Adam...".to_string()];
+        let (a, b) = tokio::join!(svc.parse("p1", &refs, None), svc.parse("p1", &refs, None));
+        assert_eq!(a.unwrap(), b.unwrap());
     }
 
     #[tokio::test]
     async fn legacy_rows_without_nulls_are_served_as_is() {
         // A fully-parsed legacy row has nothing to gain from re-parsing —
         // serve it untouched (and never re-call the LLM for it).
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let refs = vec!["x".to_string()]; // heuristically unparseable
         let refs_json = serde_json::to_string(&refs).unwrap();
         let legacy = r#"[{"authors":["L. Legacy"],"title":"Legacy Keep","venue":null,"year":2020,"doi":null,"arxiv_id":null,"url":null}]"#;
@@ -516,7 +697,7 @@ mod tests {
 
     #[tokio::test]
     async fn llm_failure_during_upgrade_preserves_old_cache_row() {
-        let pool = crate::citations::store::tests_pool_with_paper("p1").await;
+        let (pool, _dir) = crate::testutil::pool_with_paper("p1").await;
         let refs = vec![IEEE_REF.to_string(), GARBLED.to_string()];
         // Seed an upgradeable row: heuristics-only provenance with a null.
         CitationsService::heuristic_only(pool.clone())

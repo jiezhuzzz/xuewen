@@ -5,7 +5,11 @@ use sqlx::SqlitePool;
 
 use crate::summary::Summary;
 
-/// The stored summary for a paper, or `None` if not yet generated.
+/// The stored summary for a paper, or `None` if not yet generated. A row that
+/// no longer parses (a `Summary` schema change) is deleted, not propagated:
+/// `due_ids` only selects papers with no summary row, so keeping the row
+/// would make the summary unreadable AND unregenerable at once — deleting it
+/// puts the paper back in the sweep queue.
 pub async fn get(pool: &SqlitePool, paper_id: &str) -> Result<Option<Summary>> {
     let row: Option<(String,)> =
         sqlx::query_as("SELECT summary FROM paper_summaries WHERE paper_id = ?")
@@ -13,7 +17,16 @@ pub async fn get(pool: &SqlitePool, paper_id: &str) -> Result<Option<Summary>> {
             .fetch_optional(pool)
             .await?;
     match row {
-        Some((json,)) => Ok(Some(serde_json::from_str(&json)?)),
+        Some((json,)) => match serde_json::from_str(&json) {
+            Ok(s) => Ok(Some(s)),
+            Err(e) => {
+                tracing::warn!(
+                    "stored summary for {paper_id} no longer parses ({e}); deleting it so the sweep regenerates"
+                );
+                clear(pool, Some(paper_id)).await?;
+                Ok(None)
+            }
+        },
         None => Ok(None),
     }
 }
@@ -196,6 +209,39 @@ mod tests {
 
         clear(&pool, Some("p1")).await.unwrap();
         assert_eq!(get(&pool, "p1").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn get_deletes_unparseable_row_and_requeues_the_paper() {
+        let pool = pool().await;
+        crate::db::insert_paper(&pool, &paper("p1")).await.unwrap();
+        // A stored summary an older/newer schema wrote, no longer parseable.
+        sqlx::query(
+            "INSERT INTO paper_summaries (paper_id, summary, model, generated_at) \
+             VALUES ('p1', '{\"tldr\": only}', 'gpt-x', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(get(&pool, "p1").await.unwrap(), None);
+        // The broken row is gone, so the sweep can regenerate.
+        assert_eq!(
+            due_ids(&pool, 10, 100, FUTURE_CUTOFF).await.unwrap(),
+            vec!["p1".to_string()]
+        );
+    }
+
+    #[test]
+    fn legacy_five_field_json_still_deserializes() {
+        // Rows written by the original five-field schema must keep parsing;
+        // new `Summary` fields need `#[serde(default)]` (or `get` deletes the
+        // row and the sweep regenerates it).
+        let legacy =
+            r#"{"tldr":"T.","problem":"P.","approach":"A.","results":"R.","limitations":"L."}"#;
+        let s: Summary = serde_json::from_str(legacy).unwrap();
+        assert_eq!(s.tldr, "T.");
+        assert_eq!(s.limitations, "L.");
     }
 
     #[tokio::test]

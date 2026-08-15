@@ -2,10 +2,10 @@ use anyhow::{bail, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::QueryBuilder;
 use sqlx::SqlitePool;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
-use crate::models::{Paper, PaperCode, Project, ProjectSummary, Tag, TagSummary};
+use crate::models::{Paper, Project, ProjectSummary, Tag, TagSummary};
 
 /// Open (creating if needed) the SQLite database and run migrations.
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
@@ -33,13 +33,19 @@ pub async fn find_by_hash(pool: &SqlitePool, content_hash: &str) -> Result<Optio
 
 /// The paper (active or trashed) already holding `doi` or `arxiv_id`.
 /// A DOI match wins over an arXiv match when both exist.
+///
+/// New writes store canonical identifiers (`models::canonical_doi`/
+/// `canonical_arxiv`), but rows written before that boundary existed may hold
+/// a printed-case DOI or a versioned arXiv id — matched here with NOCASE
+/// (DOIs are ASCII) and a `<id>v<N>` LIKE (arXiv ids contain no LIKE
+/// metacharacters) so legacy rows still dedupe, without a data migration.
 pub async fn find_by_identifier(
     pool: &SqlitePool,
     doi: Option<&str>,
     arxiv_id: Option<&str>,
 ) -> Result<Option<Paper>> {
     if let Some(doi) = doi {
-        let hit = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE doi = ?")
+        let hit = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE doi = ? COLLATE NOCASE")
             .bind(doi)
             .fetch_optional(pool)
             .await?;
@@ -48,10 +54,12 @@ pub async fn find_by_identifier(
         }
     }
     if let Some(arxiv_id) = arxiv_id {
-        let hit = sqlx::query_as::<_, Paper>("SELECT * FROM papers WHERE arxiv_id = ?")
-            .bind(arxiv_id)
-            .fetch_optional(pool)
-            .await?;
+        let hit = sqlx::query_as::<_, Paper>(
+            "SELECT * FROM papers WHERE arxiv_id = ?1 OR arxiv_id LIKE ?1 || 'v%'",
+        )
+        .bind(arxiv_id)
+        .fetch_optional(pool)
+        .await?;
         if hit.is_some() {
             return Ok(hit);
         }
@@ -69,6 +77,13 @@ pub async fn restore(pool: &SqlitePool, id: &str) -> Result<bool> {
     Ok(res.rows_affected() > 0)
 }
 
+/// The single mint point for stored timestamps. Everything this app writes is
+/// RFC3339 (`…T…+00:00`) — never SQL `datetime('now')`, whose format neither
+/// compares lexicographically against RFC3339 nor parses as UTC in JS `Date`.
+pub(crate) fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 /// Whether `e` (from a db call) is a UNIQUE-constraint violation.
 pub fn is_unique_violation(e: &anyhow::Error) -> bool {
     e.downcast_ref::<sqlx::Error>()
@@ -80,8 +95,9 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     sqlx::query(
         "INSERT INTO papers \
          (id, content_hash, rel_path, title, abstract, authors, venue, year, \
-          doi, arxiv_id, dblp_key, cite_key, url, source, status, added_at, deleted_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          doi, arxiv_id, dblp_key, cite_key, url, source, status, added_at, \
+          deleted_at, starred, name) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(&p.id)
     .bind(&p.content_hash)
@@ -100,6 +116,8 @@ pub async fn insert_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     .bind(p.meta.status)
     .bind(&p.added_at)
     .bind(&p.deleted_at)
+    .bind(p.starred)
+    .bind(&p.name)
     .execute(pool)
     .await?;
     Ok(())
@@ -144,7 +162,10 @@ pub async fn cite_keys_with_base(
     Ok(rows.into_iter().map(|(k,)| k).collect())
 }
 
-/// Overwrite a paper's mutable columns by id (leaves id/content_hash/added_at).
+/// Overwrite a paper's mutable columns by id. Preserved: id, content_hash,
+/// added_at, starred, and name — name deliberately, so a manual "known as"
+/// name survives identify/refresh replacing the metadata block (see
+/// `set_paper_name` / `models::Paper::name`).
 pub async fn update_paper(pool: &SqlitePool, p: &Paper) -> Result<()> {
     sqlx::query(
         "UPDATE papers SET \
@@ -196,7 +217,7 @@ pub async fn find_by_id_prefix(pool: &SqlitePool, prefix: &str) -> Result<Vec<Pa
 /// Mark a paper as trashed (soft-delete). Returns true if a row was newly
 /// trashed (false if it didn't exist or was already trashed).
 pub async fn soft_delete(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let ts = chrono::Utc::now().to_rfc3339();
+    let ts = now_rfc3339();
     let res = sqlx::query("UPDATE papers SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
         .bind(ts)
         .bind(id)
@@ -265,7 +286,7 @@ pub async fn create_project(pool: &SqlitePool, name: &str) -> Result<Project> {
     let project = Project {
         id: uuid::Uuid::now_v7().to_string(),
         name: name.to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
+        created_at: now_rfc3339(),
     };
     sqlx::query("INSERT INTO projects (id, name, created_at) VALUES (?,?,?)")
         .bind(&project.id)
@@ -301,13 +322,22 @@ pub async fn get_project(pool: &SqlitePool, id: &str) -> Result<Option<Project>>
     Ok(p)
 }
 
-pub async fn update_project(pool: &SqlitePool, id: &str, name: &str) -> Result<bool> {
-    let res = sqlx::query("UPDATE projects SET name = ? WHERE id = ?")
-        .bind(name)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(res.rows_affected() > 0)
+/// Rename a project. `None` keeps the current name (callers map omitted or
+/// blank input to `None`). Returns the updated row, or `None` for an unknown id.
+pub async fn update_project(
+    pool: &SqlitePool,
+    id: &str,
+    name: Option<&str>,
+) -> Result<Option<Project>> {
+    let p = sqlx::query_as::<_, Project>(
+        "UPDATE projects SET name = COALESCE(?1, name) WHERE id = ?2 \
+         RETURNING id, name, created_at",
+    )
+    .bind(name)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(p)
 }
 
 pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<bool> {
@@ -323,7 +353,7 @@ pub async fn add_paper_to_project(
     paper_id: &str,
     project_id: &str,
 ) -> Result<()> {
-    let ts = chrono::Utc::now().to_rfc3339();
+    let ts = now_rfc3339();
     sqlx::query(
         "INSERT INTO paper_projects (paper_id, project_id, added_at) VALUES (?,?,?) \
          ON CONFLICT (paper_id, project_id) DO NOTHING",
@@ -359,6 +389,39 @@ pub async fn projects_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec
     .fetch_all(pool)
     .await?;
     Ok(projects)
+}
+
+/// Project memberships for many papers in one query, keyed by paper id
+/// (papers with none are absent). Per-paper order matches
+/// `projects_for_paper`: when the paper joined each project. Per-id binds are
+/// fine at library scale (same judgment as `papers_by_ids_ordered`).
+pub async fn projects_for_papers(
+    pool: &SqlitePool,
+    paper_ids: &[String],
+) -> Result<HashMap<String, Vec<Project>>> {
+    if paper_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new(
+        "SELECT pp.paper_id, p.id, p.name, p.created_at \
+         FROM projects p JOIN paper_projects pp ON pp.project_id = p.id \
+         WHERE pp.paper_id IN (",
+    );
+    let mut sep = qb.separated(", ");
+    for id in paper_ids {
+        sep.push_bind(id);
+    }
+    qb.push(") ORDER BY pp.added_at");
+    let rows: Vec<(String, String, String, String)> = qb.build_query_as().fetch_all(pool).await?;
+    let mut out: HashMap<String, Vec<Project>> = HashMap::new();
+    for (paper_id, id, name, created_at) in rows {
+        out.entry(paper_id).or_default().push(Project {
+            id,
+            name,
+            created_at,
+        });
+    }
+    Ok(out)
 }
 
 pub async fn project_ids_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec<String>> {
@@ -423,7 +486,7 @@ pub async fn create_tag(pool: &SqlitePool, name: &str) -> Result<Tag> {
     let tag = Tag {
         id: uuid::Uuid::now_v7().to_string(),
         name: name.to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
+        created_at: now_rfc3339(),
     };
     sqlx::query("INSERT INTO tags (id, name, created_at) VALUES (?,?,?)")
         .bind(&tag.id)
@@ -438,11 +501,21 @@ pub async fn create_tag(pool: &SqlitePool, name: &str) -> Result<Tag> {
 /// the paper. Idempotent: re-adding an already-linked tag is a no-op.
 pub async fn add_paper_tag(pool: &SqlitePool, paper_id: &str, raw_name: &str) -> Result<Tag> {
     let name = normalize_tag_name(raw_name).ok_or_else(|| anyhow::anyhow!("empty tag name"))?;
-    let tag = match find_tag_by_name(pool, &name).await? {
-        Some(t) => t,
-        None => create_tag(pool, &name).await?,
-    };
-    let ts = chrono::Utc::now().to_rfc3339();
+    // Atomic get-or-create: a find-then-create pair races on the NOCASE unique
+    // index when two adds of the same new name run concurrently, and the loser
+    // surfaces a UNIQUE violation. `DO UPDATE SET name = name` is a no-op write
+    // whose RETURNING yields the existing row (its casing, its created_at).
+    let tag = sqlx::query_as::<_, Tag>(
+        "INSERT INTO tags (id, name, created_at) VALUES (?,?,?) \
+         ON CONFLICT(name COLLATE NOCASE) DO UPDATE SET name = name \
+         RETURNING id, name, created_at",
+    )
+    .bind(uuid::Uuid::now_v7().to_string())
+    .bind(&name)
+    .bind(now_rfc3339())
+    .fetch_one(pool)
+    .await?;
+    let ts = now_rfc3339();
     sqlx::query(
         "INSERT INTO paper_tags (paper_id, tag_id, added_at) VALUES (?,?,?) \
          ON CONFLICT (paper_id, tag_id) DO NOTHING",
@@ -465,16 +538,16 @@ pub async fn remove_paper_tag(pool: &SqlitePool, paper_id: &str, tag_id: &str) -
         .await?
         .rows_affected()
         > 0;
-    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM paper_tags WHERE tag_id = ?")
-        .bind(tag_id)
-        .fetch_one(pool)
-        .await?;
-    if remaining == 0 {
-        sqlx::query("DELETE FROM tags WHERE id = ?")
-            .bind(tag_id)
-            .execute(pool)
-            .await?;
-    }
+    // GC in one atomic statement: a COUNT-then-DELETE pair would let a
+    // concurrent add link this tag between the two, and the tag DELETE's
+    // cascade on paper_tags would then destroy that fresh membership.
+    sqlx::query(
+        "DELETE FROM tags WHERE id = ?1 \
+         AND NOT EXISTS (SELECT 1 FROM paper_tags WHERE tag_id = ?1)",
+    )
+    .bind(tag_id)
+    .execute(pool)
+    .await?;
     Ok(removed)
 }
 
@@ -487,6 +560,38 @@ pub async fn tags_for_paper(pool: &SqlitePool, paper_id: &str) -> Result<Vec<Tag
     .fetch_all(pool)
     .await?;
     Ok(tags)
+}
+
+/// Tag memberships for many papers in one query, keyed by paper id (papers
+/// with none are absent). Per-paper order matches `tags_for_paper`: tag name,
+/// case-insensitively.
+pub async fn tags_for_papers(
+    pool: &SqlitePool,
+    paper_ids: &[String],
+) -> Result<HashMap<String, Vec<Tag>>> {
+    if paper_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new(
+        "SELECT pt.paper_id, t.id, t.name, t.created_at \
+         FROM tags t JOIN paper_tags pt ON pt.tag_id = t.id \
+         WHERE pt.paper_id IN (",
+    );
+    let mut sep = qb.separated(", ");
+    for id in paper_ids {
+        sep.push_bind(id);
+    }
+    qb.push(") ORDER BY t.name COLLATE NOCASE");
+    let rows: Vec<(String, String, String, String)> = qb.build_query_as().fetch_all(pool).await?;
+    let mut out: HashMap<String, Vec<Tag>> = HashMap::new();
+    for (paper_id, id, name, created_at) in rows {
+        out.entry(paper_id).or_default().push(Tag {
+            id,
+            name,
+            created_at,
+        });
+    }
+    Ok(out)
 }
 
 pub async fn list_tags_with_counts(pool: &SqlitePool) -> Result<Vec<TagSummary>> {
@@ -509,18 +614,13 @@ pub async fn list_tags_with_counts(pool: &SqlitePool) -> Result<Vec<TagSummary>>
 
 pub async fn rename_tag(pool: &SqlitePool, id: &str, raw_name: &str) -> Result<Option<Tag>> {
     let name = normalize_tag_name(raw_name).ok_or_else(|| anyhow::anyhow!("empty tag name"))?;
-    let res = sqlx::query("UPDATE tags SET name = ? WHERE id = ?")
-        .bind(&name)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    if res.rows_affected() == 0 {
-        return Ok(None);
-    }
-    let tag = sqlx::query_as::<_, Tag>("SELECT * FROM tags WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+    let tag = sqlx::query_as::<_, Tag>(
+        "UPDATE tags SET name = ? WHERE id = ? RETURNING id, name, created_at",
+    )
+    .bind(&name)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
     Ok(tag)
 }
 
@@ -539,20 +639,74 @@ fn escape_like(term: &str) -> String {
         .replace('_', r"\_")
 }
 
-/// List papers with optional case-insensitive search (`q` over title+authors),
-/// optional status filter, and a whitelisted sort. Unknown status/sort values
-/// are ignored (never an error). `tag`/`starred` mirror the filters
-/// `search::store::papers_by_ids_ordered` applies for the search endpoint
-/// (tag matches the exact name or any `name/*` child; `starred` only
-/// restricts when `Some(true)`).
+/// The status/project/tag/starred restrictions shared by the paper-list and
+/// search endpoints. One struct + one SQL emitter (`push_paper_filters`) so
+/// `/api/papers` and `/api/search` can never disagree on filter semantics.
+/// `q` is deliberately absent: it is a LIKE filter on the list path but
+/// Tantivy's job on the search path.
+#[derive(Debug, Clone, Default)]
+pub struct PaperFilter {
+    /// Whitelisted to `resolved`/`needs_review`; other values are ignored
+    /// (never an error).
+    pub status: Option<String>,
+    /// Project id.
+    pub project: Option<String>,
+    /// Matches the exact tag name or any `name/*` child.
+    pub tag: Option<String>,
+    /// Only restricts when `Some(true)`.
+    pub starred: Option<bool>,
+}
+
+/// Append `filter`'s restrictions to a query already inside its WHERE clause.
+pub fn push_paper_filters(qb: &mut QueryBuilder<'_, sqlx::Sqlite>, filter: &PaperFilter) {
+    if let Some(st) = filter
+        .status
+        .as_deref()
+        .filter(|s| matches!(*s, "resolved" | "needs_review"))
+    {
+        qb.push(" AND status = ").push_bind(st.to_string());
+    }
+    if let Some(pid) = filter
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        qb.push(" AND id IN (SELECT paper_id FROM paper_projects WHERE project_id = ")
+            .push_bind(pid.to_string())
+            .push(")");
+    }
+    if let Some(tag) = filter
+        .tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        // NOTE: a tag name containing a literal `%`/`_` would over-match under
+        // LIKE (no escaping applied). Tags rarely contain these characters;
+        // revisit with `ESCAPE '\\'` + escaped bind if it ever matters.
+        qb.push(
+            " AND id IN (SELECT pt.paper_id FROM paper_tags pt \
+                 JOIN tags t ON t.id = pt.tag_id WHERE t.name = ",
+        )
+        .push_bind(tag.to_string())
+        .push(" OR t.name LIKE ")
+        .push_bind(format!("{tag}/%"))
+        .push(")");
+    }
+    if filter.starred == Some(true) {
+        qb.push(" AND starred = 1");
+    }
+}
+
+/// List papers with optional case-insensitive search (`q` over title+authors)
+/// and a whitelisted sort, restricted by `filter`. Unknown sort values are
+/// ignored (never an error).
 pub async fn list_papers(
     pool: &SqlitePool,
     q: Option<&str>,
-    status: Option<&str>,
     sort: Option<&str>,
-    project: Option<&str>,
-    tag: Option<&str>,
-    starred: Option<bool>,
+    filter: &PaperFilter,
 ) -> Result<Vec<Paper>> {
     let mut qb: QueryBuilder<sqlx::Sqlite> =
         QueryBuilder::new("SELECT * FROM papers WHERE deleted_at IS NULL");
@@ -564,29 +718,7 @@ pub async fn list_papers(
             .push_bind(like)
             .push(" ESCAPE '\\')");
     }
-    if let Some(st) = status.filter(|s| matches!(*s, "resolved" | "needs_review")) {
-        qb.push(" AND status = ").push_bind(st.to_string());
-    }
-    if let Some(pid) = project.map(str::trim).filter(|s| !s.is_empty()) {
-        qb.push(" AND id IN (SELECT paper_id FROM paper_projects WHERE project_id = ")
-            .push_bind(pid.to_string())
-            .push(")");
-    }
-    if let Some(tag) = tag.map(str::trim).filter(|s| !s.is_empty()) {
-        // NOTE: a tag name containing a literal `%`/`_` would over-match under
-        // LIKE (no escaping applied) — same known caveat as the search filter.
-        qb.push(
-            " AND id IN (SELECT pt.paper_id FROM paper_tags pt \
-                 JOIN tags t ON t.id = pt.tag_id WHERE t.name = ",
-        )
-        .push_bind(tag.to_string())
-        .push(" OR t.name LIKE ")
-        .push_bind(format!("{tag}/%"))
-        .push(")");
-    }
-    if starred == Some(true) {
-        qb.push(" AND starred = 1");
-    }
+    push_paper_filters(&mut qb, filter);
     // Whitelisted ORDER BY (never interpolate raw user input).
     let order = match sort {
         Some("year_asc") => "year ASC NULLS LAST",
@@ -637,7 +769,7 @@ pub async fn setting_updated_at(pool: &SqlitePool, key: &str) -> Result<Option<S
 
 /// Insert or overwrite a setting, stamping `updated_at` with the current time.
 pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
-    let ts = chrono::Utc::now().to_rfc3339();
+    let ts = now_rfc3339();
     sqlx::query(
         "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -654,101 +786,6 @@ pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()
 pub async fn delete_setting(pool: &SqlitePool, key: &str) -> Result<()> {
     sqlx::query("DELETE FROM settings WHERE key = ?")
         .bind(key)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-pub async fn get_paper_code(pool: &SqlitePool, paper_id: &str) -> Result<Option<PaperCode>> {
-    Ok(sqlx::query_as::<_, PaperCode>(
-        "SELECT paper_id, repo_url, commit_sha, status, error, cloned_at, size_bytes
-         FROM paper_code WHERE paper_id = ?",
-    )
-    .bind(paper_id)
-    .fetch_optional(pool)
-    .await?)
-}
-
-/// Attach (or re-attach) a repo: the row enters 'cloning' with outcome
-/// fields cleared; the background job resolves it to ready/error.
-/// Mark a paper's repo as (re)cloning and return the new `clone_gen`. Each
-/// call bumps the generation so a background clone can detect it has been
-/// superseded by a later attach (see `set_paper_code_ready`/`_error`).
-pub async fn upsert_paper_code_cloning(
-    pool: &SqlitePool,
-    paper_id: &str,
-    repo_url: &str,
-) -> Result<i64> {
-    let gen: i64 = sqlx::query_scalar(
-        "INSERT INTO paper_code (paper_id, repo_url, status, clone_gen) VALUES (?, ?, 'cloning', 0)
-         ON CONFLICT(paper_id) DO UPDATE SET repo_url = excluded.repo_url, status = 'cloning',
-           commit_sha = NULL, error = NULL, cloned_at = NULL, size_bytes = NULL,
-           clone_gen = paper_code.clone_gen + 1
-         RETURNING clone_gen",
-    )
-    .bind(paper_id)
-    .bind(repo_url)
-    .fetch_one(pool)
-    .await?;
-    Ok(gen)
-}
-
-/// The current `clone_gen` for a paper, or `None` if no row exists. A clone job
-/// consults this before publishing its checkout so a superseded job bows out.
-pub async fn current_clone_gen(pool: &SqlitePool, paper_id: &str) -> Result<Option<i64>> {
-    Ok(
-        sqlx::query_scalar("SELECT clone_gen FROM paper_code WHERE paper_id = ?")
-            .bind(paper_id)
-            .fetch_optional(pool)
-            .await?,
-    )
-}
-
-/// Record a successful clone, but only if `clone_gen` still matches — a later
-/// attach bumps it, so a stale job's write affects no rows. Returns whether the
-/// row was updated (i.e. this job was still the current one).
-pub async fn set_paper_code_ready(
-    pool: &SqlitePool,
-    paper_id: &str,
-    commit_sha: &str,
-    size_bytes: i64,
-    clone_gen: i64,
-) -> Result<bool> {
-    let r = sqlx::query(
-        "UPDATE paper_code SET status = 'ready', commit_sha = ?, size_bytes = ?,
-           cloned_at = datetime('now'), error = NULL WHERE paper_id = ? AND clone_gen = ?",
-    )
-    .bind(commit_sha)
-    .bind(size_bytes)
-    .bind(paper_id)
-    .bind(clone_gen)
-    .execute(pool)
-    .await?;
-    Ok(r.rows_affected() > 0)
-}
-
-/// Record a clone failure, guarded by `clone_gen` like `set_paper_code_ready`.
-/// Returns whether the row was updated.
-pub async fn set_paper_code_error(
-    pool: &SqlitePool,
-    paper_id: &str,
-    error: &str,
-    clone_gen: i64,
-) -> Result<bool> {
-    let r = sqlx::query(
-        "UPDATE paper_code SET status = 'error', error = ? WHERE paper_id = ? AND clone_gen = ?",
-    )
-    .bind(error)
-    .bind(paper_id)
-    .bind(clone_gen)
-    .execute(pool)
-    .await?;
-    Ok(r.rows_affected() > 0)
-}
-
-pub async fn delete_paper_code(pool: &SqlitePool, paper_id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM paper_code WHERE paper_id = ?")
-        .bind(paper_id)
         .execute(pool)
         .await?;
     Ok(())
@@ -791,18 +828,6 @@ mod tests {
         let url = format!("sqlite:{}", db_path.display());
         let pool = connect(&url).await.unwrap();
         (dir, pool)
-    }
-
-    async fn test_pool_with_paper(paper_id: &str) -> SqlitePool {
-        let (dir, pool) = temp_pool().await;
-        // Returning only the pool would drop `dir` here, deleting the temp
-        // directory out from under the SQLite file; a later connection then
-        // fails with "unable to open database file" (intermittently, as pool
-        // connections open lazily). Persist the dir for the pool's lifetime.
-        std::mem::forget(dir);
-        let p = sample_paper(paper_id, "hash");
-        insert_paper(&pool, &p).await.unwrap();
-        pool
     }
 
     #[test]
@@ -992,67 +1017,56 @@ mod tests {
         insert_paper(&pool, &a).await.unwrap();
         insert_paper(&pool, &b).await.unwrap();
 
+        let with_status = |status: &str| PaperFilter {
+            status: Some(status.to_string()),
+            ..Default::default()
+        };
+
         // No filters → both, default sort year DESC (2017 before 2016).
-        let all = list_papers(&pool, None, None, None, None, None, None)
+        let all = list_papers(&pool, None, None, &PaperFilter::default())
             .await
             .unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].meta.year, Some(2017));
 
         // q matches title (case-insensitive) or authors.
-        let hits = list_papers(&pool, Some("residual"), None, None, None, None, None)
+        let hits = list_papers(&pool, Some("residual"), None, &PaperFilter::default())
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, a.id);
-        let by_author = list_papers(&pool, Some("vaswani"), None, None, None, None, None)
+        let by_author = list_papers(&pool, Some("vaswani"), None, &PaperFilter::default())
             .await
             .unwrap();
         assert_eq!(by_author.len(), 1);
         assert_eq!(by_author[0].id, b.id);
 
         // status filter.
-        let resolved = list_papers(&pool, None, Some("resolved"), None, None, None, None)
+        let resolved = list_papers(&pool, None, None, &with_status("resolved"))
             .await
             .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].id, a.id);
 
         // q + status together (covers the AND branch).
-        let combined = list_papers(
-            &pool,
-            Some("attention"),
-            Some("needs_review"),
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let combined = list_papers(&pool, Some("attention"), None, &with_status("needs_review"))
+            .await
+            .unwrap();
         assert_eq!(combined.len(), 1);
         assert_eq!(combined[0].id, b.id);
-        let none = list_papers(
-            &pool,
-            Some("attention"),
-            Some("resolved"),
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let none = list_papers(&pool, Some("attention"), None, &with_status("resolved"))
+            .await
+            .unwrap();
         assert!(none.is_empty());
 
         // year_asc sort.
-        let asc = list_papers(&pool, None, None, Some("year_asc"), None, None, None)
+        let asc = list_papers(&pool, None, Some("year_asc"), &PaperFilter::default())
             .await
             .unwrap();
         assert_eq!(asc[0].meta.year, Some(2016));
 
         // An unknown status is ignored (not an error) → both rows.
-        let bogus = list_papers(&pool, None, Some("nonsense"), None, None, None, None)
+        let bogus = list_papers(&pool, None, None, &with_status("nonsense"))
             .await
             .unwrap();
         assert_eq!(bogus.len(), 2);
@@ -1069,7 +1083,7 @@ mod tests {
         insert_paper(&pool, &b).await.unwrap();
 
         // "%" must match only the literal percent title, not act as a wildcard.
-        let hits = list_papers(&pool, Some("100%"), None, None, None, None, None)
+        let hits = list_papers(&pool, Some("100%"), None, &PaperFilter::default())
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
@@ -1124,7 +1138,7 @@ mod tests {
         // Soft-delete a: hidden from list/stats/all_papers; b remains.
         assert!(soft_delete(&pool, &a.id).await.unwrap());
         assert!(!soft_delete(&pool, &a.id).await.unwrap()); // idempotent: already trashed
-        let listed = list_papers(&pool, None, None, None, None, None, None)
+        let listed = list_papers(&pool, None, None, &PaperFilter::default())
             .await
             .unwrap();
         assert_eq!(listed.len(), 1);
@@ -1147,6 +1161,36 @@ mod tests {
         delete_row(&pool, &a.id).await.unwrap();
         assert!(get_by_id(&pool, &a.id).await.unwrap().is_none());
         assert!(trashed_papers(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn insert_round_trips_starred_and_name() {
+        let (_dir, pool) = temp_pool().await;
+        let mut p = sample_paper("01890000-0000-7000-8000-0000000000f9", "hs");
+        p.starred = true;
+        p.name = Some("RVSpec".into());
+        insert_paper(&pool, &p).await.unwrap();
+        let got = get_by_id(&pool, &p.id).await.unwrap().unwrap();
+        assert!(got.starred);
+        assert_eq!(got.name.as_deref(), Some("RVSpec"));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_paper_cascades_chat_messages() {
+        let (_dir, pool) = temp_pool().await;
+        let pid = insert_test_paper(&pool).await;
+        crate::chat::store::insert_exchange(&pool, &pid, "q", "a", "M", None)
+            .await
+            .unwrap();
+        // 0022 rebuilt chat_messages with ON DELETE CASCADE; before it this
+        // delete FK-failed unless the caller cleared the chat rows first.
+        delete_row(&pool, &pid).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE paper_id = ?")
+            .bind(&pid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[tokio::test]
@@ -1196,6 +1240,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn find_by_identifier_tolerates_legacy_cased_and_versioned_rows() {
+        let (_dir, pool) = temp_pool().await;
+        // A pre-canonicalization row: printed-case DOI, versioned arXiv id.
+        let mut p = sample_paper("01890000-0000-7000-8000-000000000008", "h8");
+        p.meta.doi = Some("10.1145/AbC.XYZ".into());
+        p.meta.arxiv_id = Some("1706.03762v5".into());
+        insert_paper(&pool, &p).await.unwrap();
+
+        // Canonical queries still find it.
+        assert_eq!(
+            find_by_identifier(&pool, Some("10.1145/abc.xyz"), None)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            p.id
+        );
+        assert_eq!(
+            find_by_identifier(&pool, None, Some("1706.03762"))
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            p.id
+        );
+        // A different id sharing a prefix must not LIKE-match.
+        assert!(find_by_identifier(&pool, None, Some("1706.0376"))
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn find_by_identifier_prefers_doi_over_arxiv() {
         let (_dir, pool) = temp_pool().await;
         // Row A holds only the DOI; row B holds only the arXiv id.
@@ -1237,7 +1314,7 @@ mod tests {
             .deleted_at
             .is_none());
         assert_eq!(
-            list_papers(&pool, None, None, None, None, None, None)
+            list_papers(&pool, None, None, &PaperFilter::default())
                 .await
                 .unwrap()
                 .len(),
@@ -1274,10 +1351,20 @@ mod tests {
         assert_eq!(list[0].project.id, p.id);
         assert_eq!(list[0].paper_count, 0);
 
-        // Update name.
-        assert!(update_project(&pool, &p.id, "Survey v2").await.unwrap());
-        let got = get_project(&pool, &p.id).await.unwrap().unwrap();
-        assert_eq!(got.name, "Survey v2");
+        // Update name; RETURNING hands the row back in the same statement.
+        let updated = update_project(&pool, &p.id, Some("Survey v2"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.name, "Survey v2");
+        // `None` keeps the current name.
+        let kept = update_project(&pool, &p.id, None).await.unwrap().unwrap();
+        assert_eq!(kept.name, "Survey v2");
+        // Unknown id → None.
+        assert!(update_project(&pool, "nope", Some("X"))
+            .await
+            .unwrap()
+            .is_none());
 
         // Delete.
         assert!(delete_project(&pool, &p.id).await.unwrap());
@@ -1338,7 +1425,11 @@ mod tests {
         assert_eq!(list_projects(&pool).await.unwrap()[0].paper_count, 1);
 
         // Filter returns only members.
-        let filtered = list_papers(&pool, None, None, None, Some(&proj.id), None, None)
+        let member_filter = PaperFilter {
+            project: Some(proj.id.clone()),
+            ..Default::default()
+        };
+        let filtered = list_papers(&pool, None, None, &member_filter)
             .await
             .unwrap();
         assert_eq!(filtered.len(), 1);
@@ -1378,6 +1469,60 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn batched_memberships_group_by_paper_and_keep_order() {
+        let (_dir, pool) = temp_pool().await;
+        insert_paper(&pool, &sample_paper("pa", "ha"))
+            .await
+            .unwrap();
+        insert_paper(&pool, &sample_paper("pb", "hb"))
+            .await
+            .unwrap();
+        insert_paper(&pool, &sample_paper("pc", "hc"))
+            .await
+            .unwrap();
+
+        // Tags: NOCASE-sorted per paper, papers without any absent from the map.
+        add_paper_tag(&pool, "pa", "zeta").await.unwrap();
+        add_paper_tag(&pool, "pa", "Alpha").await.unwrap();
+        add_paper_tag(&pool, "pb", "zeta").await.unwrap();
+        let tags = tags_for_papers(
+            &pool,
+            &["pa".to_string(), "pb".to_string(), "pc".to_string()],
+        )
+        .await
+        .unwrap();
+        let names = |id: &str| -> Vec<String> {
+            tags.get(id)
+                .map(|ts| ts.iter().map(|t| t.name.clone()).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(names("pa"), vec!["Alpha".to_string(), "zeta".to_string()]);
+        assert_eq!(names("pb"), vec!["zeta".to_string()]);
+        assert!(!tags.contains_key("pc"));
+
+        // Must agree with the per-paper query it batches.
+        assert_eq!(tags["pa"], tags_for_paper(&pool, "pa").await.unwrap());
+
+        // Projects: join order per paper, mirroring projects_for_paper.
+        let p1 = create_project(&pool, "First").await.unwrap();
+        let p2 = create_project(&pool, "Second").await.unwrap();
+        add_paper_to_project(&pool, "pa", &p1.id).await.unwrap();
+        add_paper_to_project(&pool, "pa", &p2.id).await.unwrap();
+        let projects = projects_for_papers(&pool, &["pa".to_string(), "pb".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            projects["pa"],
+            projects_for_paper(&pool, "pa").await.unwrap()
+        );
+        assert!(!projects.contains_key("pb"));
+
+        // Empty input short-circuits (no `IN ()` SQL).
+        assert!(tags_for_papers(&pool, &[]).await.unwrap().is_empty());
+        assert!(projects_for_papers(&pool, &[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1437,11 +1582,8 @@ mod tests {
         alpha.name = Some("Alpha".into());
         for p in [&unnamed, &beta, &alpha] {
             insert_paper(&pool, p).await.unwrap();
-            if let Some(n) = &p.name {
-                set_paper_name(&pool, &p.id, Some(n)).await.unwrap();
-            }
         }
-        let sorted = list_papers(&pool, None, None, Some("name"), None, None, None)
+        let sorted = list_papers(&pool, None, Some("name"), &PaperFilter::default())
             .await
             .unwrap();
         // Case-insensitive alphabetical, unnamed papers last.
@@ -1517,7 +1659,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(a.id, b.id, "same tag reused case-insensitively");
+        assert_eq!(b.name, "Security/Fuzzing", "existing casing wins");
+        assert_eq!(b.created_at, a.created_at);
         assert_eq!(list_tags_with_counts(&pool).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn remove_keeps_tag_while_memberships_remain() {
+        let (_dir, pool) = temp_pool().await;
+        let p1 = insert_test_paper(&pool).await;
+        let p2 = insert_test_paper(&pool).await;
+        let t = add_paper_tag(&pool, &p1, "ml").await.unwrap();
+        add_paper_tag(&pool, &p2, "ml").await.unwrap();
+        assert!(remove_paper_tag(&pool, &p1, &t.id).await.unwrap());
+        assert!(
+            find_tag_by_name(&pool, "ml").await.unwrap().is_some(),
+            "tag survives while another paper still carries it"
+        );
     }
 
     #[tokio::test]
@@ -1552,60 +1710,5 @@ mod tests {
         assert_eq!(by_name("security"), 2);
         // The leaf child is unaffected: its rollup equals its direct count.
         assert_eq!(by_name("security/fuzzing"), 1);
-    }
-
-    #[tokio::test]
-    async fn paper_code_lifecycle() {
-        let pool = test_pool_with_paper("p1").await;
-        assert!(get_paper_code(&pool, "p1").await.unwrap().is_none());
-
-        let gen0 = upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/y")
-            .await
-            .unwrap();
-        assert_eq!(gen0, 0);
-        let c = get_paper_code(&pool, "p1").await.unwrap().unwrap();
-        assert_eq!(c.status, "cloning");
-        assert_eq!(c.repo_url, "https://github.com/x/y");
-        assert_eq!(current_clone_gen(&pool, "p1").await.unwrap(), Some(0));
-
-        assert!(set_paper_code_ready(&pool, "p1", "abc1234", 42_000, gen0)
-            .await
-            .unwrap());
-        let c = get_paper_code(&pool, "p1").await.unwrap().unwrap();
-        assert_eq!(c.status, "ready");
-        assert_eq!(c.commit_sha.as_deref(), Some("abc1234"));
-        assert!(c.cloned_at.is_some());
-
-        // Re-attach resets to cloning, clears the old outcome fields, and bumps
-        // the generation.
-        let gen1 = upsert_paper_code_cloning(&pool, "p1", "https://github.com/x/z")
-            .await
-            .unwrap();
-        assert_eq!(gen1, 1);
-        let c = get_paper_code(&pool, "p1").await.unwrap().unwrap();
-        assert_eq!(c.status, "cloning");
-        assert_eq!(c.commit_sha, None);
-
-        // A write guarded by the stale generation is dropped (0 rows), while
-        // the current generation's write lands.
-        assert!(!set_paper_code_error(&pool, "p1", "stale", gen0)
-            .await
-            .unwrap());
-        assert!(set_paper_code_error(&pool, "p1", "boom", gen1)
-            .await
-            .unwrap());
-        assert_eq!(
-            get_paper_code(&pool, "p1")
-                .await
-                .unwrap()
-                .unwrap()
-                .error
-                .as_deref(),
-            Some("boom")
-        );
-
-        delete_paper_code(&pool, "p1").await.unwrap();
-        assert!(get_paper_code(&pool, "p1").await.unwrap().is_none());
-        assert_eq!(current_clone_gen(&pool, "p1").await.unwrap(), None);
     }
 }

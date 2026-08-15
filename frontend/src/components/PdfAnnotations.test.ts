@@ -60,8 +60,6 @@ vi.mock('../lib/api', () => ({
   deleteAnnotation: (paperId: string, id: string) => deleteAnnotation(paperId, id),
   listAnnotations: vi.fn(),
   putAnnotation: vi.fn(),
-  patchAnnotation: vi.fn(),
-  clearAnnotations: vi.fn(),
   pdfUrl: (id: string) => `/papers/${id}.pdf`,
 }));
 
@@ -75,7 +73,7 @@ vi.mock('../lib/download', async (importOriginal) => ({
 import PdfAnnotations from './PdfAnnotations.svelte';
 import { annotations } from '../lib/annotationStore.svelte';
 import { colorHex } from '../lib/annotationPalette';
-import { viewer } from '../lib/state.svelte';
+import { viewer } from '../lib/tabs.svelte';
 import { toasts } from '../lib/toasts.svelte';
 import type { Annotation } from '../lib/types';
 

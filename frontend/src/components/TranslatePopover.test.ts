@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import TranslatePopover from './TranslatePopover.svelte';
 import { translateBox, closeTranslate } from '../lib/translate.svelte';
-import { appSettings, dock } from '../lib/state.svelte';
+import { appSettings, dock } from '../lib/ui.svelte';
 import { chat } from '../lib/chat.svelte';
 
 beforeEach(() => {
