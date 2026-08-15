@@ -13,6 +13,38 @@ export function reconcileDocuments(
   return { toOpen, toClose };
 }
 
+/** Documents the registry already holds that the deck's own bookkeeping missed,
+ *  for the caller to fold into `opened` before reconciling.
+ *
+ *  PdfDeck is NOT mounted once, despite reading like it is. `<EmbedPDF>` renders
+ *  its children from two different branches (@embedpdf/core 2.14.4): bare while
+ *  the registry initializes, then — the instant `pluginsReady` flips — again
+ *  inside the AutoMount wrapper, which is where the annotation plugin's
+ *  `RendererRegistryProvider` comes from, so it can't simply be turned off with
+ *  `autoMountDomElements={false}`. That branch swap destroys and recreates the
+ *  whole subtree, handing the new PdfDeck a fresh, EMPTY `opened` set. It then
+ *  opened the active paper a second time, and the second load's `setAnnotations`
+ *  replaced the annotation plugin's document map wholesale — wiping every mark
+ *  the first load had already imported from the sidecar, which is why saved
+ *  annotations came back for about a second and then vanished. The registry
+ *  survives the remount, so it, not a component-local Set, is the authority on
+ *  what is already open; `documentOrder` carries an id from the moment loading
+ *  starts, so an open still in flight counts too.
+ *
+ *  Only ids that belong to a tab are adopted. The registry also holds the
+ *  throwaway `export:<paper id>` document while an annotated PDF is being built
+ *  (annotationExport.ts); adopting that would put it in `opened`, where the very
+ *  next reconcile would see no tab for it and close it mid-export. */
+export function documentsToAdopt(
+  opened: Iterable<string>,
+  tabIds: string[],
+  registryIds: string[],
+): string[] {
+  const openedSet = new Set(opened);
+  const tabSet = new Set(tabIds);
+  return registryIds.filter((id) => tabSet.has(id) && !openedSet.has(id));
+}
+
 /** Split the documents that need opening into the one the user is actually
  *  looking at and the rest, which the caller defers.
  *

@@ -2,11 +2,39 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PdfDocumentObject } from '@embedpdf/models';
 import {
   DocumentOpenError,
+  documentsToAdopt,
   openDocumentFully,
   planOpens,
   reconcileDocuments,
   type DocumentOpenerLike,
 } from './pdfDeck';
+
+describe('documentsToAdopt', () => {
+  // The startup remount: <EmbedPDF> swaps the branch its children render in
+  // once the plugins are ready, so the replacement PdfDeck starts with an empty
+  // `opened` while the registry still holds the document the first one opened.
+  it('adopts a tab the registry already holds but this deck has forgotten', () => {
+    expect(documentsToAdopt([], ['a'], ['a'])).toEqual(['a']);
+  });
+
+  it('adopts nothing it already knows about', () => {
+    expect(documentsToAdopt(['a'], ['a'], ['a'])).toEqual([]);
+  });
+
+  // Adopting it would put it in `opened`, where the next reconcile finds no tab
+  // for it and closes it — mid-export.
+  it('leaves the export’s throwaway document alone', () => {
+    expect(documentsToAdopt([], ['a'], ['a', 'export:a'])).toEqual(['a']);
+  });
+
+  it('adopts nothing when the registry is empty', () => {
+    expect(documentsToAdopt([], ['a', 'b'], [])).toEqual([]);
+  });
+
+  it('ignores a registry document whose tab has already gone', () => {
+    expect(documentsToAdopt([], ['a'], ['a', 'b'])).toEqual(['a']);
+  });
+});
 
 describe('reconcileDocuments', () => {
   it('opens new tabs and closes removed ones', () => {

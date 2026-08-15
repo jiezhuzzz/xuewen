@@ -117,7 +117,9 @@
       <div class="flex min-h-0 flex-1">
         <!-- Reader column is hidden (not unmounted) while the Library view is
              active, so returning to an open paper doesn't rebuild the subtree.
-             (The viewer itself remounts per paper, so scroll isn't preserved.) -->
+             PdfDeck likewise keeps one PdfTab per open paper alive behind
+             visibility:hidden, so scroll and zoom survive both a tab switch
+             and a trip through the Library. -->
         <div class={`relative min-h-0 min-w-0 flex-1 ${viewer.activeId === null ? 'hidden' : 'flex'}`}>
           {#if PdfViewer}
             <PdfViewer />

@@ -250,6 +250,17 @@ export function registerPdfCopy(copier: PdfCopy | null): void {
   current = copier;
 }
 
+/// Clear on teardown — by identity, not blindly, exactly as
+/// unregisterAnnotationCommands does and for the same reason: PdfDeck reads
+/// like it mounts once but is destroyed and remounted during startup (see
+/// documentsToAdopt in pdfDeck.ts). Today the outgoing instance tears down
+/// before the replacement mounts, so a blind clear would happen to be
+/// harmless; if that order ever flips it would unregister the live copier and
+/// leave ⌘C silently dead over the reader.
+export function unregisterPdfCopy(copier: PdfCopy): void {
+  if (current === copier) current = null;
+}
+
 export function pdfSelectionHasText(): boolean {
   return current?.hasSelection() ?? false;
 }

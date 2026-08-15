@@ -58,7 +58,7 @@
 
   // The color → tool-defaults push is NOT here: tool defaults are global in
   // the plugin (registry-wide, not per-document), and this component mounts
-  // once per open tab — PdfDeck, mounted exactly once, owns that effect.
+  // once per open tab — PdfDeck, of which there is one live instance, owns it.
 
   /// Picking a color both arms the next mark and recolors whatever is selected
   /// — the selected-mark case is what a reader expects after drawing one and

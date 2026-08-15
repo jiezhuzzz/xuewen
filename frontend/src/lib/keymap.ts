@@ -1,4 +1,5 @@
 import { tick } from 'svelte';
+import { annotationSelectionActive, deleteSelectedAnnotations } from './annotationCommands';
 import { chat } from './chat.svelte';
 import { library } from './library.svelte';
 import { toggleAnnotationsPanel } from './readerState.svelte';
@@ -41,6 +42,18 @@ export interface KeyBinding {
   run: () => void;
 }
 
+/// The two keys a reader reaches for after clicking a mark, sharing one
+/// definition so they can't drift apart. Gated on a mark being selected, so
+/// they stay inert everywhere else in the app; preventDefault because Backspace
+/// still means "go back" in some browsers, and a stray navigation would take
+/// the whole session with it.
+const deleteMark = {
+  label: 'Delete selected annotation',
+  when: annotationSelectionActive,
+  preventDefault: true,
+  run: deleteSelectedAnnotations,
+};
+
 /// The single-key map as data — the one source shared by the dispatcher
 /// (shortcuts.ts), the `?` help overlay (SHORTCUT_GROUPS below), and the
 /// command palette's key hints, so a binding can't drift between behavior
@@ -65,6 +78,8 @@ export const SINGLE_KEYS: readonly KeyBinding[] = [
   { key: 'x', label: 'Close tab', when: () => viewer.activeId !== null, run: () => closeTab(viewer.activeId!) },
   { key: 'j', label: 'Next paper', run: () => moveSelection(1) },
   { key: 'k', label: 'Previous paper', run: () => moveSelection(-1) },
+  { key: 'Delete', ...deleteMark },
+  { key: 'Backspace', ...deleteMark },
 ];
 
 export interface ShortcutItem {
@@ -102,6 +117,10 @@ export const SHORTCUT_GROUPS: ReadonlyArray<{ title: string; items: ShortcutItem
       fromKey('x'),
       { keys: '⌘F', label: 'Find in PDF' },
       { keys: '⌘C', label: 'Copy selected text' },
+      // Two bindings, one display row — the j/k pairing rule again.
+      { keys: `${fromKey('Delete').keys} / ${fromKey('Backspace').keys}`, label: fromKey('Delete').label },
+      { keys: '⌘Z', label: 'Undo annotation' },
+      { keys: '⇧⌘Z', label: 'Redo annotation' },
     ],
   },
   {

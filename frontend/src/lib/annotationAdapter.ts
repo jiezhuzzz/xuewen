@@ -49,9 +49,9 @@ export function colorPatch(kind: AnnotationKind, hex: string): Record<string, st
 
 /// Push the palette color into every tool's defaults. Tool defaults are
 /// registry-GLOBAL in the plugin — one set of tools shared by every open
-/// document — so this belongs to a once-mounted caller (PdfDeck), never a
-/// per-tab component. Structural capability slice for the same testability
-/// reason as SyncScope.
+/// document — so this belongs to a registry-wide caller (PdfDeck, of which
+/// there is one live instance), never a per-tab component. Structural
+/// capability slice for the same testability reason as SyncScope.
 export function applyToolDefaults(
   cap: { setToolDefaults(toolId: string, patch: Record<string, string>): void },
   hex: string,

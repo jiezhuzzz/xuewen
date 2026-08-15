@@ -1,6 +1,7 @@
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleKeydown, isEditable } from './shortcuts';
+import { registerAnnotationCommands, type AnnotationCommands } from './annotationCommands';
 import { chat } from './chat.svelte';
 import { registerPdfCopy } from './pdfCopy';
 import { identifyState } from './identify.svelte';
@@ -390,5 +391,123 @@ describe('cmd+c in the reader', () => {
     expect(copied).toBe(0);
     expect(dock.open).toBe(true);
     expect(dock.tab).toBe('ask');
+  });
+});
+
+describe('annotation keys in the reader', () => {
+  const calls: string[] = [];
+  /// The commands PdfDeck registers in the app, faked. `acted` is what a real
+  /// command reports when there is nothing selected or the stack is empty —
+  /// the signal shortcuts.ts uses to leave the keystroke to the browser.
+  let acted = true;
+
+  function record(name: string): boolean {
+    calls.push(name);
+    return acted;
+  }
+
+  const commands: AnnotationCommands = {
+    hasSelection: () => acted,
+    deleteSelection: () => record('delete'),
+    clearSelection: () => record('clear'),
+    undo: () => record('undo'),
+    redo: () => record('redo'),
+  };
+
+  function openReader(): void {
+    viewer.tabs = [{ id: 'a', title: 'A', name: null }];
+    viewer.activeId = 'a';
+  }
+
+  beforeEach(() => {
+    calls.length = 0;
+    acted = true;
+    registerAnnotationCommands(commands);
+  });
+
+  // Registered globally by PdfDeck in the app, so it must not leak into the
+  // sibling test files that share this module.
+  afterEach(() => registerAnnotationCommands(null));
+
+  it('Delete and Backspace remove the selected mark, and swallow the key', () => {
+    openReader();
+    for (const k of ['Delete', 'Backspace']) {
+      const e = key(k, { cancelable: true });
+      handleKeydown(e);
+      expect(e.defaultPrevented).toBe(true); // Backspace must not navigate back
+    }
+    expect(calls).toEqual(['delete', 'delete']);
+  });
+
+  it('Delete and Backspace are inert with nothing selected', () => {
+    openReader();
+    acted = false;
+    const e = key('Backspace', { cancelable: true });
+    handleKeydown(e);
+    expect(calls).toEqual([]);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('Delete is inert while typing', () => {
+    openReader();
+    handleKeydown(key('Delete', { target: document.createElement('input') }));
+    expect(calls).toEqual([]);
+  });
+
+  it('cmd+z undoes and shift+cmd+z redoes, swallowing the key', () => {
+    openReader();
+    const undo = key('z', { metaKey: true, cancelable: true });
+    handleKeydown(undo);
+    const redo = key('z', { metaKey: true, shiftKey: true, cancelable: true });
+    handleKeydown(redo);
+    expect(calls).toEqual(['undo', 'redo']);
+    expect(undo.defaultPrevented).toBe(true);
+    expect(redo.defaultPrevented).toBe(true);
+  });
+
+  it('cmd+z leaves the keystroke to the browser when the stack is empty', () => {
+    openReader();
+    acted = false;
+    const e = key('z', { metaKey: true, cancelable: true });
+    handleKeydown(e);
+    expect(calls).toEqual(['undo']);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('cmd+z stands aside in a text control, where the browser owns undo', () => {
+    openReader();
+    const e = key('z', { metaKey: true, cancelable: true, target: document.createElement('textarea') });
+    handleKeydown(e);
+    expect(calls).toEqual([]);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('cmd+z is inert while a modal is open', () => {
+    openReader();
+    ui.importOpen = true;
+    handleKeydown(key('z', { metaKey: true, cancelable: true }));
+    expect(calls).toEqual([]);
+  });
+
+  it('leaves the bare z shortcut (zen) alone', () => {
+    openReader();
+    handleKeydown(key('z'));
+    expect(calls).toEqual([]);
+    expect(ui.zen).toBe(true);
+  });
+
+  it('Escape deselects the mark before closing the dock or leaving zen', () => {
+    openReader();
+    ui.zen = true;
+    dock.open = true;
+    handleKeydown(key('Escape'));
+    expect(calls).toEqual(['clear']);
+    expect(dock.open).toBe(true);
+    expect(ui.zen).toBe(true);
+    // With the selection gone, Esc resumes its usual cascade.
+    acted = false;
+    handleKeydown(key('Escape'));
+    expect(dock.open).toBe(false);
+    expect(ui.zen).toBe(true);
   });
 });

@@ -6,11 +6,28 @@
   import { useDocumentManagerCapability } from '@embedpdf/plugin-document-manager/svelte';
   import { useSelectionCapability } from '@embedpdf/plugin-selection/svelte';
   import { useAnnotationCapability } from '@embedpdf/plugin-annotation/svelte';
+  import { useHistoryCapability } from '@embedpdf/plugin-history/svelte';
   import { applyToolDefaults } from '../lib/annotationAdapter';
+  import {
+    createAnnotationCommands,
+    registerAnnotationCommands,
+    unregisterAnnotationCommands,
+  } from '../lib/annotationCommands';
   import { annotationTools } from '../lib/annotationState.svelte';
   import { colorHex } from '../lib/annotationPalette';
-  import { DocumentOpenError, openDocumentFully, planOpens, reconcileDocuments } from '../lib/pdfDeck';
-  import { createPdfCopy, forgetPdfSelection, registerPdfCopy } from '../lib/pdfCopy';
+  import {
+    DocumentOpenError,
+    documentsToAdopt,
+    openDocumentFully,
+    planOpens,
+    reconcileDocuments,
+  } from '../lib/pdfDeck';
+  import {
+    createPdfCopy,
+    forgetPdfSelection,
+    registerPdfCopy,
+    unregisterPdfCopy,
+  } from '../lib/pdfCopy';
   import { runWhenIdle } from '../lib/idle';
   import { toast } from '../lib/toasts.svelte';
   import PdfTab from './PdfTab.svelte';
@@ -21,14 +38,21 @@
   const dm = useDocumentManagerCapability();
   type DocumentManager = NonNullable<typeof dm.provides>;
 
-  const selectionCap = useSelectionCapability();
+  // Three registry-wide wirings live HERE rather than in PdfPages: the
+  // selection, annotation and history capabilities are each shared by every open
+  // document, whereas PdfPages is mounted once per open tab and kept alive
+  // behind visibility:hidden — up to maxDocuments of them would each subscribe,
+  // each firing a redundant PDFium round-trip for one selection or re-pushing
+  // the same five tool defaults on every color change. Both wirings that publish
+  // a module-level registration tear it down BY IDENTITY, because there is one
+  // live PdfDeck but not one mount: <EmbedPDF> destroys and remounts this
+  // component once the plugins are ready (see documentsToAdopt), and a blind
+  // clear from the outgoing instance would silently kill the live one if that
+  // teardown ever landed after the replacement registered.
 
-  // ⌘C support for the reader (see lib/pdfCopy.ts for why the app has to do
-  // this itself). It belongs HERE, not in PdfPages: the selection capability is
-  // registry-wide, and PdfDeck is mounted exactly once, whereas PdfPages is
-  // mounted once per open tab and kept alive behind visibility:hidden — up to
-  // maxDocuments of them would each subscribe and each fire a redundant PDFium
-  // round-trip for one selection.
+  // ⌘C for the reader — see lib/pdfCopy.ts for why the app has to do this
+  // itself rather than leave it to the browser or the plugin.
+  const selectionCap = useSelectionCapability();
   $effect(() => {
     const cap = selectionCap.provides;
     if (!cap) return;
@@ -49,15 +73,13 @@
     });
     registerPdfCopy(copier);
     return () => {
-      registerPdfCopy(null);
+      unregisterPdfCopy(copier);
       copier.destroy();
     };
   });
 
-  // The palette color → tool defaults push. Tool defaults are GLOBAL in the
-  // annotation plugin, so this lives here for the same reason the ⌘C wiring
-  // does: PdfDeck mounts exactly once, whereas each open tab's AnnotationTools
-  // would redundantly re-push the same five defaults per color change.
+  // The palette color → tool defaults push; the plugin keeps tool defaults
+  // globally, one set shared by every open document.
   const annotationCap = useAnnotationCapability();
   $effect(() => {
     const cap = annotationCap.provides;
@@ -65,14 +87,44 @@
     applyToolDefaults(cap, colorHex(annotationTools.color));
   });
 
+  // Delete / undo / redo for the global keymap and the page's selection menu
+  // (see lib/annotationCommands.ts). `activeDocumentId` is read at call time,
+  // so a keystroke always acts on the tab it belongs to.
+  const historyCap = useHistoryCapability();
+  $effect(() => {
+    const marks = annotationCap.provides;
+    const history = historyCap.provides;
+    if (!marks || !history) return;
+    const commands = createAnnotationCommands({
+      marks: (id) => marks.forDocument(id),
+      history: (id) => history.forDocument(id),
+      activeDocumentId: () => viewer.activeId,
+    });
+    registerAnnotationCommands(commands);
+    return () => unregisterAnnotationCommands(commands);
+  });
+
   // Documents we've asked the manager to open. Plain (non-reactive) set used to
-  // diff against `viewer.tabs` so we open/close each document exactly once.
+  // diff against `viewer.tabs` so we open/close each document exactly once. A
+  // cache of the registry's own list, NOT the source of truth — see
+  // documentsToAdopt, which repairs it after the startup remount.
   const opened = new Set<string>();
 
   // Background tabs waiting their turn — see planOpens for why they wait.
   const pending: string[] = [];
   let draining = false;
   let cancelIdle: (() => void) | null = null;
+
+  /// Set on teardown and checked before every open, because onDestroy on its
+  /// own cannot stop this queue: it can only cancel an idle callback that is
+  /// already scheduled, while an open this instance already started keeps
+  /// running to completion and its `done` re-enters drain, which schedules a
+  /// FRESH callback past the point onDestroy could reach. The outgoing instance
+  /// would then work through its own stale `pending` — a queue the replacement
+  /// has already drained — and open each background tab a second time, whose
+  /// second setAnnotations wipes the marks the first load imported. That is the
+  /// bug documentsToAdopt fixes for the active tab, one tab over.
+  let destroyed = false;
 
   // openDocumentFully (lib/pdfDeck.ts) owns the outer-task-resolves-
   // synchronously trap and rejects with the failing phase. Only an 'open'
@@ -82,6 +134,7 @@
   // keeps the id in `opened` — retrying a broken PDF on every tab change
   // would loop forever.
   function open(cap: DocumentManager, id: string, done: () => void): void {
+    if (destroyed) return;
     opened.add(id);
     openDocumentFully(cap, { url: pdfUrl(id), documentId: id }).then(
       () => done(),
@@ -97,7 +150,7 @@
   /// shared engine lane plus a page-raster storm on the main thread, and firing
   /// several at once is exactly what jammed the renderer on a restored session.
   function drain(cap: DocumentManager): void {
-    if (draining || cancelIdle) return;
+    if (destroyed || draining || cancelIdle) return;
     const id = pending.shift();
     if (id === undefined) return;
     draining = true;
@@ -123,10 +176,14 @@
   $effect(() => {
     const cap = dm.provides;
     if (!cap) return;
-    const { toOpen, toClose } = reconcileDocuments(
-      opened,
-      viewer.tabs.map((t) => t.id),
-    );
+    const tabIds = viewer.tabs.map((t) => t.id);
+    // `opened` is not to be trusted on its own: <EmbedPDF> destroys and
+    // remounts this component once the plugins are ready, handing the new
+    // instance an empty set. Adopt what the registry — which survives that —
+    // already holds, or the active paper is opened a second time and the second
+    // load wipes the marks the first one imported (see documentsToAdopt).
+    for (const id of documentsToAdopt(opened, tabIds, cap.getDocumentOrder())) opened.add(id);
+    const { toOpen, toClose } = reconcileDocuments(opened, tabIds);
     // Closed first: it frees slots against maxDocuments before we ask for more.
     for (const id of toClose) {
       opened.delete(id);
@@ -166,6 +223,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     cancelIdle?.();
     cancelIdle = null;
   });

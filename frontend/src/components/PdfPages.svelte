@@ -21,7 +21,9 @@
     AnnotationLayer,
     useAnnotation,
     useAnnotationCapability,
+    type AnnotationSelectionMenuProps,
   } from '@embedpdf/plugin-annotation/svelte';
+  import AnnotationSelectionMenu from './AnnotationSelectionMenu.svelte';
   import CitationLayer from './CitationLayer.svelte';
   import { ANNOTATION_RENDERERS } from '../lib/annotationRenderers';
   import { createAnnotationSync } from '../lib/annotationSync';
@@ -220,6 +222,13 @@
   });
 </script>
 
+<!-- The trash button that floats over a selected mark. Handed to every page's
+     AnnotationLayer, which renders it for the selected annotation only (and
+     never for a multi-selection). -->
+{#snippet annotationMenu({ menuWrapperProps, context }: AnnotationSelectionMenuProps)}
+  <AnnotationSelectionMenu {menuWrapperProps} {context} />
+{/snippet}
+
 {#snippet renderPage(page: PageLayout)}
   <div style:width="{page.width}px" style:height="{page.height}px" style:position="relative">
     <PagePointerProvider {documentId} pageIndex={page.pageIndex}>
@@ -263,6 +272,7 @@
         {documentId}
         pageIndex={page.pageIndex}
         annotationRenderers={ANNOTATION_RENDERERS}
+        selectionMenuSnippet={annotationMenu}
       />
     </PagePointerProvider>
   </div>

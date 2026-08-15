@@ -1,11 +1,17 @@
 <script lang="ts">
   import { Redo2, Undo2 } from 'lucide-svelte';
   import { useHistoryCapability } from '@embedpdf/plugin-history/svelte';
-  import { ANNOTATION_HISTORY_TOPIC } from '../lib/pdfEngine';
+  import { annotationHistoryFlags, redoAnnotation, undoAnnotation } from '../lib/annotationCommands';
   import { btn } from '../lib/pillStyles';
 
   let { documentId }: { documentId: string } = $props();
 
+  // The scope is read here only to MIRROR the stack's state. Acting goes
+  // through the shared commands, so a click and a ⌘Z take one identical path —
+  // the same rule the floating trash button follows for delete. Those resolve
+  // against the active tab rather than this component's documentId, which is
+  // the same document whenever a click can happen at all: an inactive tab is
+  // visibility:hidden, so its toolbar is neither clickable nor tabbable.
   const history = useHistoryCapability();
   const scope = $derived(history.provides?.forDocument(documentId) ?? null);
 
@@ -19,9 +25,9 @@
     const s = scope;
     if (!s) return;
     const sync = (): void => {
-      const topic = s.getHistoryState().topics[ANNOTATION_HISTORY_TOPIC];
-      canUndo = topic?.canUndo ?? false;
-      canRedo = topic?.canRedo ?? false;
+      const flags = annotationHistoryFlags(s);
+      canUndo = flags.canUndo;
+      canRedo = flags.canRedo;
     };
     sync(); // a tab reopened mid-session may already have a stack
     return s.onHistoryChange(sync);
@@ -34,7 +40,7 @@
   aria-label="Undo annotation"
   title="Undo annotation"
   disabled={!canUndo}
-  onclick={() => scope?.undo(ANNOTATION_HISTORY_TOPIC)}
+  onclick={undoAnnotation}
 >
   <Undo2 size={16} />
 </button>
@@ -44,7 +50,7 @@
   aria-label="Redo annotation"
   title="Redo annotation"
   disabled={!canRedo}
-  onclick={() => scope?.redo(ANNOTATION_HISTORY_TOPIC)}
+  onclick={redoAnnotation}
 >
   <Redo2 size={16} />
 </button>

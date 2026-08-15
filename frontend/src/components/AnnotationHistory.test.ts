@@ -1,7 +1,8 @@
 import { tick } from 'svelte';
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createAnnotationCommands, registerAnnotationCommands } from '../lib/annotationCommands';
 
 type Listener = (topic: string | undefined) => void;
 type Flags = { canUndo: boolean; canRedo: boolean };
@@ -39,7 +40,22 @@ beforeEach(() => {
   vi.clearAllMocks();
   listeners.clear();
   topics = {};
+  // The buttons act through the shared commands, the same path ⌘Z takes, so
+  // the test has to stand in for the registration PdfDeck does in the app.
+  registerAnnotationCommands(
+    createAnnotationCommands({
+      marks: () => ({
+        getSelectedAnnotations: () => [],
+        deleteAnnotations: () => {},
+        deselectAnnotation: () => {},
+      }),
+      history: () => scope,
+      activeDocumentId: () => 'p1',
+    }),
+  );
 });
+
+afterEach(() => registerAnnotationCommands(null));
 
 const props = { documentId: 'p1' };
 const undoBtn = () => screen.getByRole('button', { name: /undo annotation/i });
@@ -75,7 +91,8 @@ describe('the annotation undo/redo buttons', () => {
     await userEvent.click(redoBtn());
     // Passing the topic is what keeps undo off whatever else may later share
     // the history plugin; an argument-less undo would take back the last
-    // action of any kind.
+    // action of any kind. Reaching the plugin at all also pins the click to
+    // the shared commands, so the button and ⌘Z cannot diverge.
     expect(scope.undo).toHaveBeenCalledWith('annotations');
     expect(scope.redo).toHaveBeenCalledWith('annotations');
   });

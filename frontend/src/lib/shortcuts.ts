@@ -1,3 +1,4 @@
+import { clearAnnotationSelection, redoAnnotation, undoAnnotation } from './annotationCommands';
 import { identifyState } from './identify.svelte';
 import { openSelected, SINGLE_KEYS } from './keymap';
 import { copyPdfSelection, pdfSelectionHasText } from './pdfCopy';
@@ -75,9 +76,29 @@ export function handleKeydown(e: KeyboardEvent): void {
     }
     return;
   }
+  // ⌘Z / ⇧⌘Z take back the last mark, through the same 'annotations' history
+  // topic the toolbar's undo buttons drive — so the keys and the buttons can
+  // never disagree, and neither can reach whatever else may one day share the
+  // history plugin's timeline. Like ⌘C above this stands aside rather than
+  // guessing: in a text control the browser's own undo is what the typist
+  // wants, and on the library view or with an empty stack the command reports
+  // it did nothing, so the keystroke goes on untouched. ⌥ is excluded so
+  // ⌘⌥Z stays available to the browser.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'z') {
+    if (isEditable(realTarget)) return;
+    if (e.shiftKey ? redoAnnotation() : undoAnnotation()) e.preventDefault();
+    return;
+  }
   if (e.key === 'Escape') {
     if (ui.paletteOpen) ui.paletteOpen = false;
-    else if (dock.open && viewer.activeId !== null) closeDock();
+    // Before the dock and zen rungs: a selected mark is the most local thing
+    // on screen, and it is the one piece of reader state with no other way
+    // out — clicking elsewhere on the page is the alternative. The command's
+    // own answer is the rung's condition, so a deselect that couldn't happen
+    // falls through to the dock rather than swallowing the key.
+    else if (clearAnnotationSelection()) {
+      // Deselected. Esc stops here rather than also closing the dock.
+    } else if (dock.open && viewer.activeId !== null) closeDock();
     else if (ui.zen) ui.zen = false;
     return;
   }
