@@ -8,7 +8,7 @@ use crate::http::RetryPolicy;
 use crate::models::{Authors, Identifier, Paper, PaperMeta, PaperStatus};
 use crate::naming;
 use crate::resolve::grobid::Grobid;
-use crate::resolve::{ResolvedMetadata, Resolver};
+use crate::resolve::{ResolvedMetadata, Resolver, TitleQuery};
 use crate::{db, hash, identify, pdf};
 
 /// Directories the pipeline manages. `under` is the one place the managed
@@ -299,7 +299,12 @@ impl IngestCtx {
             .and_then(|m| m.title.clone())
             .or_else(|| provisional_title.clone());
 
-        let resolution = self.resolver.resolve(&ident, title_hint.as_deref()).await;
+        // The first-page text goes along as corroboration: a title alone cannot
+        // tell this paper from a same-titled work by other authors.
+        let query = title_hint
+            .as_deref()
+            .map(|title| TitleQuery { title, text: &text });
+        let resolution = self.resolver.resolve(&ident, query).await;
         Ok(ResolveInputs {
             ident,
             provisional_title,

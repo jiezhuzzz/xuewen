@@ -2,7 +2,7 @@ use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use xuewen::models::Identifier;
-use xuewen::resolve::Resolver;
+use xuewen::resolve::{Resolver, TitleQuery};
 
 const ARXIV_FIXTURE: &str = include_str!("fixtures/arxiv_attention.xml");
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
@@ -134,7 +134,9 @@ async fn resolves_title_via_dblp() {
     let resolver = Resolver::with_bases(None, server.uri(), server.uri())
         .unwrap()
         .with_dblp_base(server.uri());
-    let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
+    let res = resolver
+        .resolve(&Identifier::None, Some(TitleQuery::new(KGAT_TITLE)))
+        .await;
 
     match res {
         Some(md) => {
@@ -167,7 +169,9 @@ async fn falls_back_to_crossref_search_when_dblp_empty() {
     let resolver = Resolver::with_bases(None, server.uri(), server.uri())
         .unwrap()
         .with_dblp_base(server.uri());
-    let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
+    let res = resolver
+        .resolve(&Identifier::None, Some(TitleQuery::new(KGAT_TITLE)))
+        .await;
 
     match res {
         Some(md) => {
@@ -198,7 +202,9 @@ async fn dblp_error_falls_back_to_crossref() {
     let resolver = Resolver::with_bases(None, server.uri(), server.uri())
         .unwrap()
         .with_dblp_base(server.uri());
-    let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
+    let res = resolver
+        .resolve(&Identifier::None, Some(TitleQuery::new(KGAT_TITLE)))
+        .await;
 
     match res {
         Some(md) => assert_eq!(md.source, "crossref"),
@@ -222,7 +228,9 @@ async fn low_similarity_title_is_unresolved() {
     let res = resolver
         .resolve(
             &Identifier::None,
-            Some("An Entirely Unrelated Paper Title About Frogs"),
+            Some(TitleQuery::new(
+                "An Entirely Unrelated Paper Title About Frogs",
+            )),
         )
         .await;
     assert_eq!(res, None);
@@ -346,7 +354,9 @@ async fn resolves_iclr_title_via_openreview_when_dblp_is_empty() {
             format!("{}/api2", server.uri()),
             format!("{}/api1", server.uri()),
         ]);
-    let res = resolver.resolve(&Identifier::None, Some(ICLR_TITLE)).await;
+    let res = resolver
+        .resolve(&Identifier::None, Some(TitleQuery::new(ICLR_TITLE)))
+        .await;
 
     match res {
         Some(md) => {
@@ -398,7 +408,9 @@ async fn openreview_host_failure_still_falls_through_to_crossref() {
             format!("{}/api1", server.uri()),
             format!("{}/api2", server.uri()),
         ]);
-    let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
+    let res = resolver
+        .resolve(&Identifier::None, Some(TitleQuery::new(KGAT_TITLE)))
+        .await;
 
     assert_eq!(res.expect("expected Crossref fallback").source, "crossref");
 }
@@ -469,7 +481,7 @@ async fn openreview_venue_beats_a_dblp_corr_preprint() {
         .with_dblp_base(server.uri())
         .with_openreview_bases(vec![format!("{}/api2", server.uri())]);
     let md = resolver
-        .resolve(&Identifier::None, Some(ICLR_TITLE))
+        .resolve(&Identifier::None, Some(TitleQuery::new(ICLR_TITLE)))
         .await
         .expect("expected Resolved");
 
@@ -513,7 +525,7 @@ async fn a_dblp_corr_preprint_survives_when_openreview_has_nothing() {
         .with_dblp_base(server.uri())
         .with_openreview_bases(vec![format!("{}/api2", server.uri())]);
     let md = resolver
-        .resolve(&Identifier::None, Some(ICLR_TITLE))
+        .resolve(&Identifier::None, Some(TitleQuery::new(ICLR_TITLE)))
         .await
         .expect("expected the DBLP preprint");
 
@@ -555,7 +567,7 @@ async fn identifiers_are_not_grafted_across_different_papers() {
         .with_dblp_base(server.uri())
         .with_openreview_bases(vec![format!("{}/api2", server.uri())]);
     let md = resolver
-        .resolve(&Identifier::None, Some(query))
+        .resolve(&Identifier::None, Some(TitleQuery::new(query)))
         .await
         .expect("expected the OpenReview record");
 
@@ -563,4 +575,110 @@ async fn identifiers_are_not_grafted_across_different_papers() {
     assert_eq!(md.venue.as_deref(), Some("ICLR"));
     assert_eq!(md.doi, None, "a different paper's DOI must not be grafted");
     assert_eq!(md.dblp_key, None);
+}
+
+const GPT3_IMPOSTOR_FIXTURE: &str = include_str!("fixtures/crossref_search_gpt3_impostor.json");
+const GPT3_TITLE: &str = "Language Models are Few-Shot Learners";
+
+/// The GPT-3 camera-ready's first page, as `pdftotext` renders it.
+const GPT3_PAGE: &str = "Language Models are Few-Shot Learners\n\n\
+Tom B. Brown∗ Benjamin Mann∗ Nick Ryder∗ Melanie Subbiah∗\n\
+Jared Kaplan† Prafulla Dhariwal Arvind Neelakantan\n\nOpenAI\n\n\
+Abstract\n\nRecent work has demonstrated substantial gains on many NLP tasks.";
+
+/// Crossref carries a Swami Vivekananda University book chapter whose title is
+/// character-for-character the GPT-3 paper's, and DBLP's own top hits for that
+/// title are all *other* few-shot papers scoring below the gate — so the search
+/// really does fall through to Crossref, where the impostor scores a perfect
+/// 1.00 and wins on title alone.
+#[tokio::test]
+async fn a_same_titled_work_by_other_authors_is_rejected() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"result":{"hits":{"@total":"0"}}}"#),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .and(query_param("query.bibliographic", GPT3_TITLE))
+        .respond_with(ResponseTemplate::new(200).set_body_string(GPT3_IMPOSTOR_FIXTURE))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri());
+
+    // The paper's own first page names none of the record's authors.
+    let res = resolver
+        .resolve(
+            &Identifier::None,
+            Some(TitleQuery {
+                title: GPT3_TITLE,
+                text: GPT3_PAGE,
+            }),
+        )
+        .await;
+    assert_eq!(res, None, "the impostor must not resolve");
+
+    // Same fixture with nothing to corroborate against: the title gate alone
+    // still accepts it, which is both the pre-fix behaviour and the documented
+    // fail-open path for a PDF that extracts to nothing.
+    let res = resolver
+        .resolve(&Identifier::None, Some(TitleQuery::new(GPT3_TITLE)))
+        .await;
+    assert_eq!(
+        res.and_then(|md| md.doi).as_deref(),
+        Some("10.65525/svup.9788199778009.2026.224-230"),
+    );
+}
+
+/// The other half of the same rule: a Springer LNCS proceedings paper is a
+/// Crossref `book-chapter` exactly like the impostor above and matches its
+/// query just as perfectly, so nothing about the record's *type* may be what
+/// separates them — only that its authors are the ones on the page.
+#[tokio::test]
+async fn a_book_chapter_the_paper_corroborates_still_resolves() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"result":{"hits":{"@total":"0"}}}"#),
+        )
+        .mount(&server)
+        .await;
+    let coco = r#"{"message":{"items":[{
+        "DOI":"10.1007/978-3-319-10602-1_48","type":"book-chapter",
+        "title":["Microsoft COCO: Common Objects in Context"],
+        "container-title":["Lecture Notes in Computer Science"],
+        "issued":{"date-parts":[[2014]]},
+        "author":[{"given":"Tsung-Yi","family":"Lin"},{"given":"Piotr","family":"Dollár"}]
+    }]}}"#;
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(coco))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri());
+    let res = resolver
+        .resolve(
+            &Identifier::None,
+            Some(TitleQuery {
+                title: "Microsoft COCO: Common Objects in Context",
+                // The diacritic survives neither pdftotext nor the record
+                // unchanged; both sides fold to the same "dollar".
+                text: "Microsoft COCO: Common Objects in Context\nTsung-Yi Lin, Piotr Dollár",
+            }),
+        )
+        .await;
+    assert_eq!(
+        res.and_then(|md| md.doi).as_deref(),
+        Some("10.1007/978-3-319-10602-1_48")
+    );
 }

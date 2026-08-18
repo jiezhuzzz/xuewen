@@ -226,11 +226,16 @@ async fn ingest_without_identifier_resolves_via_dblp() {
     let library = dir.path().join("library");
     std::fs::create_dir_all(&inbox).unwrap();
 
-    // No DOI/arXiv anywhere; the first substantive line is the title.
+    // No DOI/arXiv anywhere; the first substantive line is the title. The
+    // author line is load-bearing: a title-only match is confirmed against the
+    // paper's own text, so a page naming nobody resolves to nothing.
     let pdf_path = inbox.join("paper.pdf");
     common::write_test_pdf(
         &pdf_path,
-        &["KGAT: Knowledge Graph Attention Network for Recommendation"],
+        &[
+            "KGAT: Knowledge Graph Attention Network for Recommendation",
+            "Xiang Wang, Xiangnan He, Yixin Cao",
+        ],
     );
 
     // DBLP mock returns the matching hit.
@@ -277,9 +282,16 @@ async fn grobid_title_drives_dblp_resolution() {
     let library = dir.path().join("library");
     std::fs::create_dir_all(&inbox).unwrap();
 
-    // The PDF's own text is a poor/truncated title; GROBID supplies the clean one.
+    // The PDF's own text is a poor/truncated title; GROBID supplies the clean
+    // one. The authors still extract, and are what confirms DBLP's record.
     let pdf_path = inbox.join("paper.pdf");
-    common::write_test_pdf(&pdf_path, &["BERT Pre-training of Deep Bidir"]);
+    common::write_test_pdf(
+        &pdf_path,
+        &[
+            "BERT Pre-training of Deep Bidir",
+            "Jacob Devlin, Ming-Wei Chang, Kenton Lee, Kristina Toutanova",
+        ],
+    );
 
     // GROBID returns the full BERT header; DBLP is stubbed with the BERT record.
     let grobid_server = MockServer::start().await;

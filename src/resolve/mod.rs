@@ -46,6 +46,23 @@ pub struct Resolver {
 /// The live OpenReview API hosts, in the order their candidates are collected.
 const OPENREVIEW_BASES: [&str; 2] = ["https://api2.openreview.net", "https://api.openreview.net"];
 
+/// What a PDF carrying no identifier offers the resolver.
+#[derive(Debug, Clone, Copy)]
+pub struct TitleQuery<'a> {
+    pub title: &'a str,
+    /// The paper's own extracted text. A candidate clearing the title gate is
+    /// additionally required to be corroborated by it; empty text abstains,
+    /// leaving the title gate alone as the only test.
+    pub text: &'a str,
+}
+
+impl<'a> TitleQuery<'a> {
+    /// A title search with no text to corroborate candidates against.
+    pub fn new(title: &'a str) -> Self {
+        Self { title, text: "" }
+    }
+}
+
 impl Resolver {
     /// Build a resolver pointing at the real arXiv and Crossref endpoints, with a
     /// polite retry/back-off policy.
@@ -126,17 +143,17 @@ impl Resolver {
     }
 
     /// Route an identifier to its source and return the metadata, or `None` when
-    /// nothing resolves confidently. For a PDF with no identifier, `title_hint`
-    /// drives a DBLP/Crossref title search.
+    /// nothing resolves confidently. For a PDF with no identifier, `query`
+    /// drives a DBLP/OpenReview/Crossref title search.
     pub async fn resolve(
         &self,
         ident: &Identifier,
-        title_hint: Option<&str>,
+        query: Option<TitleQuery<'_>>,
     ) -> Option<ResolvedMetadata> {
         match ident {
             Identifier::Arxiv(id) => self.try_arxiv(id).await,
             Identifier::Doi(doi) => self.try_crossref(doi).await,
-            Identifier::None => self.try_title_search(title_hint).await,
+            Identifier::None => self.try_title_search(query).await,
         }
     }
 
@@ -184,16 +201,17 @@ impl Resolver {
     /// proceedings volume, so the camera-ready of an ICLR 2026 paper matches
     /// "CoRR 2025" and would be filed as a preprint while OpenReview knows it
     /// as ICLR 2026.
-    async fn try_title_search(&self, title: Option<&str>) -> Option<ResolvedMetadata> {
-        let title = title?;
+    async fn try_title_search(&self, query: Option<TitleQuery<'_>>) -> Option<ResolvedMetadata> {
+        let TitleQuery { title, text } = query?;
         if title.trim().is_empty() {
             return None;
         }
-        let dblp = self.try_dblp(title).await;
+        let text = matching::PaperText::new(text);
+        let dblp = self.try_dblp(title, &text).await;
         if dblp.as_ref().is_some_and(|m| !is_corr_preprint(m)) {
             return dblp;
         }
-        if let Some(md) = best_match(title, self.openreview_candidates(title).await) {
+        if let Some(md) = best_match(title, &text, self.openreview_candidates(title).await) {
             return Some(match &dblp {
                 Some(preprint) => graft_identifiers(md, preprint),
                 None => md,
@@ -202,7 +220,7 @@ impl Resolver {
         if dblp.is_some() {
             return dblp;
         }
-        self.try_crossref_search(title).await
+        self.try_crossref_search(title, &text).await
     }
 
     /// Candidates from every OpenReview host, searched concurrently. A host
@@ -230,13 +248,13 @@ impl Resolver {
         openreview::parse(&body)
     }
 
-    async fn try_dblp(&self, title: &str) -> Option<ResolvedMetadata> {
+    async fn try_dblp(&self, title: &str, text: &matching::PaperText) -> Option<ResolvedMetadata> {
         degrade(
             "dblp search",
             &format!("{title:?}"),
             self.fetch_parse_dblp(title).await,
         )
-        .and_then(|cands| best_match(title, cands))
+        .and_then(|cands| best_match(title, text, cands))
     }
 
     async fn fetch_parse_dblp(&self, title: &str) -> Result<Vec<ResolvedMetadata>> {
@@ -244,13 +262,17 @@ impl Resolver {
         dblp::parse(&body)
     }
 
-    async fn try_crossref_search(&self, title: &str) -> Option<ResolvedMetadata> {
+    async fn try_crossref_search(
+        &self,
+        title: &str,
+        text: &matching::PaperText,
+    ) -> Option<ResolvedMetadata> {
         degrade(
             "crossref search",
             &format!("{title:?}"),
             self.fetch_parse_crossref_search(title).await,
         )
-        .and_then(|cands| best_match(title, cands))
+        .and_then(|cands| best_match(title, text, cands))
     }
 
     async fn fetch_parse_crossref_search(&self, title: &str) -> Result<Vec<ResolvedMetadata>> {
@@ -397,14 +419,26 @@ fn scored(query: &str, cands: Vec<ResolvedMetadata>) -> Vec<(f64, ResolvedMetada
         .collect()
 }
 
-/// Pick the highest-similarity candidate whose title confidently matches `query`.
-fn best_match(query: &str, candidates: Vec<ResolvedMetadata>) -> Option<ResolvedMetadata> {
+/// Pick the highest-similarity candidate whose title confidently matches
+/// `query` and whose authors the paper's own `text` corroborates.
+///
+/// Both tests are per candidate, not a veto on the winner, so a genuine match
+/// sitting behind a same-titled impostor is still found rather than lost with
+/// it.
+fn best_match(
+    query: &str,
+    text: &matching::PaperText,
+    candidates: Vec<ResolvedMetadata>,
+) -> Option<ResolvedMetadata> {
     let mut best: Option<(f64, ResolvedMetadata)> = None;
     for (score, c) in scored(query, candidates) {
+        if score < matching::MATCH_THRESHOLD || !text.corroborates(&c.authors) {
+            continue;
+        }
         // Strictly greater: at equal scores the FIRST candidate wins.
         // Exact ties are realistic (conference and journal versions of one
         // work share a title), and the winner must not silently flip.
-        if score >= matching::MATCH_THRESHOLD && best.as_ref().is_none_or(|(bs, _)| score > *bs) {
+        if best.as_ref().is_none_or(|(bs, _)| score > *bs) {
             best = Some((score, c));
         }
     }
@@ -456,6 +490,7 @@ mod tests {
         // version DBLP lists ahead of the journal reprint) must win.
         let winner = best_match(
             query,
+            &matching::PaperText::default(),
             vec![
                 cand(query, None, Some("conf/cvpr/HeZRS16")),
                 cand(query, None, Some("journals/corr/HeZRS15")),
@@ -463,6 +498,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(winner.dblp_key.as_deref(), Some("conf/cvpr/HeZRS16"));
+    }
+
+    fn authored(title: &str, key: &str, authors: &[&str]) -> ResolvedMetadata {
+        ResolvedMetadata {
+            authors: authors.iter().map(|s| s.to_string()).collect(),
+            ..cand(title, None, Some(key))
+        }
+    }
+
+    #[test]
+    fn best_match_prefers_a_lower_scoring_candidate_the_paper_corroborates() {
+        // The impostor scores higher, so a check that only vetoed the winner
+        // would drop the real record along with it.
+        let query = "Language Models are Few-Shot Learners";
+        let text = matching::PaperText::new("Language Models are Few-Shot Learners\nTom B. Brown");
+        let winner = best_match(
+            query,
+            &text,
+            vec![
+                authored(query, "book/svup/Malakar26", &["Sourav Malakar"]),
+                authored(
+                    "Language Models are Few-Shot Learners.",
+                    "conf/nips/BrownMRSKDNSSAA20",
+                    &["Tom B. Brown", "Benjamin Mann"],
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            winner.dblp_key.as_deref(),
+            Some("conf/nips/BrownMRSKDNSSAA20")
+        );
+    }
+
+    #[test]
+    fn best_match_rejects_an_uncorroborated_perfect_title() {
+        let query = "Language Models are Few-Shot Learners";
+        let text = matching::PaperText::new("Language Models are Few-Shot Learners\nTom B. Brown");
+        assert_eq!(
+            best_match(
+                query,
+                &text,
+                vec![authored(query, "book/svup/Malakar26", &["Sourav Malakar"])],
+            ),
+            None
+        );
     }
 
     #[test]

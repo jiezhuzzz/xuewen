@@ -93,13 +93,15 @@ fn field<'a>(content: &'a Value, key: &str) -> Option<&'a Value> {
 /// Venue strings OpenReview gives a submission that was never accepted:
 /// "Submitted to ICLR 2026", "ICLR 2022 Submitted", "ICLR 2024 Conference
 /// Withdrawn Submission", "ICLR 2026 Conference Desk Rejected Submission".
-/// Matched as whole phrases, never as the bare word "review" — "Review of
-/// Symbolic Logic" is a real journal that OpenReview hosts.
+/// Never the bare word "review" — "Review of Symbolic Logic" is a real journal
+/// that OpenReview hosts.
 const UNACCEPTED: &[&str] = &["submitted", "withdrawn", "rejected", "under review"];
 
+/// Whole words only, so that a venue reading "Resubmitted" is not condemned by
+/// the "submitted" marker it merely contains.
 fn accepted(venue: &str) -> bool {
-    let v = venue.to_lowercase();
-    !UNACCEPTED.iter().any(|m| v.contains(m))
+    let v = format!(" {} ", venue.to_lowercase());
+    !UNACCEPTED.iter().any(|m| v.contains(&format!(" {m} ")))
 }
 
 /// Split OpenReview's single venue string into DBLP's shape — an acronym plus
@@ -202,6 +204,14 @@ mod tests {
                 "expected {venue:?} to be dropped"
             );
         }
+    }
+
+    #[test]
+    fn a_marker_inside_a_longer_word_does_not_condemn_a_venue() {
+        let json = r#"{"notes":[{"id":"x","content":{
+            "title":{"value":"A Paper"},"venue":{"value":"Resubmitted Papers Track 2026"}}}]}"#;
+        let c = &parse(json).unwrap()[0];
+        assert_eq!(c.venue.as_deref(), Some("Resubmitted Papers Track"));
     }
 
     #[test]
