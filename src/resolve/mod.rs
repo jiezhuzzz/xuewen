@@ -2,6 +2,7 @@ pub mod arxiv;
 pub mod crossref;
 pub mod dblp;
 pub mod grobid;
+pub mod openreview;
 pub mod unpaywall;
 
 use crate::http::{HttpClient, RetryPolicy};
@@ -22,7 +23,8 @@ pub struct ResolvedMetadata {
     pub arxiv_id: Option<String>,
     pub dblp_key: Option<String>,
     pub url: Option<String>,
-    /// Which source produced this record: "arxiv" | "crossref" | "dblp" | "grobid".
+    /// Which source produced this record: "arxiv" | "crossref" | "dblp" |
+    /// "grobid" | "openreview".
     pub source: String,
 }
 
@@ -34,8 +36,15 @@ pub struct Resolver {
     crossref_base: String,
     dblp_base: String,
     email: Option<String>,
+    /// Both OpenReview hosts, searched together. API 2 (`api2.`) holds the
+    /// 2023-onwards venues and API 1 everything before, and a title search
+    /// cannot know which applies until it has the year.
+    openreview_bases: Vec<String>,
     unpaywall_base: String,
 }
+
+/// The live OpenReview API hosts, in the order their candidates are collected.
+const OPENREVIEW_BASES: [&str; 2] = ["https://api2.openreview.net", "https://api.openreview.net"];
 
 impl Resolver {
     /// Build a resolver pointing at the real arXiv and Crossref endpoints, with a
@@ -56,17 +65,24 @@ impl Resolver {
 
     /// Build a resolver with explicit base URLs (used by tests to point at a mock
     /// server). Uses a near-zero back-off so retry paths test fast.
+    ///
+    /// The OpenReview hosts are pointed at a dead port rather than kept at
+    /// their real defaults: a title search consults them on the way to
+    /// Crossref, and a test that has not named them must fail fast to
+    /// `degrade` instead of reaching the live API by omission.
     pub fn with_bases(
         contact_email: Option<&str>,
         arxiv_base: String,
         crossref_base: String,
     ) -> Result<Self> {
-        Self::build(
+        let mut r = Self::build(
             contact_email,
             arxiv_base,
             crossref_base,
             RetryPolicy::fast_for_tests(),
-        )
+        )?;
+        r.openreview_bases = vec!["http://127.0.0.1:1".to_string()];
+        Ok(r)
     }
 
     fn build(
@@ -85,6 +101,7 @@ impl Resolver {
             crossref_base,
             dblp_base: "https://dblp.org".to_string(),
             email: contact_email.map(str::to_string),
+            openreview_bases: OPENREVIEW_BASES.iter().map(|s| s.to_string()).collect(),
             unpaywall_base: "https://api.unpaywall.org".to_string(),
         })
     }
@@ -92,6 +109,13 @@ impl Resolver {
     /// Override the DBLP base URL (used by tests to point at a mock server).
     pub fn with_dblp_base(mut self, base: String) -> Self {
         self.dblp_base = base;
+        self
+    }
+
+    /// Override the OpenReview base URLs (used by tests to point at a mock
+    /// server; two distinct paths on one server stand in for the two hosts).
+    pub fn with_openreview_bases(mut self, bases: Vec<String>) -> Self {
+        self.openreview_bases = bases;
         self
     }
 
@@ -146,16 +170,64 @@ impl Resolver {
         crossref::parse(&body)
     }
 
-    /// DBLP first, then Crossref bibliographic search; each filtered by the gate.
+    /// DBLP, then OpenReview, then Crossref bibliographic search; each filtered
+    /// by the gate.
+    ///
+    /// OpenReview sits between the two because it is the only source holding
+    /// the current year's ICLR/ICML proceedings: DBLP builds a conference
+    /// volume months after the fact, and Crossref has never carried ICLR at
+    /// all. It stays *behind* DBLP because a DBLP record is richer — the DOI
+    /// and canonical key that dedupe wants.
+    ///
+    /// A DBLP hit that is only the CoRR preprint does not end the search,
+    /// though: DBLP indexes a paper's arXiv posting long before its
+    /// proceedings volume, so the camera-ready of an ICLR 2026 paper matches
+    /// "CoRR 2025" and would be filed as a preprint while OpenReview knows it
+    /// as ICLR 2026.
     async fn try_title_search(&self, title: Option<&str>) -> Option<ResolvedMetadata> {
         let title = title?;
         if title.trim().is_empty() {
             return None;
         }
-        if let Some(md) = self.try_dblp(title).await {
-            return Some(md);
+        let dblp = self.try_dblp(title).await;
+        if dblp.as_ref().is_some_and(|m| !is_corr_preprint(m)) {
+            return dblp;
+        }
+        if let Some(md) = best_match(title, self.openreview_candidates(title).await) {
+            return Some(match &dblp {
+                Some(preprint) => graft_identifiers(md, preprint),
+                None => md,
+            });
+        }
+        if dblp.is_some() {
+            return dblp;
         }
         self.try_crossref_search(title).await
+    }
+
+    /// Candidates from every OpenReview host, searched concurrently. A host
+    /// that fails degrades to no candidates from that host alone.
+    async fn openreview_candidates(&self, title: &str) -> Vec<ResolvedMetadata> {
+        let key = format!("{title:?}");
+        let searches = self
+            .openreview_bases
+            .iter()
+            .map(|base| self.fetch_parse_openreview(base, title));
+        futures_util::future::join_all(searches)
+            .await
+            .into_iter()
+            .filter_map(|r| degrade("openreview search", &key, r))
+            .flatten()
+            .collect()
+    }
+
+    async fn fetch_parse_openreview(
+        &self,
+        base: &str,
+        title: &str,
+    ) -> Result<Vec<ResolvedMetadata>> {
+        let body = openreview::search(&self.http, base, title).await?;
+        openreview::parse(&body)
     }
 
     async fn try_dblp(&self, title: &str) -> Option<ResolvedMetadata> {
@@ -199,6 +271,43 @@ impl Resolver {
     }
 }
 
+/// Whether a DBLP record is the paper's arXiv posting rather than its
+/// published version. DBLP keys every CoRR entry under `journals/corr/`.
+fn is_corr_preprint(md: &ResolvedMetadata) -> bool {
+    md.dblp_key
+        .as_deref()
+        .is_some_and(|k| k.starts_with("journals/corr/"))
+}
+
+/// Carry the preprint's identifiers onto the published record. OpenReview
+/// knows the venue but mints no DOI and no DBLP key, while the CoRR record
+/// holds both — dropping them would lose the arXiv DOI that dedupes the
+/// camera-ready against a later ingest of the same paper's preprint.
+///
+/// The two records are matched against each other, not just against the query
+/// that found them: both clearing the gate separately only means each is close
+/// to the query, and stamping one paper's DOI onto another that merely shares
+/// a near-identical title would be far worse than shipping no DOI at all.
+fn graft_identifiers(
+    mut published: ResolvedMetadata,
+    preprint: &ResolvedMetadata,
+) -> ResolvedMetadata {
+    let same_work = match (published.title.as_deref(), preprint.title.as_deref()) {
+        (Some(a), Some(b)) => matching::title_similarity(a, b) >= matching::MATCH_THRESHOLD,
+        _ => false,
+    };
+    if !same_work {
+        return published;
+    }
+    published.doi = published.doi.or_else(|| preprint.doi.clone());
+    published.arxiv_id = published.arxiv_id.or_else(|| preprint.arxiv_id.clone());
+    published.dblp_key = published.dblp_key.or_else(|| preprint.dblp_key.clone());
+    published.abstract_text = published
+        .abstract_text
+        .or_else(|| preprint.abstract_text.clone());
+    published
+}
+
 /// The log-and-degrade shared by every resolver wrapper: an upstream failure
 /// warns (`"<what> failed for <key>: <err>"`) and resolves to `None` —
 /// resolution never aborts ingestion.
@@ -216,8 +325,9 @@ fn degrade<T>(what: &str, key: &str, r: Result<T>) -> Option<T> {
 const MAX_CANDIDATES: usize = 8;
 
 impl Resolver {
-    /// Title-search candidates from DBLP then Crossref, WITHOUT the
-    /// confidence gate: the caller (a human picking a match) is the gate.
+    /// Title-search candidates from DBLP, Crossref and OpenReview, queried
+    /// concurrently, WITHOUT the confidence gate: the caller (a human picking
+    /// a match) is the gate.
     /// Deduped, ranked by similarity to `query`, capped at `MAX_CANDIDATES`.
     /// Source failures degrade to fewer (possibly zero) candidates.
     pub async fn search_candidates(&self, query: &str) -> Vec<ResolvedMetadata> {
@@ -225,9 +335,10 @@ impl Resolver {
             return Vec::new();
         }
         let mut cands = Vec::new();
-        let (dblp, crossref) = tokio::join!(
+        let (dblp, crossref, openreview) = tokio::join!(
             self.fetch_parse_dblp(query),
-            self.fetch_parse_crossref_search(query)
+            self.fetch_parse_crossref_search(query),
+            self.openreview_candidates(query)
         );
         let key = format!("{query:?}");
         if let Some(c) = degrade("dblp candidate search", &key, dblp) {
@@ -236,6 +347,7 @@ impl Resolver {
         if let Some(c) = degrade("crossref candidate search", &key, crossref) {
             cands.extend(c);
         }
+        cands.extend(openreview);
         rank_candidates(query, cands)
     }
 }

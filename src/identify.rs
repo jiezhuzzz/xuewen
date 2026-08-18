@@ -38,6 +38,18 @@ const JOIN_WORDS: &[&str] = &[
     "a", "an", "and", "by", "for", "from", "in", "of", "on", "or", "the", "to", "via", "with",
 ];
 
+/// Venue boilerplate a conference template stamps above the title — ICLR's
+/// "Published as a conference paper at ICLR 2026" running header is the
+/// motivating case. Such a line passes every other test here (long, alphabetic,
+/// no email, no DOI), so without this it becomes the guessed title and the
+/// search that follows can only miss.
+static BOILERPLATE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)^\s*(?:a\s+)?preprint\b|\b(?:under review|published as a|accepted (?:as|at|to)|submitted to|to appear in|proceedings of the|camera[ -]ready)\b",
+    )
+    .unwrap()
+});
+
 /// A line usable as (part of) a title under the existing filter rules.
 fn substantive(line: &str) -> Option<&str> {
     let t = line.trim();
@@ -45,8 +57,45 @@ fn substantive(line: &str) -> Option<&str> {
         && !t.to_lowercase().starts_with("arxiv")
         && !t.contains('@')
         && !DOI_RE.is_match(t)
+        && !BOILERPLATE_RE.is_match(t)
         && t.chars().any(|c| c.is_alphabetic()))
     .then_some(t)
+}
+
+static SMALLCAPS_SPLIT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b([A-Z]) ([A-Z]{2,})\b").unwrap());
+
+/// pdftotext's small-caps artifact on an all-caps line, repaired without a
+/// reference title (`pdf::repair_smallcaps` repairs the same artifact in body
+/// text, but only once a resolved title says which words to rejoin).
+///
+/// The ICLR and NeurIPS templates set titles with `\sc`, which renders each
+/// word's first letter a size larger than the rest; pdftotext breaks at that
+/// font switch and emits "T RANSFORMERS ARE I NHERENTLY S UCCINCT".
+///
+/// Two guards, because "A NOVEL APPROACH" is a legitimately uppercase line
+/// whose "A" is a real word: the line must carry no lowercase at all, and at
+/// least one split-off letter must be something other than "A" or "I" — the
+/// only one-letter English words, and a distinction no font artifact would
+/// respect. Returns `None` when the line shows no artifact.
+fn repair_smallcaps_line(line: &str) -> Option<String> {
+    if line.chars().any(char::is_lowercase) {
+        return None;
+    }
+    SMALLCAPS_SPLIT_RE
+        .captures_iter(line)
+        .any(|c| !matches!(&c[1], "A" | "I"))
+        .then(|| {
+            SMALLCAPS_SPLIT_RE
+                .replace_all(line, "${1}${2}")
+                .into_owned()
+        })
+}
+
+/// A substantive line with pdftotext's small-caps splits rejoined.
+fn title_line(line: &str) -> Option<String> {
+    let t = substantive(line)?;
+    Some(repair_smallcaps_line(t).unwrap_or_else(|| t.to_string()))
 }
 
 /// Whether a title line ends "mid-phrase" (wrapped onto the next line).
@@ -68,11 +117,11 @@ pub fn guess_title(text: &str) -> Option<String> {
     let mut lines = text.lines();
     loop {
         let line = lines.next()?;
-        let Some(first) = substantive(line) else {
+        let Some(first) = title_line(line) else {
             continue;
         };
-        if ends_mid_phrase(first) {
-            if let Some(next) = lines.next().and_then(substantive) {
+        if ends_mid_phrase(&first) {
+            if let Some(next) = lines.next().and_then(title_line) {
                 if let Some(stem) = first.strip_suffix('-') {
                     // A trailing '-' is a mid-word split ("Hyperdimen-" / "sional") only
                     // when both sides are lowercase; otherwise it's a hyphenated compound
@@ -88,7 +137,7 @@ pub fn guess_title(text: &str) -> Option<String> {
                 return Some(format!("{first} {next}"));
             }
         }
-        return Some(first.to_string());
+        return Some(first);
     }
 }
 
@@ -189,6 +238,60 @@ mod tests {
         assert_eq!(
             guess_title(text).as_deref(),
             Some("Attention Is All You Need")
+        );
+    }
+
+    #[test]
+    fn rejoins_iclr_small_caps_title() {
+        // Exact pdftotext output for the ICLR camera-ready of arXiv:2510.19315,
+        // whose `\sc` title splits every word at the font switch.
+        let text = "Published as a conference paper at ICLR 2026\n\nT RANSFORMERS ARE I NHERENTLY S UCCINCT\n\nPascal Bergsträßer\nRyan Cotterell";
+        assert_eq!(
+            guess_title(text).as_deref(),
+            Some("TRANSFORMERS ARE INHERENTLY SUCCINCT")
+        );
+    }
+
+    #[test]
+    fn skips_conference_running_headers() {
+        for header in [
+            "Published as a conference paper at ICLR 2026",
+            "Under review as a conference paper at ICLR 2026",
+            "Accepted at NeurIPS 2024",
+            "Preprint. Under review.",
+            "Proceedings of the 41st International Conference on Machine Learning",
+        ] {
+            let text = format!("{header}\nAttention Is All You Need\nAshish Vaswani");
+            assert_eq!(
+                guess_title(&text).as_deref(),
+                Some("Attention Is All You Need"),
+                "expected {header:?} to be skipped"
+            );
+        }
+    }
+
+    #[test]
+    fn leaves_a_genuinely_uppercase_title_alone() {
+        // "A" is a real one-letter word, so an all-caps line whose only
+        // single-letter fragments are "A"/"I" is not a small-caps artifact.
+        assert_eq!(
+            guess_title("A NOVEL APPROACH TO A BETTER CACHE\nAuthor Name").as_deref(),
+            Some("A NOVEL APPROACH TO A BETTER CACHE")
+        );
+        // A title case line is never touched, whatever spacing it carries.
+        assert_eq!(
+            guess_title("A Novel Approach to Caching\nAuthor Name").as_deref(),
+            Some("A Novel Approach to Caching")
+        );
+    }
+
+    #[test]
+    fn small_caps_repair_keeps_real_one_letter_words() {
+        // "A S URVEY" — the standalone "A" survives because it is followed by
+        // a single letter, and "S URVEY" rejoins because "S" is not a word.
+        assert_eq!(
+            guess_title("A S URVEY OF I MAGE M ODELS\nAuthor Name").as_deref(),
+            Some("A SURVEY OF IMAGE MODELS")
         );
     }
 

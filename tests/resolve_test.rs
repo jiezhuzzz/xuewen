@@ -6,6 +6,7 @@ use xuewen::resolve::Resolver;
 
 const ARXIV_FIXTURE: &str = include_str!("fixtures/arxiv_attention.xml");
 const CROSSREF_FIXTURE: &str = include_str!("fixtures/crossref_kgat.json");
+const OPENREVIEW_FIXTURE: &str = include_str!("fixtures/openreview_succinct.json");
 
 #[tokio::test]
 async fn resolves_doi_via_crossref() {
@@ -301,4 +302,265 @@ async fn search_candidates_degrades_when_one_source_fails() {
     let cands = resolver.search_candidates("KGAT Knowledge Graph").await;
     assert_eq!(cands.len(), 1, "surviving source still yields candidates");
     assert_eq!(cands[0].source, "crossref");
+}
+
+/// The camera-ready title after `identify::guess_title` rejoins pdftotext's
+/// small-caps splits; DBLP has no ICLR 2026 volume yet and Crossref has never
+/// carried ICLR at all, so OpenReview is the only source that can answer.
+const ICLR_TITLE: &str = "TRANSFORMERS ARE INHERENTLY SUCCINCT";
+
+#[tokio::test]
+async fn resolves_iclr_title_via_openreview_when_dblp_is_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"result":{"hits":{"@total":"0"}}}"#),
+        )
+        .mount(&server)
+        .await;
+    // API 1 holds only pre-2023 venues, so it answers with nothing.
+    Mock::given(method("GET"))
+        .and(path("/api1/notes/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"notes":[],"count":0}"#))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/notes/search"))
+        .and(query_param("term", ICLR_TITLE))
+        .respond_with(ResponseTemplate::new(200).set_body_string(OPENREVIEW_FIXTURE))
+        .mount(&server)
+        .await;
+    // Crossref must never be reached: a confident OpenReview hit ends the chain.
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_SEARCH_FIXTURE))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri())
+        .with_openreview_bases(vec![
+            format!("{}/api2", server.uri()),
+            format!("{}/api1", server.uri()),
+        ]);
+    let res = resolver.resolve(&Identifier::None, Some(ICLR_TITLE)).await;
+
+    match res {
+        Some(md) => {
+            assert_eq!(md.source, "openreview");
+            assert_eq!(
+                md.title.as_deref(),
+                Some("Transformers are Inherently Succinct")
+            );
+            assert_eq!(md.venue.as_deref(), Some("ICLR"));
+            assert_eq!(md.year, Some(2026));
+            assert_eq!(md.authors.len(), 3);
+        }
+        None => panic!("expected Resolved via OpenReview"),
+    }
+}
+
+#[tokio::test]
+async fn openreview_host_failure_still_falls_through_to_crossref() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"result":{"hits":{"@total":"0"}}}"#),
+        )
+        .mount(&server)
+        .await;
+    // Both OpenReview hosts are down.
+    Mock::given(method("GET"))
+        .and(path("/api1/notes/search"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/notes/search"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .and(query_param("query.bibliographic", KGAT_TITLE))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_SEARCH_FIXTURE))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri())
+        .with_openreview_bases(vec![
+            format!("{}/api1", server.uri()),
+            format!("{}/api2", server.uri()),
+        ]);
+    let res = resolver.resolve(&Identifier::None, Some(KGAT_TITLE)).await;
+
+    assert_eq!(res.expect("expected Crossref fallback").source, "crossref");
+}
+
+#[tokio::test]
+async fn search_candidates_includes_openreview() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"result":{"hits":{"@total":"0"}}}"#),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"message":{"items":[]}}"#))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/notes/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(OPENREVIEW_FIXTURE))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri())
+        .with_openreview_bases(vec![format!("{}/api2", server.uri())]);
+
+    // A truncated query the 0.85 gate would reject still reaches the picker.
+    let cands = resolver
+        .search_candidates("Transformers are Inherently")
+        .await;
+    assert_eq!(cands.len(), 1);
+    assert_eq!(cands[0].source, "openreview");
+    assert_eq!(
+        cands[0].url.as_deref(),
+        Some("https://openreview.net/forum?id=Yxz92UuPLQ")
+    );
+}
+
+#[tokio::test]
+async fn openreview_venue_beats_a_dblp_corr_preprint() {
+    let server = MockServer::start().await;
+    // DBLP has indexed the arXiv posting but not the ICLR volume yet.
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"result":{"hits":{"hit":[{"info":{
+                "title":"Transformers are Inherently Succinct.",
+                "venue":"CoRR","year":"2025","volume":"abs/2510.19315",
+                "key":"journals/corr/abs-2510-19315",
+                "doi":"10.48550/ARXIV.2510.19315",
+                "type":"Informal and Other Publications"
+            }}]}}}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/notes/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(OPENREVIEW_FIXTURE))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri())
+        .with_openreview_bases(vec![format!("{}/api2", server.uri())]);
+    let md = resolver
+        .resolve(&Identifier::None, Some(ICLR_TITLE))
+        .await
+        .expect("expected Resolved");
+
+    assert_eq!(md.source, "openreview");
+    assert_eq!(md.venue.as_deref(), Some("ICLR"));
+    assert_eq!(md.year, Some(2026));
+    // The preprint's identifiers ride along rather than being dropped.
+    assert_eq!(md.doi.as_deref(), Some("10.48550/ARXIV.2510.19315"));
+    assert_eq!(md.dblp_key.as_deref(), Some("journals/corr/abs-2510-19315"));
+}
+
+#[tokio::test]
+async fn a_dblp_corr_preprint_survives_when_openreview_has_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"result":{"hits":{"hit":[{"info":{
+                "title":"Transformers are Inherently Succinct.",
+                "venue":"CoRR","year":"2025",
+                "key":"journals/corr/abs-2510-19315"
+            }}]}}}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/notes/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"notes":[],"count":0}"#))
+        .mount(&server)
+        .await;
+    // Crossref is never consulted: DBLP already answered, if only as a preprint.
+    Mock::given(method("GET"))
+        .and(path("/works"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CROSSREF_SEARCH_FIXTURE))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri())
+        .with_openreview_bases(vec![format!("{}/api2", server.uri())]);
+    let md = resolver
+        .resolve(&Identifier::None, Some(ICLR_TITLE))
+        .await
+        .expect("expected the DBLP preprint");
+
+    assert_eq!(md.source, "dblp");
+    assert_eq!(md.venue.as_deref(), Some("CoRR"));
+}
+
+#[tokio::test]
+async fn identifiers_are_not_grafted_across_different_papers() {
+    let server = MockServer::start().await;
+    // Both records clear the 0.85 gate against the query (0.883 and 0.885) but
+    // score only 0.771 against each other: similarity is not transitive, so
+    // "each matched the query" is no evidence they are the same work.
+    let query = "Scaling Laws for Neural Language Models of Protein Sequences";
+    Mock::given(method("GET"))
+        .and(path("/search/publ/api"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"result":{"hits":{"hit":[{"info":{
+                "title":"Scaling Laws for Neural Language Models of Protein Chains.",
+                "venue":"CoRR","year":"2019",
+                "key":"journals/corr/abs-1900-00000",
+                "doi":"10.48550/ARXIV.1900.00000"
+            }}]}}}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api2/notes/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"notes":[{"id":"Yxz92UuPLQ","content":{
+                "title":{"value":"Emergent Laws for Neural Language Models of Protein Sequences"},
+                "venue":{"value":"ICLR 2026 Oral"}}}]}"#,
+        ))
+        .mount(&server)
+        .await;
+
+    let resolver = Resolver::with_bases(None, server.uri(), server.uri())
+        .unwrap()
+        .with_dblp_base(server.uri())
+        .with_openreview_bases(vec![format!("{}/api2", server.uri())]);
+    let md = resolver
+        .resolve(&Identifier::None, Some(query))
+        .await
+        .expect("expected the OpenReview record");
+
+    assert_eq!(md.source, "openreview");
+    assert_eq!(md.venue.as_deref(), Some("ICLR"));
+    assert_eq!(md.doi, None, "a different paper's DOI must not be grafted");
+    assert_eq!(md.dblp_key, None);
 }

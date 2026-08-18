@@ -17,9 +17,12 @@ the assistant that answers questions about a paper.
 
 ## Features
 
-- **Automatic metadata** — resolved from arXiv, Crossref and DBLP, with optional
-  [GROBID](https://github.com/kermitt2/grobid) header extraction as a fallback.
-  Papers are filed under a deterministic cite key (e.g. `vaswani2017attention`).
+- **Automatic metadata** — resolved from arXiv, Crossref, DBLP and
+  [OpenReview](https://openreview.net) (which carries ICLR and recent ICML/NeurIPS
+  proceedings months before DBLP indexes them, and that Crossref never carries at
+  all), with optional [GROBID](https://github.com/kermitt2/grobid) header
+  extraction as a fallback. Papers are filed under a deterministic cite key
+  (e.g. `vaswani2017attention`).
 - **Manual identify** — when auto-resolution is unsure, match a paper to a DOI,
   arXiv id, or a title search from the UI or CLI.
 - **Search** — BM25 keyword search (always on) plus optional semantic search
