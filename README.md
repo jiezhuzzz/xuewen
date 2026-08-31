@@ -47,6 +47,7 @@ the assistant that answers questions about a paper.
   attached, its code repository, inside a read-only sandbox.
 - **Daily arXiv recommendations** — a ranked, LLM-summarized feed of new papers
   scored against your library's interests (optional).
+- **Helix-style keymap** — `Space` is a leader key, as in [Helix](https://helix-editor.com): `Space f` opens a file picker that fuzzy-matches a paper's name and title as you type and previews its rendered pages beside the list. `?` lists every binding.
 - **Citation export** — BibTeX / BibLaTeX for a single paper, a project, or the
   whole library.
 - **Organization** — projects (named groups of papers), free-form tags
@@ -114,8 +115,8 @@ xattr -d com.apple.quarantine /Applications/Xuewen.app
 ```
 
 **Where data lives:** `~/Library/Application Support/Xuewen/` — `xuewen.toml`,
-an `env` file for API keys, `xuewen.db`, `library/`, `inbox/`, and
-`search-index/`. Logs go to `~/Library/Logs/Xuewen/`. First launch creates all
+an `env` file for API keys, `xuewen.db`, `library/`, `inbox/`, `search-index/`, and
+`preview-cache/`. Logs go to `~/Library/Logs/Xuewen/`. First launch creates all
 of this; existing files are never overwritten.
 
 **Enabling AI features:** edit `xuewen.toml` (same `[ai.*]` sections as the
@@ -153,6 +154,7 @@ Optional sections enable the richer features:
   [Agent Ask setup](#agent-ask-setup)).
 - `[daily]` — daily arXiv recommendations.
 - `[proxy]` — institutional paywall access.
+- `[preview]` — where the file picker's rendered page images are cached (defaults to `./preview-cache`).
 
 API keys are read from environment variables via `api_key_env` (e.g.
 `OPENAI_API_KEY`), so they never need to live in the config file. See
