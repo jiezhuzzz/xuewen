@@ -433,3 +433,13 @@ impl From<crate::chat::store::ChatMessageRow> for ChatTurn {
         }
     }
 }
+
+/// A paper's preview geometry: how many pages the picker should lay out, and
+/// the shape of page one so the placeholders are correct before any image
+/// loads.
+#[derive(Serialize)]
+pub struct PreviewMeta {
+    pub pages: u32,
+    pub page_width: f32,
+    pub page_height: f32,
+}

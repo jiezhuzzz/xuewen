@@ -16,6 +16,7 @@ pub mod models;
 pub mod naming;
 pub mod pdf;
 pub mod pipeline;
+pub mod preview;
 pub mod refresh;
 pub mod resolve;
 pub mod search;

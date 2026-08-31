@@ -9,9 +9,9 @@ use tower_http::services::ServeFile;
 
 use super::dto::{
     Candidate, CodeAttachment, DailyPaperDto, DailyResponse, ImportOutcome, PaperDetail,
-    PaperNameResponse, PaperSummary, ProjectRef, ProxySettings, SearchMatch, SearchResponse,
-    SearchResult, SearchStatus, SemanticAvailability, Settings, Stats, TagRef, TierCounts,
-    TranslateSettings, TranslationDto,
+    PaperNameResponse, PaperSummary, PreviewMeta, ProjectRef, ProxySettings, SearchMatch,
+    SearchResponse, SearchResult, SearchStatus, SemanticAvailability, Settings, Stats, TagRef,
+    TierCounts, TranslateSettings, TranslationDto,
 };
 use super::error::ApiError;
 use super::AppState;
@@ -272,10 +272,25 @@ pub async fn pdf(
     req: Request,
 ) -> Result<Response, ApiError> {
     let paper = fetch_paper(&app.pool, &id, Trash::Allow, "pdf").await?;
-    let path = app.library_root.join(&paper.rel_path);
-    // Defense in depth: the canonical file must live under the library root.
+    let path = library_file(&app.library_root, &paper.rel_path).await?;
+    let resp = ServeFile::new(&path)
+        .oneshot(req)
+        .await
+        .context("serve pdf")?;
+    Ok(resp.map(axum::body::Body::new).into_response())
+}
+
+/// Resolve a paper's file under the library root. Defense in depth, shared by
+/// every route that reads library bytes: the canonical file must live under
+/// the root, and a missing one answers the same 404 a bad id would — the
+/// client learns "no file here" either way.
+async fn library_file(
+    library_root: &std::path::Path,
+    rel_path: &str,
+) -> Result<std::path::PathBuf, ApiError> {
+    let path = library_root.join(rel_path);
     let under_root = {
-        let (p, root) = (path.clone(), app.library_root.clone());
+        let (p, root) = (path.clone(), library_root.to_path_buf());
         tokio::task::spawn_blocking(move || {
             match (std::fs::canonicalize(&p), std::fs::canonicalize(&root)) {
                 (Ok(file), Ok(root)) => file.starts_with(&root),
@@ -286,14 +301,75 @@ pub async fn pdf(
         .inspect_err(|e| tracing::error!("canonicalize check panicked: {e}"))
         .unwrap_or(false)
     };
-    if !under_root {
-        return Err(ApiError::NotFound);
+    if under_root {
+        Ok(path)
+    } else {
+        Err(ApiError::NotFound)
     }
-    let resp = ServeFile::new(&path)
-        .oneshot(req)
+}
+
+/// Map a render failure onto the wire. `Unrenderable` is 422 rather than 500
+/// because nothing is broken — this PDF simply has no image to show, and it
+/// is the one signal the picker needs to switch to its text card.
+fn preview_error(e: crate::preview::PreviewError) -> ApiError {
+    match e {
+        crate::preview::PreviewError::Unrenderable => {
+            ApiError::Unprocessable("the PDF could not be rendered".into())
+        }
+        crate::preview::PreviewError::PageOutOfRange => ApiError::NotFound,
+    }
+}
+
+/// How many pages the picker should lay out, and page one's shape.
+pub async fn preview_meta(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<PreviewMeta>, ApiError> {
+    // Trash::Allow, like `pdf`: a paper trashed while the picker is open is
+    // still a paper the picker is showing.
+    let paper = fetch_paper(&app.pool, &id, Trash::Allow, "preview").await?;
+    let path = library_file(&app.library_root, &paper.rel_path).await?;
+    let meta = app
+        .preview
+        .meta(&path, &paper.content_hash)
         .await
-        .context("serve pdf")?;
-    Ok(resp.map(axum::body::Body::new).into_response())
+        .map_err(preview_error)?;
+    Ok(Json(PreviewMeta {
+        pages: meta.pages,
+        page_width: meta.width,
+        page_height: meta.height,
+    }))
+}
+
+/// One rendered page as a PNG.
+pub async fn preview_page(
+    State(app): State<AppState>,
+    // The page number is parsed here rather than by a typed extractor: a
+    // typed one rejects with axum's own body shape, and every error this API
+    // returns is `{"error": "..."}`.
+    Path((id, page)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let page: u32 = page
+        .parse()
+        .map_err(|_| ApiError::BadRequest("page must be a number".into()))?;
+    let paper = fetch_paper(&app.pool, &id, Trash::Allow, "preview").await?;
+    let path = library_file(&app.library_root, &paper.rel_path).await?;
+    let png = app
+        .preview
+        .page_png(&path, &paper.content_hash, page)
+        .await
+        .map_err(preview_error)?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            // The bytes only change when the file's hash does, but the URL is
+            // keyed by paper id, so this is a bounded cache rather than an
+            // immutable one.
+            (axum::http::header::CACHE_CONTROL, "private, max-age=3600"),
+        ],
+        png,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]

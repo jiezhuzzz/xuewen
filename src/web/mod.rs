@@ -51,6 +51,10 @@ pub struct AppState {
     /// Present when translate-on-selection is configured (`serve`). `None`
     /// -> /api/translate answers 503, /api/settings reports disabled.
     pub translate: Option<Arc<crate::translate::TranslateService>>,
+    /// Always present: rasterizing a page needs no `[ai.*]` gate either, and
+    /// unlike the other always-on services it holds no pool — only where its
+    /// renders are cached.
+    pub preview: Arc<crate::preview::PreviewService>,
     /// UI-facing preferences (e.g. abstract folding). Defaulted in
     /// read-only/test routers; set from config in `serve`.
     pub ui: crate::config::UiConfig,
@@ -65,6 +69,11 @@ impl AppState {
     pub fn base(pool: SqlitePool, library_root: PathBuf) -> Self {
         let citations = crate::citations::CitationsService::heuristic_only(pool.clone());
         let annotations = Arc::new(crate::annotations::AnnotationsService::new(pool.clone()));
+        // Under the library root so a read-only or test router needs no
+        // config: `serve` overrides it from `[preview]`.
+        let preview = Arc::new(crate::preview::PreviewService::new(
+            library_root.join("preview-cache"),
+        ));
         Self {
             pool,
             library_root,
@@ -75,6 +84,7 @@ impl AppState {
             citations,
             annotations,
             translate: None,
+            preview,
             ui: crate::config::UiConfig::default(),
         }
     }
@@ -119,6 +129,8 @@ pub fn build_router_from(state: AppState) -> Router {
             axum::routing::post(api::identify_paper),
         )
         .route("/papers/{id}/pdf", get(api::pdf))
+        .route("/api/papers/{id}/preview", get(api::preview_meta))
+        .route("/papers/{id}/preview/{page}", get(api::preview_page))
         .route("/api/import", axum::routing::post(api::import_url))
         .route("/api/settings", get(api::get_settings))
         .route(

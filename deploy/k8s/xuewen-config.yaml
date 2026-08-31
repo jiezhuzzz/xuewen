@@ -8,6 +8,9 @@ data:
     library_root  = "/data/library"
     database_url  = "sqlite:/data/library.db"
 
+    [preview]
+    cache_dir = "/data/preview-cache"
+
     [search]
     index_dir         = "/data/search-index"
     qdrant_url        = "http://xuewen-qdrant:6333"

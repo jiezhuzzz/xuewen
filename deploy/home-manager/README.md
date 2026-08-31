@@ -51,8 +51,8 @@ The service auto-starts on login (`WantedBy = default.target`). Manage it with
 `systemctl --user {start,stop,status} xuewen` and read logs with
 `journalctl --user -u xuewen`.
 
-`inbox_dir`, `library_root`, `database_url` and `search.index_dir` default
-under `services.xuewen.dataDir` (`$XDG_DATA_HOME/xuewen`, i.e.
+`inbox_dir`, `library_root`, `database_url`, `search.index_dir` and
+`preview.cache_dir` default under `services.xuewen.dataDir` (`$XDG_DATA_HOME/xuewen`, i.e.
 `~/.local/share/xuewen`); override them via `settings` if needed.
 
 ## Secrets

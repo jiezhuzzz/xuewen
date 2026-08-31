@@ -39,8 +39,8 @@ runs `pdftotext` (poppler) in the unit's `PATH`, and applies systemd hardening.
 }
 ```
 
-`inbox_dir`, `library_root`, `database_url` and `search.index_dir` default
-under `services.xuewen.dataDir` (`/var/lib/xuewen`); override them via
+`inbox_dir`, `library_root`, `database_url`, `search.index_dir` and
+`preview.cache_dir` default under `services.xuewen.dataDir` (`/var/lib/xuewen`); override them via
 `settings` if needed.
 
 ## Secrets

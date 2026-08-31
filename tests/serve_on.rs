@@ -34,6 +34,9 @@ async fn serve_on_serves_api_on_an_ephemeral_port() {
             pool.clone(),
         )),
         translate: None,
+        preview: std::sync::Arc::new(xuewen::preview::PreviewService::new(
+            cfg.preview.cache_dir.clone(),
+        )),
         ui: cfg.ui.clone(),
     };
 

@@ -15,6 +15,8 @@ pub struct Config {
     pub proxy: Option<ProxyConfig>,
     #[serde(default)]
     pub search: SearchConfig,
+    #[serde(default)]
+    pub preview: PreviewConfig,
     /// Daily arXiv recommendations. Absent ⇒ the feature is off.
     #[serde(default)]
     pub daily: Option<DailyConfig>,
@@ -52,6 +54,24 @@ impl Default for SearchConfig {
             index_dir: PathBuf::from("./search-index"),
             qdrant_url: "http://localhost:6333".to_string(),
             qdrant_collection: "xuewen".to_string(),
+        }
+    }
+}
+
+/// Picker preview settings. Always present, like `[search]`: the previews
+/// themselves are never optional, only where their renders are kept.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PreviewConfig {
+    /// Rendered page PNGs (derived data; safe to delete — pages re-render on
+    /// demand). Keyed by content hash, so nothing here can go stale.
+    pub cache_dir: PathBuf,
+}
+
+impl Default for PreviewConfig {
+    fn default() -> Self {
+        Self {
+            cache_dir: PathBuf::from("./preview-cache"),
         }
     }
 }
@@ -363,6 +383,7 @@ impl Config {
         cfg.inbox_dir = expand_tilde(cfg.inbox_dir, home.clone());
         cfg.library_root = expand_tilde(cfg.library_root, home.clone());
         cfg.search.index_dir = expand_tilde(cfg.search.index_dir, home.clone());
+        cfg.preview.cache_dir = expand_tilde(cfg.preview.cache_dir, home.clone());
         cfg.ai.agent.runner = cfg.ai.agent.runner.map(|p| expand_tilde(p, home));
         Ok(cfg)
     }
@@ -476,6 +497,7 @@ database_url = "sqlite:/data/library.db"
         .unwrap();
         let cfg = Config::load(f.path()).unwrap();
         assert_eq!(cfg.search.index_dir, PathBuf::from("./search-index"));
+        assert_eq!(cfg.preview.cache_dir, PathBuf::from("./preview-cache"));
         assert_eq!(cfg.search.qdrant_url, "http://localhost:6333");
         assert_eq!(cfg.search.qdrant_collection, "xuewen");
         assert!(cfg.ai.embedding.is_none());

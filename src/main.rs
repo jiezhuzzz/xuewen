@@ -596,7 +596,13 @@ async fn main() -> Result<()> {
                 // keep going and report the stragglers at the end.
                 let mut failures = 0usize;
                 for p in &targets {
-                    if let Err(e) = xuewen::pipeline::purge_paper(&pool, &cfg.library_root, p).await
+                    if let Err(e) = xuewen::pipeline::purge_paper(
+                        &pool,
+                        &cfg.library_root,
+                        &cfg.preview.cache_dir,
+                        p,
+                    )
+                    .await
                     {
                         eprintln!("could not purge {}: {e:#}", p.id);
                         failures += 1;

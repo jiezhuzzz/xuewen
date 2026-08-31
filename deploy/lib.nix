@@ -119,6 +119,7 @@ rec {
       library_root = "${cfg.dataDir}/library";
       database_url = "sqlite:${cfg.dataDir}/library.db";
       search.index_dir = "${cfg.dataDir}/search-index";
+      preview.cache_dir = "${cfg.dataDir}/preview-cache";
     }
     # The backend resolves `[ai.agent].runner` against its working directory,
     # whose default (`agent-runner/src/runner.mjs`) only exists in a dev

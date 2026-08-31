@@ -410,11 +410,16 @@ impl IngestCtx {
 }
 
 /// Permanently delete `paper`: the library PDF, its chat/code sidecars, the
-/// agent workspace, then the row. The sidecar deletes stay explicit —
+/// agent workspace, its rendered preview pages, then the row. The sidecar deletes stay explicit —
 /// belt-and-braces beside the schema's ON DELETE cascades, whose regressions
 /// they would otherwise mask (see tests/web_code_test.rs). PDF and workspace
 /// removal degrade to a warning/no-op: a missing file must not block a purge.
-pub async fn purge_paper(pool: &SqlitePool, library_root: &Path, paper: &Paper) -> Result<()> {
+pub async fn purge_paper(
+    pool: &SqlitePool,
+    library_root: &Path,
+    preview_cache: &Path,
+    paper: &Paper,
+) -> Result<()> {
     let path = library_root.join(&paper.rel_path);
     match std::fs::remove_file(&path) {
         Ok(()) => {}
@@ -424,6 +429,11 @@ pub async fn purge_paper(pool: &SqlitePool, library_root: &Path, paper: &Paper) 
     crate::chat::store::clear(pool, &paper.id).await?;
     crate::agent::store::delete_paper_code(pool, &paper.id).await?;
     let _ = tokio::fs::remove_dir_all(crate::agent::workspace_dir(library_root, &paper.id)).await;
+    let _ = tokio::fs::remove_dir_all(crate::preview::cache::paper_dir(
+        preview_cache,
+        &paper.content_hash,
+    ))
+    .await;
     db::delete_row(pool, &paper.id).await?;
     Ok(())
 }

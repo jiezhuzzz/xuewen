@@ -56,11 +56,15 @@ pub fn default_config_toml(data: &Path) -> String {
          database_url = {db}\n\
          \n\
          [search]\n\
-         index_dir = {index}\n",
+         index_dir = {index}\n\
+         \n\
+         [preview]\n\
+         cache_dir = {preview}\n",
         inbox = toml_quote(&data.join("inbox")),
         library = toml_quote(&data.join("library")),
         db = toml_quote_str(&format!("sqlite:{}", data.join("xuewen.db").display())),
         index = toml_quote(&data.join("search-index")),
+        preview = toml_quote(&data.join("preview-cache")),
     )
 }
 
@@ -133,6 +137,7 @@ mod tests {
             format!("sqlite:{}", data.join("xuewen.db").display())
         );
         assert_eq!(cfg.search.index_dir, data.join("search-index"));
+        assert_eq!(cfg.preview.cache_dir, data.join("preview-cache"));
     }
 
     #[test]

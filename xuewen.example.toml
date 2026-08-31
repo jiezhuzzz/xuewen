@@ -22,6 +22,12 @@ database_url  = "sqlite:./library.db"
 #qdrant_url        = "http://localhost:6333"
 #qdrant_collection = "xuewen"
 
+# Rendered page images for the file picker's preview pane (optional section;
+# this is the default). Keyed by content hash, so entries never go stale and
+# the whole directory is safe to delete — pages re-render on demand.
+#[preview]
+#cache_dir = "./preview-cache"
+
 # Daily arXiv recommendations, shown on a Glance dashboard via /api/daily
 # (optional). Requires [ai.embedding]: the library's title+abstract
 # vectors are the interest profile the new papers are scored against.

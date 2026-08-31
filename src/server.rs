@@ -23,6 +23,7 @@ pub struct Services {
     pub citations: Arc<crate::citations::CitationsService>,
     pub annotations: Arc<crate::annotations::AnnotationsService>,
     pub translate: Option<Arc<crate::translate::TranslateService>>,
+    pub preview: Arc<crate::preview::PreviewService>,
 }
 
 /// Build all services and spawn their background loops (indexer, daily
@@ -71,6 +72,10 @@ pub async fn spawn_services(cfg: &Config, pool: SqlitePool) -> Result<Services> 
     // No config to read: annotations are plain storage, always on.
     let annotations = Arc::new(crate::annotations::AnnotationsService::new(pool.clone()));
     let translate = crate::translate::TranslateService::from_config(cfg).map(Arc::new);
+    // No config to gate, only a place to cache: previews are always on.
+    let preview = Arc::new(crate::preview::PreviewService::new(
+        cfg.preview.cache_dir.clone(),
+    ));
     Ok(Services {
         ingest,
         search,
@@ -79,6 +84,7 @@ pub async fn spawn_services(cfg: &Config, pool: SqlitePool) -> Result<Services> 
         citations,
         annotations,
         translate,
+        preview,
     })
 }
 
@@ -101,6 +107,7 @@ pub fn serve_on(
         citations: services.citations,
         annotations: services.annotations,
         translate: services.translate,
+        preview: services.preview,
         ui: cfg.ui.clone(),
     };
     web::serve_on(listener, state)

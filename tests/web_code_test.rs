@@ -145,7 +145,12 @@ async fn purge_clears_paper_code_and_agent_workspace() {
     assert!(ws.exists());
 
     let paper = xuewen::db::get_by_id(&pool, "p1").await.unwrap().unwrap();
-    xuewen::pipeline::purge_paper(&pool, &root, &paper)
+    let cache = root.join("preview-cache");
+    let cached_pages = xuewen::preview::cache::paper_dir(&cache, &paper.content_hash);
+    std::fs::create_dir_all(&cached_pages).unwrap();
+    std::fs::write(cached_pages.join("0.png"), b"png").unwrap();
+
+    xuewen::pipeline::purge_paper(&pool, &root, &cache, &paper)
         .await
         .unwrap();
 
@@ -154,6 +159,10 @@ async fn purge_clears_paper_code_and_agent_workspace() {
         .unwrap()
         .is_none());
     assert!(!ws.exists());
+    assert!(
+        !cached_pages.exists(),
+        "rendered previews go with the paper"
+    );
     let row: Option<(String,)> = sqlx::query_as("SELECT id FROM papers WHERE id = ?")
         .bind("p1")
         .fetch_optional(&pool)

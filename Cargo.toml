@@ -35,6 +35,7 @@ mime_guess = "2"
 flate2 = "1"
 brotli = "8"
 tantivy = "0.26"
+hayro = "0.7" # pure-Rust PDF rasterizer for the picker previews (src/preview)
 async-trait = "0.1.89"
 
 # Process-group kill for the agent runner: SIGKILL to the runner alone
