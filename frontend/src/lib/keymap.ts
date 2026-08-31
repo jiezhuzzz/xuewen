@@ -55,11 +55,11 @@ const deleteMark = {
 };
 
 /// The single-key map as data — the one source shared by the dispatcher
-/// (shortcuts.ts), the `?` help overlay (SHORTCUT_GROUPS below), and the
-/// command palette's key hints, so a binding can't drift between behavior
-/// and display. Chords (⌘K/⌘F/⌘C), Esc, and Enter stay bespoke in
-/// shortcuts.ts — each needs the event itself — and appear below as static
-/// display rows only.
+/// (shortcuts.ts) and the `?` help overlay (SHORTCUT_GROUPS below), so a
+/// binding can't drift between behavior and display. Multi-key sequences
+/// live in LEADER_CHORDS below; modifier chords (⌘F/⌘C/⌘Z), Esc, and Enter
+/// stay bespoke in shortcuts.ts — each needs the event itself — and appear
+/// below as static display rows only.
 export const SINGLE_KEYS: readonly KeyBinding[] = [
   { key: '/', label: 'Search library', preventDefault: true, run: focusSearch },
   { key: '?', label: 'Keyboard shortcuts', preventDefault: true, run: () => (ui.helpOpen = true) },
@@ -81,6 +81,48 @@ export const SINGLE_KEYS: readonly KeyBinding[] = [
   { key: 'Delete', ...deleteMark },
   { key: 'Backspace', ...deleteMark },
 ];
+
+/// A multi-key sequence, Helix-style: `Space f` is `[' ', 'f']`. The whole
+/// sequence lives in one entry so a second leader (or a deeper chord) is a
+/// new row here rather than new branches in the dispatcher.
+export interface ChordBinding {
+  /// At least two keys — a single key belongs in SINGLE_KEYS instead.
+  keys: readonly string[];
+  label: string;
+  /// Gate: the chord still consumes its keys, it just does nothing.
+  when?: () => boolean;
+  run: () => void;
+}
+
+/// The leader map. `Space` is the only root today; the dispatcher reads the
+/// roots off this table, so adding `g` (or `Space b`) needs no change there.
+export const LEADER_CHORDS: readonly ChordBinding[] = [
+  { keys: [' ', 'f'], label: 'Find paper…', run: () => (ui.filePickerOpen = true) },
+];
+
+/// Does `key` start some chord? The dispatcher's test for "claim this key".
+export function isLeaderRoot(key: string): boolean {
+  return LEADER_CHORDS.some((c) => c.keys[0] === key);
+}
+
+/// Chords that `pending` is a strict prefix of — what may still follow.
+export function matchingChords(pending: readonly string[]): readonly ChordBinding[] {
+  return LEADER_CHORDS.filter(
+    (c) => c.keys.length > pending.length && pending.every((k, i) => c.keys[i] === k),
+  );
+}
+
+/// The chord `pending` completes exactly, if any.
+export function exactChord(pending: readonly string[]): ChordBinding | undefined {
+  return LEADER_CHORDS.find(
+    (c) => c.keys.length === pending.length && pending.every((k, i) => c.keys[i] === k),
+  );
+}
+
+/// A chord as the help overlay and the hint spell it: `[' ', 'f']` → "Space f".
+export function chordKeyLabel(keys: readonly string[]): string {
+  return keys.map((k) => (k === ' ' ? 'Space' : k)).join(' ');
+}
 
 export interface ShortcutItem {
   keys: string;
@@ -126,7 +168,8 @@ export const SHORTCUT_GROUPS: ReadonlyArray<{ title: string; items: ShortcutItem
   {
     title: 'Anywhere',
     items: [
-      { keys: '⌘K', label: 'Command palette' },
+      // Derived, so a new chord shows up here with no edit.
+      ...LEADER_CHORDS.map((c) => ({ keys: chordKeyLabel(c.keys), label: c.label })),
       fromKey('?'),
       { keys: 'Esc', label: 'Close panel · exit zen' },
     ],

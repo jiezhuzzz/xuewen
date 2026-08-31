@@ -13,7 +13,7 @@ describe('ShortcutHelp', () => {
     render(ShortcutHelp);
     expect(screen.getByText('Search library')).toBeInTheDocument();
     expect(screen.getByText('Zen mode')).toBeInTheDocument();
-    expect(screen.getByText('Command palette')).toBeInTheDocument();
+    expect(screen.getByText('Find paper…')).toBeInTheDocument();
     expect(screen.getByText('Next / previous paper')).toBeInTheDocument();
     expect(screen.getByText('Find in PDF')).toBeInTheDocument();
     expect(screen.getByText('Copy selected text')).toBeInTheDocument();

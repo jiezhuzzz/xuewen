@@ -47,8 +47,8 @@
     <dl class="grid grid-cols-[auto_auto] gap-x-3 gap-y-1 text-xs text-stone-400 dark:text-stone-500">
       <dt><kbd class="rounded border border-stone-300 px-1 dark:border-stone-700">/</kbd></dt>
       <dd class="text-left">search</dd>
-      <dt><kbd class="rounded border border-stone-300 px-1 dark:border-stone-700">⌘K</kbd></dt>
-      <dd class="text-left">command palette</dd>
+      <dt><kbd class="rounded border border-stone-300 px-1 dark:border-stone-700">Space f</kbd></dt>
+      <dd class="text-left">find a paper</dd>
       <dt><kbd class="rounded border border-stone-300 px-1 dark:border-stone-700">z</kbd></dt>
       <dd class="text-left">zen mode while reading</dd>
     </dl>

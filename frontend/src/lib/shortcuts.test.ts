@@ -1,6 +1,7 @@
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleKeydown, isEditable } from './shortcuts';
+import { cancelLeader, leader } from './leader.svelte';
 import { registerAnnotationCommands, type AnnotationCommands } from './annotationCommands';
 import { chat } from './chat.svelte';
 import { registerPdfCopy } from './pdfCopy';
@@ -33,7 +34,8 @@ beforeEach(() => {
   dock.tab = 'details';
   selection.id = null;
   ui.zen = false;
-  ui.paletteOpen = false;
+  ui.filePickerOpen = false;
+  cancelLeader();
   ui.sidebarOpen = true;
   ui.importOpen = false;
   ui.helpOpen = false;
@@ -55,9 +57,34 @@ describe('isEditable', () => {
 });
 
 describe('handleKeydown', () => {
-  it('cmd+k toggles the palette even from an input', () => {
-    handleKeydown(key('k', { metaKey: true, target: document.createElement('input') }));
-    expect(ui.paletteOpen).toBe(true);
+  it('Space then f opens the file picker', () => {
+    handleKeydown(key(' '));
+    expect(leader.pending).toEqual([' ']);
+    handleKeydown(key('f'));
+    expect(ui.filePickerOpen).toBe(true);
+    expect(leader.pending).toEqual([]);
+  });
+
+  it('Space stands aside in a text field and over a focused control', () => {
+    handleKeydown(key(' ', { target: document.createElement('input') }));
+    expect(leader.pending).toEqual([]);
+    handleKeydown(key(' ', { target: document.createElement('button') }));
+    expect(leader.pending).toEqual([]);
+  });
+
+  it('an unbound second key cancels the sequence without dispatching itself', () => {
+    handleKeydown(key(' '));
+    handleKeydown(key('j'));
+    expect(ui.filePickerOpen).toBe(false);
+    expect(leader.pending).toEqual([]);
+    // `j` would otherwise have moved the library selection.
+    expect(selection.id).toBe(null);
+  });
+
+  it('every key is inert while the picker owns the screen', () => {
+    ui.filePickerOpen = true;
+    handleKeydown(key('j'));
+    expect(selection.id).toBe(null);
   });
 
   it('[ toggles the pane; ignored while typing', () => {
@@ -101,11 +128,20 @@ describe('handleKeydown', () => {
     expect(ui.zen).toBe(false);
   });
 
-  it('Escape closes the palette first, then exits zen', () => {
-    ui.paletteOpen = true;
+  it('a modifier shortcut mid-chord abandons the sequence', () => {
+    handleKeydown(key(' '));
+    handleKeydown(key('z', { metaKey: true }));
+    expect(leader.pending).toEqual([]);
+    // `f` is now an ordinary key again, not the tail of the abandoned chord.
+    handleKeydown(key('f'));
+    expect(ui.filePickerOpen).toBe(false);
+  });
+
+  it('Escape abandons a pending chord first, then exits zen', () => {
     ui.zen = true;
+    handleKeydown(key(' '));
     handleKeydown(key('Escape'));
-    expect(ui.paletteOpen).toBe(false);
+    expect(leader.pending).toEqual([]);
     expect(ui.zen).toBe(true);
     handleKeydown(key('Escape'));
     expect(ui.zen).toBe(false);

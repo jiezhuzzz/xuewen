@@ -7,13 +7,13 @@ export const ui = $state<{
   sidebarOpen: boolean;
   importOpen: boolean;
   zen: boolean;
-  paletteOpen: boolean;
+  filePickerOpen: boolean;
   helpOpen: boolean;
 }>({
   sidebarOpen: true,
   importOpen: false,
   zen: false,
-  paletteOpen: false,
+  filePickerOpen: false,
   helpOpen: false,
 });
 export function toggleSidebar(): void {

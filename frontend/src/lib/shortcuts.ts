@@ -1,6 +1,7 @@
 import { clearAnnotationSelection, redoAnnotation, undoAnnotation } from './annotationCommands';
 import { identifyState } from './identify.svelte';
-import { openSelected, SINGLE_KEYS } from './keymap';
+import { isLeaderRoot, openSelected, SINGLE_KEYS } from './keymap';
+import { advanceLeader, cancelLeader, leader } from './leader.svelte';
 import { copyPdfSelection, pdfSelectionHasText } from './pdfCopy';
 import { openFind } from './readerState.svelte';
 import { viewer } from './tabs.svelte';
@@ -17,7 +18,7 @@ export function isEditable(t: EventTarget | null): boolean {
 }
 
 function anyModalOpen(): boolean {
-  return ui.importOpen || identifyState.open || ui.helpOpen;
+  return ui.importOpen || identifyState.open || ui.helpOpen || ui.filePickerOpen;
 }
 
 /// True when the browser has a real text selection of its own. Every surface
@@ -32,19 +33,20 @@ function hasDomSelection(): boolean {
   return (document.getSelection()?.toString() ?? '').trim() !== '';
 }
 
-/// Global keymap driver. The single-key bindings live as data in keymap.ts
-/// (SINGLE_KEYS); this dispatches them after the gating below. Modals own
-/// their Esc (Modal.svelte stops propagation); everything except ⌘K is inert
-/// while a modal is open or focus is in a text control. Spec deviation:
+/// Global keymap driver. Single keys live as data in keymap.ts
+/// (SINGLE_KEYS), multi-key sequences in LEADER_CHORDS; this dispatches both
+/// after the gating below. Modals own their Esc (Modal.svelte stops
+/// propagation); everything is inert while a modal — the file picker
+/// included — is open or focus is in a text control. Spec deviation:
 /// close-tab is `x`, not ⌘W — browsers reserve ⌘W/Ctrl+W for closing the
 /// browser tab.
 export function handleKeydown(e: KeyboardEvent): void {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-    e.preventDefault();
-    ui.paletteOpen = !ui.paletteOpen;
-    return;
-  }
   if (anyModalOpen()) return;
+  // No chord contains a modifier, so this keystroke belongs to one of the
+  // branches below. Abandoning the sequence here is what keeps a stray Space
+  // before a ⌘-shortcut from swallowing the *next* key, or completing a chord
+  // the user never started.
+  if (e.metaKey || e.ctrlKey || e.altKey) cancelLeader();
   // ⌘F finds in the open PDF; on the Library view the browser find is fine.
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
     if (viewer.activeId) {
@@ -90,7 +92,9 @@ export function handleKeydown(e: KeyboardEvent): void {
     return;
   }
   if (e.key === 'Escape') {
-    if (ui.paletteOpen) ui.paletteOpen = false;
+    // First rung: a half-typed chord is the most transient thing on screen,
+    // and Helix's own Esc abandons a pending sequence before anything else.
+    if (cancelLeader()) return;
     // Before the dock and zen rungs: a selected mark is the most local thing
     // on screen, and it is the one piece of reader state with no other way
     // out — clicking elsewhere on the page is the alternative. The command's
@@ -102,12 +106,29 @@ export function handleKeydown(e: KeyboardEvent): void {
     else if (ui.zen) ui.zen = false;
     return;
   }
-  if (isEditable(realTarget) || ui.paletteOpen) return;
+  if (isEditable(realTarget)) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   // Match letters case-insensitively so Caps Lock or a held Shift doesn't
   // dead-key a shortcut (`Z`/`X` would otherwise miss `z`/`x`). Named keys
   // (Enter, ArrowUp, …) are longer than one char and keep their exact spelling.
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  // Leader sequences run ahead of the single-key table and swallow their
+  // keys: `Space` then `j` must not also move the library selection. A key
+  // that starts no chord, mid-sequence, cancels rather than falling through
+  // — a mistyped second key is a mistake, not a new command. Space is left
+  // to the browser where it would activate a focused control, the same guard
+  // Enter applies below, so a focused row or star button still works.
+  if (leader.pending.length > 0 || isLeaderRoot(key)) {
+    const overControl =
+      leader.pending.length === 0 &&
+      realTarget instanceof HTMLElement &&
+      realTarget.closest('button, a, summary');
+    if (!overControl) {
+      e.preventDefault();
+      advanceLeader(key);
+      return;
+    }
+  }
   const binding = SINGLE_KEYS.find((b) => b.key === key);
   if (binding) {
     if (binding.when && !binding.when()) return;

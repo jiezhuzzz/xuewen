@@ -12,6 +12,7 @@ import type {
   PaperCodeStatus,
   PaperDetail,
   PaperSummary,
+  PreviewMeta,
   Project,
   SearchOpts,
   SearchResponse,
@@ -114,6 +115,19 @@ export async function getStats(): Promise<Stats> {
 
 export function pdfUrl(id: string): string {
   return `/papers/${encodeURIComponent(id)}/pdf`;
+}
+
+/// How many pages the picker's preview should lay out, and page one's shape.
+/// Rejects (422) when the PDF can't be rendered — the picker's cue to show a
+/// text card instead of images.
+export async function getPreviewMeta(id: string): Promise<PreviewMeta> {
+  return request(`/api/papers/${encodeURIComponent(id)}/preview`, 'preview failed');
+}
+
+/// A rendered page, for an <img> src. Not a `request()` call: the browser
+/// fetches, caches and lazy-loads these itself.
+export function previewPageUrl(id: string, page: number): string {
+  return `/papers/${encodeURIComponent(id)}/preview/${page}`;
 }
 
 export async function deletePaper(id: string): Promise<void> {

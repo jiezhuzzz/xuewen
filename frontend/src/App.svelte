@@ -2,11 +2,12 @@
   import { onMount, type Component } from 'svelte';
   import { Spring } from 'svelte/motion';
   import { fly, slide } from 'svelte/transition';
-  import CommandPalette from './components/CommandPalette.svelte';
+  import FilePicker from './components/FilePicker.svelte';
   import IdentifyModal from './components/IdentifyModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
   import LibraryPane from './components/LibraryPane.svelte';
   import LibraryTable from './components/LibraryTable.svelte';
+  import LeaderHint from './components/LeaderHint.svelte';
   import PaperContextMenu from './components/PaperContextMenu.svelte';
   import ReaderDock from './components/ReaderDock.svelte';
   import ShortcutHelp from './components/ShortcutHelp.svelte';
@@ -149,8 +150,10 @@
 </div>
 {#if ui.importOpen}<ImportModal />{/if}
 {#if identifyState.open}<IdentifyModal />{/if}
-{#if ui.paletteOpen}<CommandPalette />{/if}
+{#if ui.filePickerOpen}<FilePicker />{/if}
 {#if ui.helpOpen}<ShortcutHelp />{/if}
+<LeaderHint />
+
 <PaperContextMenu />
 <TranslatePopover />
 <Toaster />

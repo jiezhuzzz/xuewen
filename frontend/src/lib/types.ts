@@ -31,6 +31,14 @@ export interface PaperSummary {
   projects: ProjectRef[];
 }
 
+/// Geometry for the file picker's preview pane, from GET
+/// /api/papers/{id}/preview.
+export interface PreviewMeta {
+  pages: number;
+  page_width: number;
+  page_height: number;
+}
+
 export interface PaperDetail extends PaperSummary {
   abstract: string | null;
   summary: Summary | null;

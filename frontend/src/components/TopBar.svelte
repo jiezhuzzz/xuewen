@@ -4,7 +4,7 @@
   import { library, stats } from '../lib/library.svelte';
   import { filters, setStatusFilter } from '../lib/searchState.svelte';
   import { nextTheme, theme, toggleTheme } from '../lib/theme.svelte';
-  import { toggleSidebar, ui } from '../lib/ui.svelte';
+  import { toggleSidebar } from '../lib/ui.svelte';
   import SealMark from './SealMark.svelte';
 
   const THEME_NAMES = { light: 'Light', dark: 'Dark', system: 'System' } as const;
@@ -50,13 +50,6 @@
         {/if}
       </div>
     {/if}
-    <button
-      type="button"
-      onclick={() => (ui.paletteOpen = true)}
-      class="hidden items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-xs text-stone-400 hover:bg-parchment sm:inline-flex dark:border-stone-700 dark:hover:bg-stone-800"
-    >
-      <kbd>⌘K</kbd>
-    </button>
     <button
       type="button"
       onclick={openImport}
