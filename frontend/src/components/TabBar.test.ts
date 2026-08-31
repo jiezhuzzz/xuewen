@@ -58,6 +58,15 @@ describe('TabBar', () => {
     expect(close.className).toContain('focus-visible:opacity-100');
   });
 
+  it('balances the close button with a spacer so the label stays centered', () => {
+    openTab(paper('a', 'Attention Is All You Need', 'Transformer'));
+    render(TabBar);
+    const close = screen.getByRole('button', { name: 'Close tab' });
+    const spacer = close.parentElement!.firstElementChild!;
+    expect(spacer.className).toContain('w-4');
+    expect(close.className).toContain('w-4');
+  });
+
   it('labels a named paper by its name, keeping the full title as the tooltip', () => {
     openTab(paper('a', 'Attention Is All You Need', 'Transformer'));
     render(TabBar);
@@ -65,7 +74,7 @@ describe('TabBar', () => {
     // must stay the title even though the label no longer is.
     const tab = screen.getByTitle('Attention Is All You Need');
     expect(tab.textContent?.trim()).toBe('Transformer');
-    expect(tab.className).toContain('font-mono'); // same voice as the table's Name column
+    expect(tab.className).toContain('font-sans'); // same voice as the table's Name column
   });
 
   it('hosts no zen/info buttons (they live on the PDF toolbar)', async () => {

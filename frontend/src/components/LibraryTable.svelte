@@ -410,13 +410,12 @@
                 <Star size={14} fill={p.starred ? 'currentColor' : 'none'} />
               </button>
             </td>
-            <!-- Mono semibold at full ink, not the muted stone the other
-                 metadata columns wear: the name is a handle you scan for, and
-                 mono lines "RVSpec", "SWE-bench" and "AntiFuzz" up like the
-                 identifiers they are. No amber here, unlike the sidebar chip —
-                 its own labelled column already says what it is, and a whole
-                 column of the app's action color would drown the selected row. -->
-            <td class={`${td} font-mono text-xs font-semibold text-ink dark:text-stone-100`}>
+            <!-- Semibold at full ink, not the muted stone the other metadata
+                 columns wear: the name is a handle you scan for. No amber
+                 here, unlike the sidebar chip — its own labelled column
+                 already says what it is, and a whole column of the app's
+                 action color would drown the selected row. -->
+            <td class={`${td} font-sans text-xs font-semibold text-ink dark:text-stone-100`}>
               <div class="truncate" data-col="name" title={p.name ?? undefined}>
                 <!-- font-normal on the dash only: the ghost em-dash is the
                      table's shared empty-state idiom and shouldn't come out
