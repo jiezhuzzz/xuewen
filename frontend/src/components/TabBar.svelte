@@ -28,7 +28,7 @@
       <span
         in:receive={{ key: 'tab-underline' }}
         out:send={{ key: 'tab-underline' }}
-        class="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-amber-700 dark:bg-amber-500"
+        class="absolute inset-x-2 top-0 h-0.5 rounded-full bg-amber-700 dark:bg-amber-500"
       ></span>
     {/if}
   </button>
@@ -81,7 +81,7 @@
           <span
             in:receive={{ key: 'tab-underline' }}
             out:send={{ key: 'tab-underline' }}
-            class="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-amber-700 dark:bg-amber-500"
+            class="absolute inset-x-2 top-0 h-0.5 rounded-full bg-amber-700 dark:bg-amber-500"
           ></span>
         {/if}
       </div>
