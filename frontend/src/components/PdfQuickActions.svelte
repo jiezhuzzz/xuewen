@@ -1,6 +1,6 @@
 <script lang="ts">
   import { chat } from '../lib/chat.svelte';
-  import { DUR, dur, EASE } from '../lib/motion';
+  import { pillMotionStyle } from '../lib/pillStyles';
   import { toggleZen } from '../lib/tabs.svelte';
   import { dock, toggleDock, ui } from '../lib/ui.svelte';
   import type { PillHide } from '../lib/pillHide.svelte';
@@ -31,7 +31,7 @@
   onpointerleave={() => pill.pillLeave()}
   onfocusin={() => pill.focusIn()}
   onfocusout={() => pill.focusOut()}
-  style:transition="opacity {dur(DUR.base)}ms {EASE}"
+  style={pillMotionStyle(!hidden)}
   class={`absolute right-3 top-3 z-20 flex items-center gap-1 rounded-xl border border-stone-200 bg-paper/90 px-1.5 py-1 shadow backdrop-blur dark:border-stone-800 dark:bg-soot/90 ${
     hidden ? 'pointer-events-none opacity-0' : 'opacity-100'
   }`}

@@ -17,9 +17,12 @@ import { pdfAppearance } from '../lib/theme.svelte';
 // events, so all must be present or the events throw.
 const pill = {
   visible: true,
+  toolbarVisible: true,
   setHost: () => {},
   setExtraHold: () => {},
   onWindowMove: () => {},
+  onScroll: () => {},
+  onScrollJump: () => {},
   pillEnter: () => {},
   pillLeave: () => {},
   focusIn: () => {},

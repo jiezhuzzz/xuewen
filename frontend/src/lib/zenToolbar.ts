@@ -14,13 +14,27 @@ export interface ToolbarHold {
   localHold: boolean; //  any toolbar-local interaction (page input, open menus)
 }
 
+/// An explicit interaction with the pill, in or out of zen. Split out of
+/// `holdVisible` because scroll-hide runs outside zen too, where the zen gate
+/// alone reports everything as held.
+export function heldOpen(s: ToolbarHold): boolean {
+  return s.hotZone || s.pointerOver || s.focusWithin || s.findOpen || s.localHold;
+}
+
 /// While any hold is active the toolbar stays visible and the hide timer
 /// must be cancelled. Outside zen the toolbar is unconditionally visible.
 export function holdVisible(s: ToolbarHold): boolean {
-  return !s.zen || s.hotZone || s.pointerOver || s.focusWithin || s.findOpen || s.localHold;
+  return !s.zen || heldOpen(s);
 }
 
 /// Final visibility: held, or the hide timer hasn't fired yet.
 export function toolbarVisible(s: ToolbarHold, idleExpired: boolean): boolean {
   return holdVisible(s) || !idleExpired;
+}
+
+/// The center toolbar additionally yields to reading direction (see
+/// lib/scrollHide.ts) — everywhere, not just in zen. A hold outranks it, so
+/// the pill can't slip away under the pointer that is using it.
+export function readerToolbarVisible(s: ToolbarHold, idleExpired: boolean, scrollHidden: boolean): boolean {
+  return toolbarVisible(s, idleExpired) && (heldOpen(s) || !scrollHidden);
 }

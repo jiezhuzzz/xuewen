@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { useRegistry, useDocumentState } from '@embedpdf/core/svelte';
-  import { Viewport } from '@embedpdf/plugin-viewport/svelte';
+  import { Viewport, useViewportCapability } from '@embedpdf/plugin-viewport/svelte';
   import { Scroller, type PageLayout } from '@embedpdf/plugin-scroll/svelte';
   import { ZoomGestureWrapper } from '@embedpdf/plugin-zoom/svelte';
   import { DocumentContent } from '@embedpdf/plugin-document-manager/svelte';
@@ -98,6 +98,23 @@
   let pillHost = $state<HTMLDivElement | undefined>();
   $effect(() => {
     pill.setHost(pillHost ?? null);
+  });
+
+  // Reading direction feeds the toolbar's scroll-hide. Subscribed
+  // registry-wide and filtered on the id rather than through
+  // `forDocument(documentId)`, which throws for a document the viewport
+  // plugin has not seen yet — PdfPages mounts before the document opens.
+  // A smooth scroll is one this app commanded (jump to page, find, outline),
+  // so it re-anchors instead of counting as the reader scrolling away.
+  const viewportCap = useViewportCapability();
+  $effect(() => {
+    const cap = viewportCap.provides;
+    if (!cap) return;
+    return cap.onScrollChange(({ documentId: id, scrollMetrics }) => {
+      if (id !== documentId) return;
+      if (cap.isSmoothScrolling()) pill.onScrollJump(scrollMetrics.scrollTop);
+      else pill.onScroll(scrollMetrics.scrollTop);
+    });
   });
 
   // Animated panel push (the library-pane idiom — see App.svelte): the

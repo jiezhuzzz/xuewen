@@ -21,6 +21,8 @@ vi.hoisted(() => {
 vi.mock('@embedpdf/core/svelte', () => ({
   useRegistry: () => ({ registry: null }),
   useDocumentState: () => ({ current: null }),
+  // What useViewportCapability (scroll-hide wiring) resolves through.
+  useCapability: () => ({ provides: null, isLoading: false, ready: Promise.resolve() }),
 }));
 // Partial: annotationRenderers.ts needs the real createRenderer at import.
 vi.mock('@embedpdf/plugin-annotation/svelte', async (importOriginal) => ({

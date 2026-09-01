@@ -5,14 +5,13 @@
   import AnnotationHistory from './AnnotationHistory.svelte';
   import AnnotationTools from './AnnotationTools.svelte';
   import ToolbarMenu from './ToolbarMenu.svelte';
-  import { DUR, dur, EASE } from '../lib/motion';
   import { viewer } from '../lib/tabs.svelte';
   import { cyclePdfAppearance, nextPdfAppearance, pdfAppearance } from '../lib/theme.svelte';
   import { ui } from '../lib/ui.svelte';
   import { reader, setFind, toggleSidebar } from '../lib/readerState.svelte';
   import { clampPage } from '../lib/pageNav';
   import { formatScale, isActivePreset, ZOOM_PRESETS } from '../lib/zoomPresets';
-  import { activeBtn, btn } from '../lib/pillStyles';
+  import { activeBtn, btn, pillMotionStyle } from '../lib/pillStyles';
   import type { PillHide } from '../lib/pillHide.svelte';
 
   let { documentId, pill }: { documentId: string; pill: PillHide } = $props();
@@ -65,9 +64,9 @@
   onpointerleave={() => pill.pillLeave()}
   onfocusin={() => pill.focusIn()}
   onfocusout={() => pill.focusOut()}
-  style:transition="opacity {dur(DUR.base)}ms {EASE}"
+  style={pillMotionStyle(pill.toolbarVisible)}
   class={`absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-stone-200 bg-paper/90 px-1.5 py-1 shadow backdrop-blur dark:border-stone-800 dark:bg-soot/90 ${
-    pill.visible ? 'opacity-100' : 'pointer-events-none opacity-0'
+    pill.toolbarVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
   }`}
 >
   {#if ui.zen}

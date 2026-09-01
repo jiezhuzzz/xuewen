@@ -1,3 +1,25 @@
+import { DUR, dur, EASE } from './motion';
+
+/// Show/hide motion for the floating pills, shared so the two can't drift
+/// apart (they fade together in zen). A short rise accompanies the fade —
+/// a bare dissolve over a scrolling page reads as a stutter rather than as
+/// motion — and the compositing layer is declared up front, or the first
+/// frame of every fade is spent promoting a backdrop-filtered element.
+/// Reveal is quicker than the hide: scrolling back up is a request to use
+/// the toolbar, while hiding may as well get out of the way gently.
+///
+/// `transform` is free for this because Tailwind v4 centers the toolbar
+/// with the separate `translate` property (`-translate-x-1/2`), so the two
+/// don't overwrite each other.
+export function pillMotionStyle(visible: boolean): string {
+  const ms = dur(visible ? DUR.fast : DUR.base);
+  return [
+    `transition: opacity ${ms}ms ${EASE}, transform ${ms}ms ${EASE}`,
+    `transform: translateY(${visible ? '0' : '-6px'})`,
+    'will-change: opacity, transform',
+  ].join('; ');
+}
+
 /// The reader pill's shared control styling — one copy for the components
 /// whose buttons are meant to look identical (PdfToolbar, AnnotationTools,
 /// AnnotationHistory, AnnotationSelectionMenu, PdfFindBar). PdfQuickActions'

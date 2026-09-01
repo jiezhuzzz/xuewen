@@ -14,9 +14,12 @@ import type { PillHide } from '../lib/pillHide.svelte';
 function makePill(): PillHide {
   return {
     visible: true,
+    toolbarVisible: true,
     setHost() {},
     setExtraHold() {},
     onWindowMove() {},
+    onScroll() {},
+    onScrollJump() {},
     pillEnter() {},
     pillLeave() {},
     focusIn() {},
