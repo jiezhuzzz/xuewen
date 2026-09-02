@@ -30,6 +30,38 @@ describe('abbreviateVenue', () => {
     ).toBe('ISSTA');
   });
 
+  it('maps every POPL spelling to POPL', () => {
+    expect(abbreviateVenue('POPL 2026')).toBe('POPL');
+    expect(
+      abbreviateVenue('Proceedings of the 53rd ACM SIGPLAN Symposium on Principles of Programming Languages'),
+    ).toBe('POPL');
+    expect(abbreviateVenue('Proc. ACM Program. Lang. 8(POPL)')).toBe('POPL');
+    // What the resolver now stores: the journal plus the issue that names
+    // the conference (src/resolve/mod.rs: venue_with_issue).
+    expect(abbreviateVenue('Proceedings of the ACM on Programming Languages (POPL)')).toBe('POPL');
+  });
+
+  it('falls back to PACMPL only when no issue names a conference', () => {
+    expect(abbreviateVenue('Proceedings of the ACM on Programming Languages')).toBe('PACMPL');
+    expect(abbreviateVenue('Proc. ACM Program. Lang. 9(ICFP)')).toBe('ICFP');
+  });
+
+  it('maps USENIX Security to SEC', () => {
+    expect(abbreviateVenue('USENIX Security Symposium')).toBe('SEC');
+  });
+
+  it('maps the Artificial Intelligence journal to AIJ', () => {
+    expect(abbreviateVenue('Artificial Intelligence')).toBe('AIJ');
+    expect(abbreviateVenue('Artif. Intell.')).toBe('AIJ');
+  });
+
+  it('leaves other journals with Artificial Intelligence in the name alone', () => {
+    expect(abbreviateVenue('Journal of Artificial Intelligence Research')).toBe(
+      'Journal of Artificial Intelligence Research',
+    );
+    expect(abbreviateVenue('Artificial Intelligence Review')).toBe('Artificial Intelligence Review');
+  });
+
   it('falls back to a trailing parenthetical acronym when unmapped', () => {
     expect(abbreviateVenue('2024 Conference on Made Up Things (CMUT)')).toBe('CMUT');
   });

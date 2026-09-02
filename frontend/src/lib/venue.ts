@@ -9,7 +9,7 @@
 const RULES: { pattern: RegExp; abbr: string }[] = [
   // Security
   { pattern: /security and privacy|\bs\s?&\s?p\b|\boakland\b/i, abbr: 'S&P' },
-  { pattern: /usenix security/i, abbr: 'USENIX Security' },
+  { pattern: /usenix security/i, abbr: 'SEC' },
   { pattern: /computer and communications security|\bccs\b/i, abbr: 'CCS' },
   { pattern: /network and distributed system security|\bndss\b/i, abbr: 'NDSS' },
   // ML / AI
@@ -17,6 +17,9 @@ const RULES: { pattern: RegExp; abbr: string }[] = [
   { pattern: /international conference on machine learning|\bicml\b/i, abbr: 'ICML' },
   { pattern: /international conference on learning representations|\biclr\b/i, abbr: 'ICLR' },
   { pattern: /association for the advancement of artificial intelligence|\baaai\b/i, abbr: 'AAAI' },
+  // Anchored: the bare journal name is a substring of JAIR, AI Review, AIJ's own
+  // special issues — matching loosely would collapse all of them into AIJ.
+  { pattern: /^(?:artificial intelligence|artif\.?\s*intell\.?)$/i, abbr: 'AIJ' },
   { pattern: /computer vision and pattern recognition|\bcvpr\b/i, abbr: 'CVPR' },
   { pattern: /international conference on computer vision|\biccv\b/i, abbr: 'ICCV' },
   { pattern: /european conference on computer vision|\beccv\b/i, abbr: 'ECCV' },
@@ -36,6 +39,10 @@ const RULES: { pattern: RegExp; abbr: string }[] = [
   { pattern: /principles of programming languages|\bpopl\b/i, abbr: 'POPL' },
   { pattern: /object-oriented programming.*systems.*languages|\boopsla\b/i, abbr: 'OOPSLA' },
   { pattern: /international conference on functional programming|\bicfp\b/i, abbr: 'ICFP' },
+  // Last of the PL rules: PACMPL is the container, and its issue marker —
+  // "Proc. ACM Program. Lang. 8(POPL)" — is the venue people mean, so the
+  // four conference rules above have to get first refusal.
+  { pattern: /proceedings of the acm on programming languages|\bpacmpl\b|proc\.?\s*acm\s*program\.?\s*lang\.?/i, abbr: 'PACMPL' },
   // Databases
   { pattern: /management of data|\bsigmod\b/i, abbr: 'SIGMOD' },
   { pattern: /very large data bases|\bvldb\b/i, abbr: 'VLDB' },
