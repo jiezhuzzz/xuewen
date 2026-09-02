@@ -44,10 +44,13 @@ pub fn parse_search(json: &str) -> Result<Vec<ResolvedMetadata>> {
 /// (either `message` for a DOI lookup or one element of `message.items`).
 fn parse_item(m: &Value) -> ResolvedMetadata {
     let title = m["title"].get(0).and_then(Value::as_str).map(collapse_ws);
-    let venue = m["container-title"]
-        .get(0)
-        .and_then(Value::as_str)
-        .map(collapse_ws);
+    let venue = super::venue_with_issue(
+        m["container-title"]
+            .get(0)
+            .and_then(Value::as_str)
+            .map(collapse_ws),
+        m["issue"].as_str(),
+    );
     let doi = m["DOI"].as_str().map(str::to_string);
     let url = m["URL"].as_str().map(str::to_string);
     let abstract_text = m["abstract"].as_str().map(strip_tags);
@@ -116,6 +119,29 @@ mod tests {
             .unwrap()
             .starts_with("Proceedings of the 25th ACM SIGKDD"));
         assert_eq!(md.source, "crossref");
+    }
+
+    #[test]
+    fn pacmpl_issue_names_the_conference_in_the_venue() {
+        // PACMPL is one journal per conference issue: without the issue,
+        // "Incorrectness logic" reads as the container, not as POPL.
+        let json = r#"{"status":"ok","message":{"title":["Incorrectness logic"],
+            "container-title":["Proceedings of the ACM on Programming Languages"],
+            "issue":"POPL","DOI":"10.1145/3371078","issued":{"date-parts":[[2019,12]]}}}"#;
+        let md = parse(json).unwrap().unwrap();
+        assert_eq!(
+            md.venue.as_deref(),
+            Some("Proceedings of the ACM on Programming Languages (POPL)")
+        );
+    }
+
+    #[test]
+    fn a_numeric_issue_names_nothing_and_is_left_off() {
+        let json = r#"{"status":"ok","message":{"title":["A paper"],
+            "container-title":["Artificial Intelligence"],"issue":"3",
+            "DOI":"10.1/x","issued":{"date-parts":[[2020]]}}}"#;
+        let md = parse(json).unwrap().unwrap();
+        assert_eq!(md.venue.as_deref(), Some("Artificial Intelligence"));
     }
 
     #[test]

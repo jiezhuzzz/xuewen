@@ -28,6 +28,21 @@ pub struct ResolvedMetadata {
     pub source: String,
 }
 
+/// Fold an issue that names a conference into the venue string. ACM publishes
+/// PACMPL and PACMHCI as one issue per conference, so the container title
+/// ("Proceedings of the ACM on Programming Languages") cannot say whether a
+/// paper is POPL, ICFP, OOPSLA or PLDI — only `issue`/`number` can, and
+/// without it the venue is the journal alone. An ordinary numeric issue names
+/// nothing and is left off.
+fn venue_with_issue(venue: Option<String>, issue: Option<&str>) -> Option<String> {
+    let venue = venue?;
+    let issue = issue.unwrap_or("").trim();
+    if !issue.chars().any(|c| c.is_ascii_alphabetic()) || venue.contains(issue) {
+        return Some(venue);
+    }
+    Some(format!("{venue} ({issue})"))
+}
+
 /// Fetches authoritative metadata for an identifier. A network or parse failure
 /// degrades to `None` — resolution never aborts ingestion.
 pub struct Resolver {

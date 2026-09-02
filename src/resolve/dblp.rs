@@ -28,7 +28,7 @@ pub fn parse(json: &str) -> Result<Vec<ResolvedMetadata>> {
         }
         let title = info["title"].as_str().map(clean_title);
         let year = info["year"].as_str().and_then(|s| s.parse::<i64>().ok());
-        let venue = venue_of(&info["venue"]);
+        let venue = super::venue_with_issue(venue_of(&info["venue"]), info["number"].as_str());
         let doi = info["doi"].as_str().map(str::to_string);
         let url = info["ee"]
             .as_str()
@@ -119,6 +119,24 @@ mod tests {
         assert_eq!(c.dblp_key.as_deref(), Some("conf/kdd/WangHCLC19"));
         assert_eq!(c.authors, vec!["Xiang Wang", "Xiangnan He", "Yixin Cao"]);
         assert_eq!(c.source, "dblp");
+    }
+
+    #[test]
+    fn a_pacmpl_hit_carries_its_conference_issue() {
+        let json = r#"{"result":{"hits":{"@total":"1","hit":[{"info":{
+            "title":"Incorrectness logic.","year":"2020",
+            "venue":"Proc. ACM Program. Lang.","number":"POPL",
+            "doi":"10.1145/3371078","key":"journals/pacmpl/OHearn20"}}]}}}"#;
+        let c = &parse(json).unwrap()[0];
+        assert_eq!(c.venue.as_deref(), Some("Proc. ACM Program. Lang. (POPL)"));
+    }
+
+    #[test]
+    fn a_numeric_issue_is_not_a_venue_name() {
+        let json = r#"{"result":{"hits":{"@total":"1","hit":[{"info":{
+            "title":"A paper.","year":"2020","venue":"Artif. Intell.","number":"3"}}]}}}"#;
+        let c = &parse(json).unwrap()[0];
+        assert_eq!(c.venue.as_deref(), Some("Artif. Intell."));
     }
 
     #[test]
