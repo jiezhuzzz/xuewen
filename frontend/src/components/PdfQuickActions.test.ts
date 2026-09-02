@@ -30,40 +30,40 @@ function makePill(): PillHide {
 beforeEach(() => {
   viewer.activeId = 'p1';
   dock.open = false;
-  dock.tab = 'details';
+  dock.entry = null;
   ui.zen = false;
   chat.available = true;
   localStorage.clear();
 });
 
 describe('PdfQuickActions seals', () => {
-  it('renders 禪 詳 問 and no translate toggle', () => {
+  it('renders one seal — 問 — and no zen or translate toggle', () => {
     render(PdfQuickActions, { props: { pill: makePill() } });
-    expect(screen.getByRole('button', { name: 'Zen mode' })).toHaveTextContent('禪');
-    expect(screen.getByRole('button', { name: 'Details' })).toHaveTextContent('詳');
-    expect(screen.getByRole('button', { name: 'Ask about this paper' })).toHaveTextContent('問');
+    expect(screen.getByRole('button', { name: 'Paper panel' })).toHaveTextContent('問');
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Zen mode' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /translate/i })).not.toBeInTheDocument();
   });
 
-  it('hides 問 when chat is unavailable', () => {
+  it('falls back to 詳 when chat is unavailable — the panel is then the record alone', () => {
     chat.available = false;
     render(PdfQuickActions, { props: { pill: makePill() } });
-    expect(screen.queryByRole('button', { name: 'Ask about this paper' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Paper panel' })).toHaveTextContent('詳');
   });
 
-  it('詳 and 問 open the dock on their tabs', async () => {
+  it('the seal opens the dock on the composer, or on the record without chat', async () => {
     render(PdfQuickActions, { props: { pill: makePill() } });
-    await userEvent.click(screen.getByRole('button', { name: 'Details' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Paper panel' }));
     expect(dock.open).toBe(true);
-    expect(dock.tab).toBe('details');
-    await userEvent.click(screen.getByRole('button', { name: 'Ask about this paper' }));
-    expect(dock.tab).toBe('ask');
-  });
+    expect(dock.entry).toBe('ask');
 
-  it('禪 toggles zen', async () => {
+    dock.open = false;
+    dock.entry = null;
+    chat.available = false;
     render(PdfQuickActions, { props: { pill: makePill() } });
-    await userEvent.click(screen.getByRole('button', { name: 'Zen mode' }));
-    expect(ui.zen).toBe(true);
+    await userEvent.click(screen.getAllByRole('button', { name: 'Paper panel' })[1]);
+    expect(dock.open).toBe(true);
+    expect(dock.entry).toBe('record');
   });
 
   it('the pill yields while the dock is open', () => {

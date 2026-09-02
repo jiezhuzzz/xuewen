@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import DockAsk from './DockAsk.svelte';
+import DockComposer from './DockComposer.svelte';
 import { chat } from '../lib/chat.svelte';
 
 beforeEach(() => {
@@ -20,17 +20,22 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })));
 });
 
-describe('DockAsk', () => {
-  it('shows the empty-state invitation and the model picker', () => {
-    render(DockAsk);
-    expect(screen.getByText(/Ask about the methods/)).toBeInTheDocument();
+describe('DockComposer', () => {
+  it('offers the model picker and the ask box', () => {
+    render(DockComposer);
     expect(screen.getByLabelText('Model')).toHaveValue('0');
+    expect(screen.getByPlaceholderText('Ask about this paper…')).toBeInTheDocument();
   });
 
   it('changing the model persists the choice', async () => {
-    render(DockAsk);
+    render(DockComposer);
     await userEvent.selectOptions(screen.getByLabelText('Model'), '1');
     expect(localStorage.getItem('xuewen-chat-model')).toBe('1');
+  });
+
+  it('offers Clear only once there is a conversation to clear', async () => {
+    render(DockComposer);
+    expect(screen.queryByRole('button', { name: 'Clear conversation' })).not.toBeInTheDocument();
   });
 
   it('clear asks for confirmation before deleting', async () => {
@@ -40,36 +45,11 @@ describe('DockAsk', () => {
     ];
     const fetchSpy = vi.fn(async () => new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetchSpy);
-    render(DockAsk);
+    render(DockComposer);
     await userEvent.click(screen.getByRole('button', { name: 'Clear conversation' }));
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(screen.getByText('Clear this conversation?')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(fetchSpy).toHaveBeenCalled();
-  });
-
-  it('renders the model label under assistant turns', () => {
-    chat.messages = [
-      { id: 1, role: 'user', content: 'q', model: null, created_at: '', tools: null },
-      { id: 2, role: 'assistant', content: 'a', model: 'Mock A', created_at: '', tools: null },
-    ];
-    render(DockAsk);
-    expect(screen.getByText('Mock A', { selector: 'p' })).toBeInTheDocument();
-  });
-
-  it('renders tool chips above the assistant text', () => {
-    chat.messages = [
-      { id: 1, role: 'user', content: 'q', model: null, created_at: '', tools: null },
-      {
-        id: 2,
-        role: 'assistant',
-        content: 'a',
-        model: 'Claude Code',
-        created_at: '',
-        tools: [{ name: 'Read', detail: 'paper.txt' }],
-      },
-    ];
-    render(DockAsk);
-    expect(screen.getByText(/Read paper\.txt/)).toBeInTheDocument();
   });
 });

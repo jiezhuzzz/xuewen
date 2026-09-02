@@ -4,27 +4,44 @@
   import { chat } from '../lib/chat.svelte';
   import { DUR, dur } from '../lib/motion';
   import { toggleZen } from '../lib/tabs.svelte';
-  import { closeDock, dock, openDock, ui } from '../lib/ui.svelte';
-  import DockAsk from './DockAsk.svelte';
+  import { closeDock, dock, ui } from '../lib/ui.svelte';
+  import DockComposer, { COMPOSER_ID } from './DockComposer.svelte';
   import DockDetails from './DockDetails.svelte';
+  import DockThread from './DockThread.svelte';
 
   let { id }: { id: string } = $props();
 
-  // Ask is only offered when chat is configured; a remembered 'ask' tab
-  // degrades to Details rather than rendering a dead tab.
-  const tab = $derived(dock.tab === 'ask' && !chat.available ? 'details' : dock.tab);
+  let scroller = $state<HTMLElement | null>(null);
 
-  // A remembered 'ask' tab with chat unavailable would leave dock.tab
-  // pointing at a tab that isn't rendered — write the degrade back so the
-  // i/c shortcuts and the thread-follow effect see the truth.
+  // A one-shot entry request (`i`, `c`, the rail seal, "Ask about this" in the
+  // translate popover) says where to land, not what to show — one surface
+  // holds both. Consumed here so a repeat of the same request still fires.
   $effect(() => {
-    if (dock.tab === 'ask' && !chat.available) openDock('details');
+    const entry = dock.entry;
+    if (!entry) return;
+    dock.entry = null;
+    if (entry === 'ask') document.getElementById(COMPOSER_ID)?.focus();
+    else scroller?.scrollTo({ top: 0 });
   });
 
-  const tabBase = 'rounded-lg px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[.07em]';
-  const tabOff = 'text-stone-500 hover:bg-parchment hover:text-ink dark:text-stone-400 dark:hover:bg-stone-800';
-  const tabOn = 'bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500';
-  const iconBtn = 'rounded-lg p-1.5 text-stone-500 hover:bg-parchment hover:text-ink dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-100';
+  // The record sits above the thread in one scroll, so following the answer
+  // is opt-in: it starts off (opening the dock must land on the record, not
+  // jump past it to an old conversation) and turns on when the reader asks
+  // something or scrolls to the bottom themselves.
+  let stick = $state(false);
+  let asking = false;
+  function onScroll() {
+    if (!scroller) return;
+    stick = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 40;
+  }
+  $effect(() => {
+    const pending = chat.pending;
+    void chat.messages.length;
+    void chat.streaming;
+    if (pending !== null && !asking) stick = true;
+    asking = pending !== null;
+    if (stick && scroller) scroller.scrollTop = scroller.scrollHeight;
+  });
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
@@ -45,68 +62,43 @@
   onkeydown={onKeydown}
   class="absolute inset-y-3 right-3 z-40 flex w-96 max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-paper shadow-2xl dark:border-stone-800 dark:bg-soot"
 >
-  <!-- Close/zen sit on the LEFT, tabs on the RIGHT: the quick-action rail
-       (禪詳問, top-right of the reader) hides when the dock opens, and a
-       follow-up click at 詳/問's old position must land on the matching
-       Details/Ask tab — not on close, which used to sit there and instantly
-       dismissed the dock (the classic misclick this ordering fixes). -->
-  <div class="flex shrink-0 items-center justify-between gap-2 border-b border-stone-200 px-2.5 py-2 dark:border-stone-800">
-    <div class="flex items-center gap-0.5">
-      <button
-        type="button"
-        class={iconBtn}
-        aria-label="Close panel"
-        title="Close — Esc"
-        onclick={closeDock}
-      >
-        <X size={15} />
-      </button>
-      <button
-        type="button"
-        class={iconBtn}
-        aria-label="Zen mode"
-        title="Zen — z"
-        onclick={toggleZen}
-      >
-        {#if ui.zen}<Minimize2 size={15} />{:else}<Maximize2 size={15} />{/if}
-      </button>
-    </div>
-    <div role="tablist" aria-label="Panel tabs" class="flex items-center gap-1">
-      <button
-        type="button"
-        role="tab"
-        id="dock-tab-details"
-        aria-selected={tab === 'details'}
-        aria-controls="dock-panel"
-        class={`${tabBase} ${tab === 'details' ? tabOn : tabOff}`}
-        onclick={() => openDock('details')}
-      >Details</button>
-      {#if chat.available}
-        <button
-          type="button"
-          role="tab"
-          id="dock-tab-ask"
-          aria-selected={tab === 'ask'}
-          aria-controls="dock-panel"
-          class={`${tabBase} ${tab === 'ask' ? tabOn : tabOff}`}
-          onclick={() => openDock('ask')}
-        >Ask 問</button>
-      {/if}
-    </div>
+  <!-- Close/zen sit on the LEFT: the quick-action rail (問, top-right of the
+       reader) hides when the dock opens, and a follow-up click at its old
+       position must not land on close, which would instantly dismiss the
+       panel that click just opened. -->
+  <div class="flex shrink-0 items-center gap-0.5 border-b border-stone-200 px-2.5 py-2 dark:border-stone-800">
+    <button
+      type="button"
+      class="rounded-lg p-1.5 text-stone-500 hover:bg-parchment hover:text-ink dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-100"
+      aria-label="Close panel"
+      title="Close — Esc"
+      onclick={closeDock}
+    >
+      <X size={15} />
+    </button>
+    <button
+      type="button"
+      class="rounded-lg p-1.5 text-stone-500 hover:bg-parchment hover:text-ink dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-100"
+      aria-label="Zen mode"
+      title="Zen — z"
+      onclick={toggleZen}
+    >
+      {#if ui.zen}<Minimize2 size={15} />{:else}<Maximize2 size={15} />{/if}
+    </button>
   </div>
 
   <div
-    role="tabpanel"
-    id="dock-panel"
-    aria-labelledby={tab === 'details' ? 'dock-tab-details' : 'dock-tab-ask'}
-    class="flex min-h-0 flex-1 flex-col"
+    bind:this={scroller}
+    onscroll={onScroll}
+    class="min-h-0 flex-1 overflow-y-auto px-4 py-4"
   >
-    {#if tab === 'details'}
-      {#key id}
-        <DockDetails {id} />
-      {/key}
-    {:else}
-      <DockAsk />
+    <DockDetails {id} />
+    {#if chat.available}
+      <DockThread />
     {/if}
   </div>
+
+  {#if chat.available}
+    <DockComposer />
+  {/if}
 </aside>

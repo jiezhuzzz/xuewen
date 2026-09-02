@@ -5,49 +5,59 @@ import { closeDock, dock, initDock, openDock, toggleDock } from './ui.svelte';
 beforeEach(() => {
   localStorage.clear();
   dock.open = false;
-  dock.tab = 'details';
+  dock.entry = null;
   viewer.activeId = 'p1';
 });
 
 describe('dock state', () => {
-  it('toggleDock opens on the requested tab', () => {
+  it('toggleDock opens with the requested entry point', () => {
     toggleDock('ask');
     expect(dock.open).toBe(true);
-    expect(dock.tab).toBe('ask');
+    expect(dock.entry).toBe('ask');
   });
 
-  it('re-toggling the open tab closes; the other tab switches', () => {
-    openDock('details');
-    toggleDock('ask'); // switch, stay open
+  it('i closes an open dock; c re-requests the composer instead', () => {
+    openDock('record');
+    toggleDock('ask'); // asks for the composer — stays open
     expect(dock.open).toBe(true);
-    expect(dock.tab).toBe('ask');
-    toggleDock('ask'); // same tab -> close
+    expect(dock.entry).toBe('ask');
+    dock.entry = null; // consumed by ReaderDock
+    toggleDock('ask');
+    expect(dock.open).toBe(true);
+    expect(dock.entry).toBe('ask');
+    toggleDock('record');
     expect(dock.open).toBe(false);
   });
 
   it('toggleDock is a no-op without an active PDF tab', () => {
     viewer.activeId = null;
-    toggleDock('details');
+    toggleDock('record');
     expect(dock.open).toBe(false);
   });
 
   it('open/close persist and initDock restores them', () => {
     openDock('ask');
     dock.open = false;
-    dock.tab = 'details';
     initDock();
     expect(dock.open).toBe(true);
-    expect(dock.tab).toBe('ask');
     closeDock();
     dock.open = true;
     initDock();
     expect(dock.open).toBe(false);
   });
 
+  it('the entry point is a one-shot request, never persisted', () => {
+    openDock('ask');
+    dock.entry = null;
+    initDock();
+    expect(dock.entry).toBeNull();
+    closeDock();
+    expect(dock.entry).toBeNull();
+  });
+
   it('initDock tolerates corrupted storage', () => {
     localStorage.setItem('xuewen-dock', '{nope');
     initDock();
     expect(dock.open).toBe(false);
-    expect(dock.tab).toBe('details');
   });
 });

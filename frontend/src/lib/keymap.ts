@@ -64,8 +64,8 @@ export const SINGLE_KEYS: readonly KeyBinding[] = [
   { key: '/', label: 'Search library', preventDefault: true, run: focusSearch },
   { key: '?', label: 'Keyboard shortcuts', preventDefault: true, run: () => (ui.helpOpen = true) },
   { key: '[', label: 'Toggle list pane', run: toggleSidebar },
-  { key: 'c', label: 'Ask panel', when: () => chat.available, run: () => toggleDock('ask') },
-  { key: 'i', label: 'Details panel', run: () => toggleDock('details') },
+  { key: 'c', label: 'Paper panel · ask', when: () => chat.available, run: () => toggleDock('ask') },
+  { key: 'i', label: 'Paper panel', run: () => toggleDock('record') },
   {
     key: 'a',
     label: 'Annotations panel',

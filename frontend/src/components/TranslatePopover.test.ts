@@ -10,7 +10,7 @@ beforeEach(() => {
   closeTranslate();
   appSettings.translate = { enabled: true, providers: ['llm', 'deepl'], default_provider: 'llm', target_lang: 'zh', trigger: 'auto' };
   dock.open = false;
-  dock.tab = 'details';
+  dock.entry = null;
   chat.draft = '';
   chat.available = true;
   vi.unstubAllGlobals();
@@ -44,12 +44,12 @@ describe('TranslatePopover', () => {
     expect((navigator.clipboard.writeText as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('你好世界');
   });
 
-  it('Ask about this prefills the chat draft and opens the dock on Ask', async () => {
+  it('Ask about this prefills the chat draft and opens the dock on the composer', async () => {
     openBox();
     render(TranslatePopover);
     await userEvent.click(screen.getByRole('button', { name: /ask about this/i }));
     expect(dock.open).toBe(true);
-    expect(dock.tab).toBe('ask');
+    expect(dock.entry).toBe('ask');
     expect(chat.draft).toContain('hello world');
   });
 

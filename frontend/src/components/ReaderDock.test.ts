@@ -17,7 +17,7 @@ const detail = {
 beforeEach(() => {
   viewer.activeId = 'p1';
   dock.open = true;
-  dock.tab = 'details';
+  dock.entry = null;
   ui.zen = false;
   appSettings.foldAbstract = false;
   chat.available = true;
@@ -42,39 +42,38 @@ beforeEach(() => {
 });
 
 describe('ReaderDock', () => {
-  it('opens on Details and switches to Ask via the tab', async () => {
+  it('carries the record and the composer on one surface, with no tabs', async () => {
     render(ReaderDock, { props: { id: 'p1' } });
     expect(await screen.findByText('Attention')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('tab', { name: /Ask/ }));
-    expect(dock.tab).toBe('ask');
     expect(screen.getByPlaceholderText('Ask about this paper…')).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
   });
 
-  it('hides the Ask tab and degrades a restored ask tab when chat is unavailable', async () => {
+  it('drops the composer when chat is unavailable, keeping the record', async () => {
     chat.available = false;
-    dock.tab = 'ask';
     render(ReaderDock, { props: { id: 'p1' } });
-    expect(screen.queryByRole('tab', { name: /Ask/ })).not.toBeInTheDocument();
-    expect(await screen.findByText('Attention')).toBeInTheDocument(); // Details shown instead
-    expect(dock.tab).toBe('details');
+    expect(await screen.findByText('Attention')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Ask about this paper…')).not.toBeInTheDocument();
   });
 
-  it('wires each tab to its panel for assistive tech', async () => {
+  it('renders the thread below the record in the same scroll', async () => {
+    chat.messages = [
+      { id: 1, role: 'user', content: 'Why scaled attention?', model: null, created_at: '', tools: null },
+      { id: 2, role: 'assistant', content: 'Gradients.', model: 'mock', created_at: '', tools: null },
+    ];
     render(ReaderDock, { props: { id: 'p1' } });
-    const panel = await screen.findByRole('tabpanel');
-    expect(panel.id).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Details' })).toHaveAttribute('aria-controls', panel.id);
-    expect(screen.getByRole('tab', { name: /Ask/ })).toHaveAttribute('aria-controls');
+    const record = await screen.findByText('Attention');
+    const answer = screen.getByText('Gradients.');
+    expect(record.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('renders close/zen before the tabs so rail muscle-memory lands on tabs, not close', () => {
+  it("an 'ask' entry focuses the composer and is consumed", async () => {
+    dock.entry = 'ask';
     render(ReaderDock, { props: { id: 'p1' } });
-    const close = screen.getByRole('button', { name: 'Close panel' });
-    const tablist = screen.getByRole('tablist');
-    // The quick-action rail (禪詳問) hides when the dock opens; whatever sits
-    // at its old top-right position gets follow-up clicks. That must be the
-    // Details/Ask tabs, not the close button — tabs right, close/zen left.
-    expect(close.compareDocumentPosition(tablist) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByText('Attention');
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Ask about this paper…'));
+    expect(dock.entry).toBeNull();
   });
 
   it('the close button closes the dock', async () => {
@@ -85,7 +84,6 @@ describe('ReaderDock', () => {
 
   it('Escape inside the dock closes it without leaving zen', async () => {
     ui.zen = true;
-    dock.tab = 'ask';
     render(ReaderDock, { props: { id: 'p1' } });
     await userEvent.click(screen.getByPlaceholderText('Ask about this paper…'));
     await userEvent.keyboard('{Escape}');
@@ -95,7 +93,6 @@ describe('ReaderDock', () => {
 
   it('Escape inside the dock never reaches the global shortcut handler', async () => {
     ui.zen = true;
-    dock.tab = 'ask';
     // Mount the real app-level keydown handler: without the dock's
     // stopPropagation it would see the dock already closed and exit zen.
     window.addEventListener('keydown', handleKeydown);

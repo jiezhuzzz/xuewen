@@ -18,7 +18,7 @@
   import TranslatePopover from './components/TranslatePopover.svelte';
   import Welcome from './components/Welcome.svelte';
   import { initAnnotationTools } from './lib/annotationState.svelte';
-  import { loadChatModels, loadThread } from './lib/chat.svelte';
+  import { chat, loadChatModels, loadThread } from './lib/chat.svelte';
   import { initColumnWidths } from './lib/columnWidths.svelte';
   import { DUR, dur, springTo, SPRINGS } from './lib/motion';
   import { handleKeydown } from './lib/shortcuts';
@@ -55,9 +55,10 @@
   $effect(() => {
     if (!paneHidden) peek = false;
   });
-  // The chat thread follows the active paper while the Ask tab is open.
+  // The chat thread follows the active paper while the dock is open — the
+  // record and the thread share one panel, so there is no tab to gate on.
   $effect(() => {
-    if (dock.open && dock.tab === 'ask' && viewer.activeId) void loadThread(viewer.activeId);
+    if (dock.open && chat.available && viewer.activeId) void loadThread(viewer.activeId);
   });
 
   // The PDF reader pulls in the entire @embedpdf/PDFium subtree — by far the

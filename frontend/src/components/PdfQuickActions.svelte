@@ -1,22 +1,18 @@
 <script lang="ts">
   import { chat } from '../lib/chat.svelte';
   import { pillMotionStyle } from '../lib/pillStyles';
-  import { toggleZen } from '../lib/tabs.svelte';
-  import { dock, toggleDock, ui } from '../lib/ui.svelte';
+  import { dock, toggleDock } from '../lib/ui.svelte';
   import type { PillHide } from '../lib/pillHide.svelte';
 
   let { pill }: { pill: PillHide } = $props();
 
-  // Three seals 禪 詳 問 — the reader's triggers speak the app's own
-  // language (學問, 譯). Tooltips carry the English + shortcut.
+  // One seal for the one panel — the reader's trigger speaks the app's own
+  // language (學問, 譯). 問 while Ask is configured, 詳 when it isn't, since
+  // the panel is then the record alone. Zen keeps `z` and the panel header;
+  // it was never worth a permanent mark over the page.
   const btn =
-    'rounded-lg px-1.5 py-1 font-serif text-base leading-none text-stone-600 hover:bg-parchment hover:text-ink dark:text-stone-300 dark:hover:bg-stone-800';
-  const activeBtn =
-    'rounded-lg px-1.5 py-1 font-serif text-base leading-none bg-amber-700/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-500';
-  const askBtn =
-    'rounded-lg px-1.5 py-1 font-serif text-base leading-none text-amber-700 hover:bg-parchment dark:text-amber-500 dark:hover:bg-stone-800';
+    'rounded-lg px-1.5 py-1 font-serif text-base leading-none hover:bg-parchment dark:hover:bg-stone-800';
 
-  // The dock header carries zen + close while open, so the pill yields.
   const hidden = $derived(dock.open || !pill.visible);
 </script>
 
@@ -38,25 +34,13 @@
 >
   <button
     type="button"
-    class={ui.zen ? activeBtn : btn}
-    aria-label={ui.zen ? 'Exit zen mode' : 'Zen mode'}
-    title="Zen — z"
-    onclick={toggleZen}
-  >禪</button>
-  <button
-    type="button"
-    class={btn}
-    aria-label="Details"
-    title="Details — i"
-    onclick={() => toggleDock('details')}
-  >詳</button>
-  {#if chat.available}
-    <button
-      type="button"
-      class={askBtn}
-      aria-label="Ask about this paper"
-      title="Ask — c"
-      onclick={() => toggleDock('ask')}
-    >問</button>
-  {/if}
+    class={`${btn} ${
+      chat.available
+        ? 'text-amber-700 dark:text-amber-500'
+        : 'text-stone-600 hover:text-ink dark:text-stone-300'
+    }`}
+    aria-label="Paper panel"
+    title={chat.available ? 'Paper panel — i · ask c' : 'Paper panel — i'}
+    onclick={() => toggleDock(chat.available ? 'ask' : 'record')}
+  >{chat.available ? '問' : '詳'}</button>
 </div>

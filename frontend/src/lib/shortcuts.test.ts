@@ -31,7 +31,7 @@ beforeEach(() => {
   viewer.tabs = [];
   viewer.activeId = null;
   dock.open = false;
-  dock.tab = 'details';
+  dock.entry = null;
   selection.id = null;
   ui.zen = false;
   ui.filePickerOpen = false;
@@ -147,7 +147,7 @@ describe('handleKeydown', () => {
     expect(ui.zen).toBe(false);
   });
 
-  it('c toggles the dock on Ask only with an active tab and available chat', () => {
+  it('c opens the dock on the composer only with an active tab and available chat', () => {
     handleKeydown(key('c'));
     expect(dock.open).toBe(false);
     chat.available = true;
@@ -155,9 +155,13 @@ describe('handleKeydown', () => {
     handleKeydown(key('Enter'));
     handleKeydown(key('c'));
     expect(dock.open).toBe(true);
-    expect(dock.tab).toBe('ask');
+    expect(dock.entry).toBe('ask');
+    // c asks for the composer, so a repeat re-requests focus rather than
+    // closing the panel it was asked to type into.
+    dock.entry = null;
     handleKeydown(key('c'));
-    expect(dock.open).toBe(false);
+    expect(dock.open).toBe(true);
+    expect(dock.entry).toBe('ask');
   });
 
   it('Escape closes the dock before exiting zen', () => {
@@ -175,14 +179,14 @@ describe('handleKeydown', () => {
     expect(ui.zen).toBe(false);
   });
 
-  it('i toggles the dock on Details only with an active tab', () => {
+  it('i toggles the dock only with an active tab', () => {
     handleKeydown(key('i'));
     expect(dock.open).toBe(false); // no active paper
     handleKeydown(key('j'));
     handleKeydown(key('Enter'));
     handleKeydown(key('i'));
     expect(dock.open).toBe(true);
-    expect(dock.tab).toBe('details');
+    expect(dock.entry).toBe('record');
     handleKeydown(key('i'));
     expect(dock.open).toBe(false);
   });
@@ -211,7 +215,6 @@ describe('handleKeydown', () => {
     handleKeydown(key('Enter'));
     handleKeydown(key('z'));
     dock.open = true;
-    dock.tab = 'details';
     expect(ui.zen).toBe(true);
     handleKeydown(key('Escape'));
     expect(dock.open).toBe(false);
@@ -426,7 +429,7 @@ describe('cmd+c in the reader', () => {
     handleKeydown(key('c'));
     expect(copied).toBe(0);
     expect(dock.open).toBe(true);
-    expect(dock.tab).toBe('ask');
+    expect(dock.entry).toBe('ask');
   });
 });
 

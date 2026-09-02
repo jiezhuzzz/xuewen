@@ -43,7 +43,7 @@ the assistant that answers questions about a paper.
   never errors.
 - **Annotations** — highlight, underline, strike through or squiggle a passage, drop a sticky note, and attach a note to any mark, with undo/redo and a page-ordered list in the reader's sidebar. Marks live in SQLite beside the paper, never in the PDF: **the library's file stays byte-identical**, so its content hash (which drives dedupe and filing) keeps telling the truth. Note text is searchable (`in:notes`), and "Export annotated PDF" writes a separate copy with the marks burned in for sharing.
 - **Agent Ask** — optional tool-using agent (Claude Code / Codex SDKs) in the
-  reader's Ask tab, grounded in the paper's extracted text and, when
+  reader's Ask thread, grounded in the paper's extracted text and, when
   attached, its code repository, inside a read-only sandbox.
 - **Daily arXiv recommendations** — a ranked, LLM-summarized feed of new papers
   scored against your library's interests (optional).
@@ -150,7 +150,7 @@ database_url = "sqlite:./library.db"
 Optional sections enable the richer features:
 
 - `[ai.embedding]` + `[search]` with `qdrant_url` — semantic search.
-- `[ai.agent.*]` — the reader's Ask tab / paper chat (a tool-using agent; see
+- `[ai.agent.*]` — the reader's Ask thread / paper chat (a tool-using agent; see
   [Agent Ask setup](#agent-ask-setup)).
 - `[daily]` — daily arXiv recommendations.
 - `[proxy]` — institutional paywall access.
@@ -162,7 +162,7 @@ API keys are read from environment variables via `api_key_env` (e.g.
 
 ### Agent Ask setup
 
-The reader's Ask tab can run a tool-using agent — via the [Claude
+The reader's Ask thread can run a tool-using agent — via the [Claude
 Code](https://github.com/anthropics/claude-code) or [Codex](https://github.com/openai/codex)
 SDKs — that reads a paper's extracted text and, once attached, its GitHub
 repository, inside a read-only per-paper workspace.
